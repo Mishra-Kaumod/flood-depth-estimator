@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Flood Depth Analytics Studio</title>
+    <style>
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background-color: #f8fafc; margin: 0; padding: 40px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .container { background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05); max-width: 600px; width: 100%; text-align: center; border: 1px solid #e2e8f0; }
+        h2 { color: #0f172a; margin-bottom: 8px; }
+        p { color: #64748b; font-size: 14px; margin-bottom: 30px; }
+        .tabs { display: flex; justify-content: space-around; margin-bottom: 20px; background: #f1f5f9; padding: 4px; border-radius: 8px; }
+        .tab-btn { background: none; border: none; padding: 8px 16px; cursor: pointer; font-weight: 600; color: #64748b; border-radius: 6px; transition: all 0.2s; font-size: 14px; }
+        .tab-btn.active { background: white; color: #2563eb; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .file-label { display: block; background: #f8fafc; border: 2px dashed #cbd5e1; padding: 30px 20px; border-radius: 12px; cursor: pointer; margin-bottom: 20px; color: #475569; font-weight: 500; transition: all 0.2s; }
+        .file-label:hover { border-color: #2563eb; background: #eff6ff; }
+        button { background: #2563eb; color: white; border: none; padding: 12px 30px; font-size: 16px; border-radius: 8px; cursor: pointer; font-weight: 600; width: 100%; transition: background 0.2s; }
+        button:hover { background: #1d4ed8; }
+        .result-box { margin-top: 30px; padding: 20px; background: #fafafa; border: 1px solid #e2e8f0; border-radius: 12px; text-align: left; display: none; }
+        .result-title { font-weight: bold; color: #0f172a; font-size: 15px; margin-bottom: 10px; }
+        pre { background: #0f172a; padding: 16px; border-radius: 8px; font-size: 13px; color: #38bdf8; margin: 0; overflow-x: auto; max-height: 300px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>🌊 AI Flood Depth Analytics</h2>
+    <p>Upload single images, batches, or videos to trigger the ensemble computer vision core.</p>
+    
+    <div class="tabs">
+        <button class="tab-btn active" onclick="switchMode('image', 'An Image File')">Single Image</button>
+        <button class="tab-btn" onclick="switchMode('images', 'Multiple Image Files', true)">Batch Images</button>
+        <button class="tab-btn" onclick="switchMode('video', 'A Video File')">Video Processing</button>
+    </div>
+
+    <form id="uploadForm">
+        <label id="dropzone" for="mediaInput" class="file-label">📸 Choose or drop An Image File</label>
+        <input type="file" id="mediaInput" accept="image/*" required>
+        <button type="submit">Run Computer Vision Engine</button>
+    </form>
+
+    <div class="result-box" id="resultBox">
+        <div class="result-title">Live Pipeline Response Payloads:</div>
+        <pre id="jsonOutput"></pre>
+    </div>
+</div>
+
+<script>
+    let currentKey = 'image';
+    const mediaInput = document.getElementById('mediaInput');
+    const label = document.getElementById('dropzone');
+
+    function switchMode(mode, text, isMultiple = false) {
+        currentKey = mode;
+        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+        event.target.classList.add('active');
+        
+        mediaInput.value = '';
+        label.innerText = `📸 Choose or drop ${text}`;
+        label.style.borderColor = '#cbd5e1';
+        
+        if (isMultiple) mediaInput.setAttribute('multiple', 'true');
+        else mediaInput.removeAttribute('multiple');
+        
+        if (mode === 'video') mediaInput.setAttribute('accept', 'video/*');
+        else mediaInput.setAttribute('accept', 'image/*');
+    }
+
+    mediaInput.addEventListener('change', () => {
+        if(mediaInput.files.length > 0) {
+            label.innerText = mediaInput.files.length === 1 
+                ? `📄 ${mediaInput.files[0].name}` 
+                : `📂 ${mediaInput.files.length} Files Selected`;
+            label.style.borderColor = '#2563eb';
+        }
+    });
+
+    document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!mediaInput.files.length) return;
+
+        const formData = new FormData();
+        if (currentKey === 'images') {
+            for (let i = 0; i < mediaInput.files.length; i++) {
+                formData.append('images', mediaInput.files[i]);
+            }
+        } else {
+            formData.append(currentKey, mediaInput.files[0]);
+        }
+
+        const box = document.getElementById('resultBox');
+        const output = document.getElementById('jsonOutput');
+        output.innerText = "Analyzing stream dependencies & executing AI logic models...";
+        box.style.display = 'block';
+
+        try {
+            const response = await fetch('/analyze/', { method: 'POST', body: formData });
+            const data = await response.json();
+            output.innerText = JSON.stringify(data, null, 2);
+        } catch (error) {
+            output.innerText = "Error parsing responses from local Django kernel.";
+        }
+    });
+</script>
+
+</body>
+</html>
