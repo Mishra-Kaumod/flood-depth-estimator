@@ -1,0 +1,11 @@
+# Exclude automated dataset scraping and mock setup utilities from the codebase
+fetch_images.py
+setup_mock_training.py
+generate_clean_dataset.py
+force_download.sh
+
+# Exclude local temporary runtime weights and caching databases
+.pytest_cache/
+__pycache__/
+*.pt
+flood_dataset/
