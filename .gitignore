@@ -1,11 +1,26 @@
-# Exclude automated dataset scraping and mock setup utilities from the codebase
-fetch_images.py
-setup_mock_training.py
-generate_clean_dataset.py
-force_download.sh
+# Explicit absolute path exclusions from project root
+/fetch_images.py
+/fetch_edge_cases.py
+/fetch_labeled_images.py
+/setup_mock_training.py
+/clean_corrupted_images.py
+/generate_clean_dataset.py
+/force_download.sh
+/test_cv.py
+/test_triple_engine.py
+/train_engine.py
+/evaluate_suite.py
+/cv_engine.py
+/download_test_suite.sh
 
-# Exclude local temporary runtime weights and caching databases
+# Data & Weight Manifest Tracks
+/flood_dataset/
+/validation_dataset/
+/flood_manifest.json
+/high_confidence_metrics.json
+/*.pt
+/*.sqlite3
+
+# Cache layers
 .pytest_cache/
 __pycache__/
-*.pt
-flood_dataset/
