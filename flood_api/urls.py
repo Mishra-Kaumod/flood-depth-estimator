@@ -3,9 +3,15 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    # Main manual upload frontend interface
-    path('', views.upload_ui, name='upload_ui'), 
+    # Mapping the empty path redirects root traffic to the dashboard instantly
+    path('', views.dashboard_view, name='web_dashboard'),
+    path('dashboard/', views.dashboard_view, name='web_dashboard_alias'),
     
-    # Unified programmatic API endpoint for single images, batch images, or videos
-    path('analyze/', views.analyze_media, name='analyze_media'), 
+    # High-speed API endpoints
+    path('api/v1/estimate/', views.high_speed_api_endpoint, name='rapid_api_gateway'),
+    
+    # ENHANCED: Temporal analysis endpoints
+    path('api/v1/temporal/<str:camera_id>/', views.get_temporal_sequence, name='get_temporal_sequence'),
+    path('api/v1/temporal/<str:camera_id>/analyze/', views.trigger_temporal_analysis, name='trigger_temporal_analysis'),
+    path('api/v1/camera/<str:camera_id>/stats/', views.get_camera_stats, name='get_camera_stats'),
 ]

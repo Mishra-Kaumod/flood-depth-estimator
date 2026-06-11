@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Municipal Flood Depth Analytics Dashboard</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121214; color: #e1e1e6; margin: 0; padding: 40px; }
+        .container { max-width: 1000px; margin: 0 auto; background: #1d1d22; padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+        h1 { margin-top: 0; color: #04d361; border-bottom: 1px solid #29292e; padding-bottom: 15px; }
+        h2 { color: #04d361; margin-top: 40px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; color: #a8a8b3; }
+        input[type="file"] { width: 100%; padding: 12px; background: #121214; border: 1px solid #29292e; border-radius: 4px; color: #fff; box-sizing: border-box; }
+        button { background: #04d361; color: #121214; font-weight: bold; border: none; padding: 12px 24px; border-radius: 4px; cursor: pointer; font-size: 16px; width: 100%; }
+        button:hover { background: #00b34d; }
+        .results-panel { margin-top: 30px; padding: 20px; background: #121214; border-left: 4px solid #04d361; border-radius: 4px; }
+        .metric-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #29292e; }
+        .metric-label { color: #a8a8b3; }
+        .metric-value { font-family: "SFMono-Regular", Consolas, monospace; font-weight: bold; color: #fff; }
+        .risk-alert { font-weight: bold; color: #ff3333; }
+        
+        /* Historical Logs Table styling */
+        .history-table { width: 100%; border-collapse: collapse; margin-top: 20px; text-align: left; }
+        .history-table th, .history-table td { padding: 12px; border-bottom: 1px solid #29292e; }
+        .history-table th { background-color: #121214; color: #a8a8b3; font-size: 14px; text-transform: uppercase; }
+        .history-table tr:hover { background-color: #29292e; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Triple-Engine Automated Flood Inundation Matrix</h1>
+        <form method="POST" enctype="multipart/form-data">
+            {% csrf_token %}
+            <div class="form-group">
+                <label for="image_file">Upload Incident Scene Capture (Auto-Profiling & Database Sync Active):</label>
+                <input type="file" id="image_file" name="image_file" required>
+            </div>
+            <button type="submit">Run Automated Inference & Log Telemetry</button>
+        </form>
+
+        {% if success %}
+        <div class="results-panel">
+            <h2>Real-Time Telemetry Payload Saved (Record ID: {{ telemetry.record_id }})</h2>
+            <div class="metric-row">
+                <span class="metric-label">Pipeline Strategy Applied:</span>
+                <span class="metric-value" style="color: #ffb800;">{{ telemetry.strategy_applied }}</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Surface Water Confirmation Score:</span>
+                <span class="metric-value">{{ telemetry.surface_water_confirmed }}</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Computed Fluid Depth:</span>
+                <span class="metric-value" style="color: #04d361;">{{ telemetry.computed_depth_cm }} cm</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Consolidated Safety Risk Assessment:</span>
+                <span class="metric-value risk-alert">{{ telemetry.safety_risk_assessment }}</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Total System Confidence Matrix:</span>
+                <span class="metric-value">{{ telemetry.system_confidence_score }}</span>
+            </div>
+        </div>
+        {% endif %}
+
+        <h2>Historical Inundation Logs (Internal Reporting Feed)</h2>
+        <table class="history-table">
+            <thead>
+                <tr>
+                    <th>Timestamp (UTC)</th>
+                    <th>Source File</th>
+                    <th>Strategy</th>
+                    <th>Water Confirm</th>
+                    <th>Depth</th>
+                    <th>Risk Assessment</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for record in historical_records %}
+                <tr>
+                    <td>{{ record.timestamp|date:"Y-m-d H:i:s" }}</td>
+                    <td style="color: #a8a8b3;">{{ record.image_name }}</td>
+                    <td>{{ record.strategy_applied }}</td>
+                    <td>{{ record.surface_water_confirmed_pct }}%</td>
+                    <td style="color: #04d361; font-weight: bold;">{{ record.computed_depth_cm }} cm</td>
+                    <td style="color: #ff3333;">{{ record.safety_risk_assessment }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6" style="text-align: center; color: #a8a8b3;">No telemetry records logged yet. Run an inference above to generate state database rows.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
