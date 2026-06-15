@@ -24,3 +24,17 @@
 # Cache layers
 .pytest_cache/
 __pycache__/
+# Datasets
+datasets/
+*.zip
+
+# Models
+*.pth
+*.pt
+
+# Results
+results/
+sample_predictions/
+
+# Cache
+.cache/
