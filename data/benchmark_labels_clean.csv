@@ -1,0 +1,56 @@
+image_name,severity,depth_band,estimated_depth_cm,reason
+Flood_10855.jpg,2,20-50 cm,35,person wading through knee-depth water
+Flood_10856.jpg,3,50-80 cm,60,river overflow into urban area
+Flood_10857.jpg,4,80+ cm,100,major infrastructure submerged
+Flood_10858.jpg,4,80+ cm,90,roadway completely underwater
+Flood_10860.jpg,2,20-50 cm,30,yard flooding around structures
+Flood_10863.jpg,4,80+ cm,100,large-scale city inundation
+Flood_10864.jpg,3,50-80 cm,70,houses surrounded by floodwater
+Flood_10865.jpg,4,80+ cm,90,trees and land extensively submerged
+Flood_10866.jpg,4,80+ cm,100,river above bank level
+Flood_10867.jpg,4,80+ cm,90,fast-moving flood channel
+Flood_10875.jpg,1,5-20 cm,10,wet roadway and shallow water
+Flood_10876.jpg,3,50-80 cm,60,water approaching structure floor level
+Flood_10877.jpg,4,80+ cm,90,urban area largely flooded
+Flood_10883.jpg,2,20-50 cm,35,street flooding around homes
+Flood_10887.jpg,4,80+ cm,100,extensive water coverage
+Flood_10889.jpg,3,50-80 cm,70,building-level flooding
+Flood_10890.jpg,3,50-80 cm,60,field and road inundation
+Flood_10893.jpg,4,80+ cm,100,only tops of objects visible
+Flood_10894.jpg,4,80+ cm,100,bridge area heavily flooded
+Flood_10895.jpg,4,80+ cm,90,river overflow across landscape
+Flood_10896.jpg,1,5-20 cm,10,mostly wet road with minor flooding
+Flood_10897.jpg,4,80+ cm,90,road fully underwater
+Flood_10903.jpg,4,80+ cm,100,building surrounded by water
+Flood_10904.jpg,4,80+ cm,100,aerial flood scene
+Flood_10905.jpg,2,20-50 cm,25,water around public infrastructure
+Flood_10907.jpg,4,80+ cm,100,large flood basin visible
+Flood_10908.jpg,4,80+ cm,90,houses submerged
+Flood_10929.jpg,4,80+ cm,90,residential flooding
+Flood_10930.jpg,4,80+ cm,100,roadway inundation from aerial view
+Flood_10932.jpg,4,80+ cm,100,regional flooding
+Flood_10933.jpg,4,80+ cm,100,farm and property flooding
+Flood_10934.jpg,4,80+ cm,90,urban flood extent visible
+Flood_11979.jpg,3,50-80 cm,70,river channel above normal bank
+Flood_11993.jpg,4,80+ cm,100,trees heavily submerged
+Flood_11994.jpg,2,20-50 cm,30,river elevated but infrastructure visible
+Flood_12027.jpg,3,50-80 cm,60,water reaching riverwalk structures
+Flood_12030.jpg,4,80+ cm,90,homes surrounded by water
+Flood_9115.jpg,4,80+ cm,90,water reaches building level
+Flood_9119.jpg,4,80+ cm,100,large floodplain inundation
+Flood_9122.jpg,3,50-80 cm,60,urban water encroachment
+Flood_9126.jpg,4,80+ cm,90,city partially submerged
+Flood_9127.jpg,4,80+ cm,90,floodwater reaches buildings
+Flood_9160.jpg,3,50-80 cm,60,public area flooded
+Flood_9161.jpg,3,50-80 cm,60,river at structure level
+Flood_9169.jpg,3,50-80 cm,55,water around buildings
+Flood_9172.jpg,3,50-80 cm,60,river flooding
+Flood_9173.jpg,3,50-80 cm,55,river overflow
+Flood_9177.jpg,4,80+ cm,90,property inundation
+Flood_9184.jpg,4,80+ cm,90,town flooding
+Flood_9185.jpg,3,50-80 cm,70,street-level floodwater
+Flood_9188.jpg,4,80+ cm,90,building isolated by water
+image10.jfif,0,0-5 cm,0,Dry surface
+image14.jfif,0,0-5 cm,0,Dry aerial roadway
+image15.jfif,0,0-5 cm,0,Dry city street
+no water.jfif,0,0-5 cm,0,Explicit no-flood image
