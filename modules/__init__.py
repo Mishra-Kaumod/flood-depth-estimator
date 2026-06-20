@@ -17,6 +17,7 @@ from .process_video import VideoFloodAnalyzer
 from .depth_band_estimator import estimate_depth, DEPTH_BANDS
 from .object_detection import ObjectDetector
 from .hybrid_depth_estimator import HybridDepthEstimator
+from .flood_analyzer import FloodAnalyzer
 
 try:
     from .s3_handler import S3Handler
@@ -32,6 +33,7 @@ __all__ = [
     "VideoFloodAnalyzer",
     "ObjectDetector",
     "HybridDepthEstimator",
+    "FloodAnalyzer",
     "S3Handler",
     "estimate_depth",
     "DEPTH_BANDS",

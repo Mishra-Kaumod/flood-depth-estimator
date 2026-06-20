@@ -115,24 +115,30 @@ class ObjectDetector:
             return None
         
         return max(detections, key=lambda x: x['area_pixels'])
-    
-    def estimate_depth_from_object(self, detection, image_height):
+
+    def get_best_depth_reference(self, detections):
+        """Choose a useful calibrated reference, preferring a detected person.
+
+        A person is usually the best flood gauge because its visible height is
+        directly reduced by submersion. Vehicles are used only when no person
+        with known dimensions is available.
         """
-        Estimate water depth using detected object as reference.
-        
-        Formula: 
-        - Get object height in image (pixels)
-        - Get object actual height (cm) from specs
-        - Calculate pixels-per-cm ratio
-        - Use bottom of bounding box as water level
-        - Measure submerged height and convert to cm
-        
-        Args:
-            detection: Single detection result
-            image_height: Total image height in pixels
-            
-        Returns:
-            dict: Depth estimation info
+        supported = [d for d in detections if d.get('specs', {}).get('height')]
+        if not supported:
+            return None
+
+        people = [d for d in supported if d['class'] == 'person']
+        candidates = people or supported
+        return max(candidates, key=lambda d: d['confidence'] * d['area_pixels'])
+
+    def estimate_depth_from_object(self, detection, image_height, water_mask=None):
+        """Estimate depth from an object's visible height and a waterline.
+
+        The previous implementation treated the bottom edge of the *image* as
+        ground, which makes depth depend on camera framing.  This version uses
+        a waterline inside the detected object region (when a water mask is
+        available) and estimates how much of a known-height object is hidden.
+        It is an image-based estimate, not a survey-grade measurement.
         """
         specs = detection.get('specs', {})
         bbox = detection['bbox']
@@ -147,40 +153,75 @@ class ObjectDetector:
         
         actual_height_cm = specs['height']
         box_height_pixels = bbox['height']
-        
-        if box_height_pixels == 0:
+        box_width_pixels = bbox['width']
+
+        if box_height_pixels <= 0 or box_width_pixels <= 0:
             return {
                 'depth_cm': None,
                 'method': 'Invalid box',
                 'object': detection['class']
             }
         
-        # Pixels per cm for this object
-        pixels_per_cm = box_height_pixels / actual_height_cm
-        
-        # Estimate water level (assume bottom of object touches ground)
-        # Water depth = how much of the object is submerged
-        object_bottom = bbox['y2']
-        
-        # Submerged portion (rough estimate from object bottom)
-        # Typical: if object_bottom is in lower 30% of image, assume some submersion
-        image_bottom = image_height
-        submerged_pixels = image_bottom - object_bottom
-        
-        # Convert to cm
-        if submerged_pixels > 0:
-            depth_cm = int(submerged_pixels / pixels_per_cm)
+        # Width is normally still visible above the waterline, so it gives a
+        # more stable scale than the truncated visible height.
+        actual_width_cm = specs.get('width')
+        if actual_width_cm:
+            pixels_per_cm = box_width_pixels / actual_width_cm
+            scale_method = 'object_width'
         else:
-            depth_cm = 0
+            pixels_per_cm = box_height_pixels / actual_height_cm
+            scale_method = 'object_height_fallback'
+
+        waterline_y, waterline_source, waterline_confidence = self._find_waterline(
+            bbox, water_mask, image_height
+        )
+        visible_height_pixels = max(0, waterline_y - bbox['y1'])
+        visible_height_cm = visible_height_pixels / pixels_per_cm
+        depth_cm = int(np.clip(actual_height_cm - visible_height_cm, 0, actual_height_cm * 0.9))
         
         return {
             'depth_cm': depth_cm,
-            'method': f'{detection["class"]}_reference',
+            'method': f'{detection["class"]}_waterline_reference',
             'object': detection['class'],
-            'confidence': detection['confidence'],
+            'confidence': round(detection['confidence'] * waterline_confidence, 4),
             'pixels_per_cm': pixels_per_cm,
-            'submerged_pixels': submerged_pixels
+            'waterline_y': waterline_y,
+            'waterline_source': waterline_source,
+            'waterline_confidence': waterline_confidence,
+            'visible_height_cm': round(visible_height_cm, 2),
+            'scale_method': scale_method,
         }
+
+    def _find_waterline(self, bbox, water_mask, image_height):
+        """Find the top of a stable water region inside a detected object box."""
+        fallback_y = min(max(bbox['y2'], 0), image_height - 1)
+        if water_mask is None or water_mask.ndim != 2:
+            return fallback_y, 'visible_object_bottom', 0.45
+
+        mask_height, mask_width = water_mask.shape[:2]
+        x1 = max(0, min(bbox['x1'], mask_width - 1))
+        x2 = max(x1 + 1, min(bbox['x2'], mask_width))
+        y1 = max(0, min(bbox['y1'], mask_height - 1))
+        y2 = max(y1 + 1, min(bbox['y2'], mask_height))
+        region = water_mask[y1:y2, x1:x2] > 0
+        if region.size == 0:
+            return fallback_y, 'visible_object_bottom', 0.45
+
+        row_coverage = region.mean(axis=1)
+        top_quarter = row_coverage[:max(1, len(row_coverage) // 4)].mean()
+        bottom_quarter = row_coverage[-max(1, len(row_coverage) // 4):].mean()
+        min_run = max(3, len(row_coverage) // 8)
+
+        # A valid waterline needs substantially more water-mask support below
+        # it than above it; this prevents a noisy all-object mask from being
+        # mistaken for a water boundary.
+        if bottom_quarter >= top_quarter + 0.15:
+            for row in range(max(1, len(row_coverage) // 5), len(row_coverage) - min_run):
+                if np.all(row_coverage[row:row + min_run] >= 0.5):
+                    confidence = min(0.95, 0.55 + (bottom_quarter - top_quarter) * 0.5)
+                    return y1 + row, 'water_mask_transition', round(float(confidence), 4)
+
+        return fallback_y, 'visible_object_bottom', 0.45
     
     def draw_detections(self, image, detections, show_specs=False):
         """

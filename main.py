@@ -22,9 +22,8 @@ import os
 # Add modules to path
 sys.path.insert(0, str(Path(__file__).parent / "modules"))
 
-from modules.predict_image import SeverityPredictor
+from modules.flood_analyzer import FloodAnalyzer
 from modules.process_video import VideoFloodAnalyzer
-from modules.water_detection import WaterDetectionAnalyzer
 from modules.object_detection import ObjectDetector
 
 
@@ -85,9 +84,7 @@ def process_single_image(image_path, model_path="severity_model.pth", storage_mo
     print(f"Storage Mode: {storage_mode.upper()}")
     print("="*60)
     
-    predictor = SeverityPredictor(model_path=model_path)
-    
-    # Load image based on storage mode
+    # Load the image as BGR for the shared still-image/video-frame pipeline.
     if storage_mode == "aws":
         if s3_handler is None:
             print("Error: S3 handler not initialized")
@@ -95,30 +92,28 @@ def process_single_image(image_path, model_path="severity_model.pth", storage_mo
         
         try:
             image = s3_handler.read_image_from_s3(image_path)
-            # Create temporary file
-            temp_file = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
-            cv2.imwrite(temp_file.name, image)
-            result = predictor.predict(temp_file.name)
-            # Clean up
-            os.unlink(temp_file.name)
         except Exception as e:
             print(f"Error reading image from S3: {e}")
             return
     else:
-        result = predictor.predict(image_path)
+        image = cv2.imread(image_path)
+        if image is None:
+            print(f"Error: Cannot read image from {image_path}")
+            return
+
+    result = FloodAnalyzer(model_path=model_path).analyze_bgr(image, image_path)
     
     if "error" in result:
         print(f"Error: {result['error']}")
-    else:
-        print(f"Image: {result['image_path']}")
-        print(f"Severity: {result['severity_class']} - {result['severity_name']}")
-        print(f"Confidence: {result['confidence']:.2%}")
-        print(f"Depth Band: {result['depth_band']}")
+
+    print(f"Image: {result['image_path']}")
+
+    if not result['water_detected']:
+        print("Result: No Flood Detected")
+    elif "error" not in result:
+        print("Flood Detected: Yes")
+        print(f"Flood Level: {result['final_flood_level']}")
         print(f"Estimated Depth: {result['depth_cm']} cm")
-        
-        print("\nAll Probabilities:")
-        for severity_name, prob in result['all_probabilities'].items():
-            print(f"  {severity_name}: {prob:.4f}")
     
     print("="*60 + "\n")
 
@@ -243,16 +238,15 @@ def process_object_detection(image_path, output_image="objects_detected.jpg",
         if detections:
             print(f"\nDetected {len(detections)} objects:")
             for i, det in enumerate(detections, 1):
-                print(f"  {i}. {det['class_name']}: {det['confidence']:.2%} confidence")
+                print(f"  {i}. {det['class']}: {det['confidence']:.2%} confidence")
             
             # Get inventory
             inventory = detector.create_object_inventory(detections)
             print(f"\nObject Inventory:")
-            for class_name, data in inventory.items():
-                if class_name != 'total':
-                    count = data['count']
-                    avg_conf = data['avg_confidence']
-                    print(f"  {class_name}: {count} ({avg_conf:.2%} avg confidence)")
+            for class_name, data in inventory['object_types'].items():
+                count = data['count']
+                avg_conf = data['avg_confidence']
+                print(f"  {class_name}: {count} ({avg_conf:.2%} avg confidence)")
             
             # Get largest object and estimate depth
             largest = detector.get_largest_object(detections)
@@ -262,9 +256,9 @@ def process_object_detection(image_path, output_image="objects_detected.jpg",
                 )
                 if depth_result['depth_cm'] is not None:
                     print(f"\nLargest Object Depth Estimate:")
-                    print(f"  Object: {largest['class_name']}")
+                    print(f"  Object: {largest['class']}")
                     print(f"  Estimated Depth: {depth_result['depth_cm']} cm")
-                    print(f"  Reference: {depth_result['reference']}")
+                    print(f"  Reference: {depth_result['method']}")
         else:
             print("\nNo objects detected in image")
         

@@ -22,8 +22,8 @@ class HybridDepthEstimator:
         """Initialize object detector."""
         self.object_detector = ObjectDetector()
     
-    def estimate_depth(self, image, water_detected, water_percentage, 
-                      severity_class, severity_confidence):
+    def estimate_depth(self, image, water_detected, water_percentage,
+                      severity_class, severity_confidence, water_mask=None):
         """
         Estimate water depth using multiple methods.
         
@@ -33,6 +33,7 @@ class HybridDepthEstimator:
             water_percentage: Float 0-1 - % of image that is water
             severity_class: Int 0-4 - severity classification
             severity_confidence: Float 0-1 - confidence in classification
+            water_mask: Optional binary water mask aligned to ``image``
             
         Returns:
             dict: Depth estimation results
@@ -63,17 +64,18 @@ class HybridDepthEstimator:
             detections = self.object_detector.detect_objects(image)
             
             if detections:
-                # Get largest object
-                largest = self.object_detector.get_largest_object(detections)
+                # Prefer a person over a large vehicle: a visible person's
+                # submersion is usually a more informative depth reference.
+                largest = self.object_detector.get_best_depth_reference(detections)
                 
                 if largest:
                     depth_result = self.object_detector.estimate_depth_from_object(
-                        largest, image.shape[0]
+                        largest, image.shape[0], water_mask=water_mask
                     )
                     
                     if depth_result['depth_cm'] is not None:
                         method2_depth_cm = depth_result['depth_cm']
-                        method2_confidence = largest['confidence']
+                        method2_confidence = depth_result['confidence']
                         object_info = depth_result
         
         except Exception as e:
@@ -100,7 +102,7 @@ class HybridDepthEstimator:
         if total_weight > 0:
             final_depth_cm = (
                 (method1_depth_cm * method1_confidence) +
-                (method2_depth_cm * method2_confidence if method2_depth_cm else 0) +
+                (method2_depth_cm * method2_confidence if method2_depth_cm is not None else 0) +
                 (method3_depth_cm * method3_confidence)
             ) / total_weight
         else:

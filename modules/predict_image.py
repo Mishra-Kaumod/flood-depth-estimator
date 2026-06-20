@@ -6,6 +6,7 @@ Outputs: Severity class (0-4), confidence, and estimated depth.
 """
 
 import sys
+import cv2
 import torch
 import torch.nn as nn
 from PIL import Image
@@ -84,6 +85,19 @@ class SeverityPredictor:
             image = Image.open(image_path).convert("RGB")
         except Exception as e:
             return {"error": f"Cannot load image: {e}"}
+
+        return self._predict_pil_image(image, str(image_path))
+
+    def predict_bgr(self, image, image_path="<in-memory image>"):
+        """Predict severity from an OpenCV BGR image without writing a temp file."""
+        if image is None or image.size == 0:
+            return {"error": "Cannot load image: empty image array"}
+
+        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        return self._predict_pil_image(Image.fromarray(rgb_image), image_path)
+
+    def _predict_pil_image(self, image, image_path):
+        """Run inference on an already-loaded RGB PIL image."""
         
         # Preprocess
         x = self.transform(image).unsqueeze(0).to(self.device)
