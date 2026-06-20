@@ -1,6 +1,6 @@
 # Project Architecture & Workflow (Simple)
 
-This file explains, in plain terms, how the `flood_project_cleaned` system works and shows a simple flow diagram.
+This file explains, in plain terms, how the `flood_project` system works and shows a simple flow diagram.
 
 ## Overview
 - Purpose: detect water in images/videos, classify flood severity, and estimate water depth.
@@ -18,7 +18,6 @@ This file explains, in plain terms, how the `flood_project_cleaned` system works
 
 ## High-Level Flow
 
-```mermaid
 flowchart LR
   A[User / Trigger] -->|CLI| B(main.py)
   B --> C{Mode}
@@ -81,5 +80,3 @@ python test_s3_integration.py
 ```
 
 ---
-
-If you want, I can also add a single-page PNG of this mermaid diagram or integrate it into `README.md`.
