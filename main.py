@@ -14,6 +14,7 @@ Storage options:
 """
 
 import sys
+from unittest import result
 import cv2
 from pathlib import Path
 import tempfile
@@ -112,8 +113,10 @@ def process_single_image(image_path, model_path="severity_model.pth", storage_mo
         print("Result: No water_detected")
     elif "error" not in result:
         print("water_detected: Yes")
-        print(f"Water Level: {result['final_flood_level']}")
+        print(f"Water  Level: {result['final_flood_level']}")
         print(f"Estimated Depth: {result['depth_cm']} cm")
+        print("\nDepth Details:")
+        print(result.get("depth_details", {}))
     
     print("="*60 + "\n")
 
