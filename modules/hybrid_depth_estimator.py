@@ -53,7 +53,13 @@ class HybridDepthEstimator:
         severity_depth = estimate_depth(severity_class)
         method1_depth_cm = severity_depth['depth_cm']
         method1_band = severity_depth['depth_band']
-        method1_confidence = severity_confidence if severity_confidence else 0
+        # method1_confidence = severity_confidence if severity_confidence else 0
+        # Severity model is useful but tends to over/underestimate real depth
+        method1_confidence = (
+            severity_confidence * 0.5
+            if severity_confidence
+            else 0
+        )
         
         # Method 2: Object-based depth (if objects detected)
         method2_depth_cm = None
@@ -77,6 +83,14 @@ class HybridDepthEstimator:
                         method2_depth_cm = depth_result['depth_cm']
                         method2_confidence = depth_result['confidence']
                         object_info = depth_result
+                        # Boost trust in object-based estimates
+                        if method2_depth_cm is not None:
+
+                            if method2_depth_cm > 70:
+                                method2_confidence *= 2.5
+
+                            elif method2_depth_cm > 40:
+                                method2_confidence *= 1.5
                         if method2_confidence > 0.7:
                             method2_confidence *= 2.0
                         
@@ -86,27 +100,49 @@ class HybridDepthEstimator:
         
         # Method 3: Water percentage heuristic
         # Higher water percentage suggests deeper flooding
+        # if water_percentage > 0.7:
+        #     method3_depth_cm = 80
+        # elif water_percentage > 0.4:
+        #     method3_depth_cm = 50
         if water_percentage > 0.7:
-            method3_depth_cm = 80
-        elif water_percentage > 0.4:
-            method3_depth_cm = 50
-        elif water_percentage > 0.2:
             method3_depth_cm = 25
+        elif water_percentage > 0.4:
+            method3_depth_cm = 15
+        elif water_percentage > 0.2:
+            method3_depth_cm = 8
         else:
-            method3_depth_cm = 10
+            method3_depth_cm = 3
+        # elif water_percentage > 0.2:
+        #     method3_depth_cm = 25
+        # else:
+        #     method3_depth_cm = 10
 
+        # method3_confidence = min(
+        #     0.8,
+        #     max(0.2, water_percentage)
+        # )
         method3_confidence = min(
-            0.8,
-            max(0.2, water_percentage)
+            0.25,
+            max(0.05, water_percentage*0.25)
         )
+        
         
         # Consistency check between severity estimate and object estimate
         if (
             method2_depth_cm is not None
-            and abs(method2_depth_cm - method1_depth_cm) > 70
+            and method2_depth_cm > 70
+            and method1_depth_cm < 20
         ):
-            method2_confidence *= 0.5
-
+            # Object estimate likely more trustworthy
+            method1_confidence *= 0.2
+        
+        # Explicit weighting
+        method1_confidence *= 0.5      # severity
+        method2_confidence *= 2.0      # object
+        method3_confidence *= 0.5      # water coverage
+        method1_confidence = min(method1_confidence, 1.0)
+        method2_confidence = min(method2_confidence, 1.0)
+        method3_confidence = min(method3_confidence, 1.0)
         # Ensemble: Weighted voting
         total_weight = method1_confidence + method2_confidence + method3_confidence
         
@@ -119,7 +155,12 @@ class HybridDepthEstimator:
         else:
             final_depth_cm = method1_depth_cm  # Fallback to severity
         
-        final_depth_cm = int(final_depth_cm)
+        # # final_depth_cm = int(final_depth_cm)
+        # if (
+        #     method1_depth_cm <= 20
+        #     and water_percentage < 0.85
+        # ):
+        #     final_depth_cm = min(final_depth_cm, 20)
         
         # Get depth band
         final_band = "Unknown"

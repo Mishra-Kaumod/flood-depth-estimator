@@ -49,6 +49,7 @@ class WaterDetectionAnalyzer:
             dict with detection results
         """
         h, w = image.shape[:2]
+        road_score = self._road_visibility_score(image)
         
         # Run all detection methods
         results = {
@@ -62,7 +63,8 @@ class WaterDetectionAnalyzer:
         
         # Aggregate results
         consensus = self._aggregate_detections(results, h, w)
-        
+        consensus["road_visibility"] = road_score
+        # consensus["road_visibility"] = road_score
         return {
             'water_detected': consensus['water_detected'],
             'confidence': consensus['confidence'],
@@ -72,28 +74,91 @@ class WaterDetectionAnalyzer:
             'water_mask': consensus['water_mask']
         }
     
+    # def _detect_water_by_color(self, image):
+    #     """Color-based water detection using HSV analysis."""
+    #     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    #     h, s, v = cv2.split(hsv)
+        
+    #     lower_blue = np.array([90, 20, 50])
+    #     upper_blue = np.array([130, 255, 255])
+    #     blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
+        
+    #     dark_reflective = cv2.inRange(s, 0, 60) & cv2.inRange(v, 80, 180)
+    #     water_color_mask = cv2.bitwise_or(blue_mask, dark_reflective)
+    #     h_img = image.shape[0]
+
+    #     upper_mask = np.zeros_like(water_color_mask)
+
+    #     upper_mask[: int(h_img * 0.4), :] = 255
+
+    #     water_color_mask[upper_mask > 0] = 0
+        
+    #     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    #     water_color_mask = cv2.morphologyEx(water_color_mask, cv2.MORPH_CLOSE, kernel)
+        
+    #     water_pct = np.count_nonzero(water_color_mask) / (image.shape[0] * image.shape[1])
+        
+    #     return {
+    #         'water_detected': water_pct > 0.05,
+    #         'percentage': water_pct,
+    #         'mask': water_color_mask,
+    #         'method': 'Color-based (HSV)'
+    #     }
     def _detect_water_by_color(self, image):
-        """Color-based water detection using HSV analysis."""
+
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
         h, s, v = cv2.split(hsv)
-        
-        lower_blue = np.array([90, 20, 50])
-        upper_blue = np.array([130, 255, 255])
-        blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
-        
-        dark_reflective = cv2.inRange(s, 0, 100) & cv2.inRange(v, 40, 200)
-        water_color_mask = cv2.bitwise_or(blue_mask, dark_reflective)
-        
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        water_color_mask = cv2.morphologyEx(water_color_mask, cv2.MORPH_CLOSE, kernel)
-        
-        water_pct = np.count_nonzero(water_color_mask) / (image.shape[0] * image.shape[1])
-        
+
+        blue_mask = cv2.inRange(
+            hsv,
+            np.array([90, 40, 50]),
+            np.array([130, 255, 255])
+        )
+
+        reflective_mask = (
+            cv2.inRange(s, 0, 60) &
+            cv2.inRange(v, 80, 180)
+        )
+
+        water_color_mask = cv2.bitwise_or(
+            blue_mask,
+            reflective_mask
+        )
+
+        # Ignore top 40% of image
+        height = image.shape[0]
+
+        water_color_mask[: int(height * 0.4), :] = 0
+
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (5, 5)
+        )
+
+        water_color_mask = cv2.morphologyEx(
+            water_color_mask,
+            cv2.MORPH_OPEN,
+            kernel
+        )
+
+        water_color_mask = cv2.morphologyEx(
+            water_color_mask,
+            cv2.MORPH_CLOSE,
+            kernel
+        )
+
+        water_pct = (
+            np.count_nonzero(water_color_mask)
+            /
+            water_color_mask.size
+        )
+
         return {
-            'water_detected': water_pct > 0.05,
-            'percentage': water_pct,
-            'mask': water_color_mask,
-            'method': 'Color-based (HSV)'
+            "water_detected": water_pct > 0.03,
+            "percentage": water_pct,
+            "mask": water_color_mask,
+            "method": "Color-based (HSV)"
         }
     
     def _detect_water_edges(self, image):
@@ -156,6 +221,7 @@ class WaterDetectionAnalyzer:
         """Horizontal surface line detection."""
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         h, w = gray.shape
+        
         
         sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=5)
         sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=5)
@@ -360,6 +426,7 @@ class WaterDetectionAnalyzer:
             weighted_score / total_weight
             if total_weight > 0 else 0
         )
+        
 
         water_detected = confidence >= self.water_threshold
 
@@ -375,3 +442,27 @@ class WaterDetectionAnalyzer:
             "method_votes": method_votes,
             "water_mask": combined_mask
         }
+    
+    def _road_visibility_score(self, image):
+
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        edges = cv2.Canny(gray, 50, 150)
+
+        lines = cv2.HoughLinesP(
+            edges,
+            1,
+            np.pi / 180,
+            threshold=80,
+            minLineLength=80,
+            maxLineGap=10
+        )
+
+        visible_lines = 0
+
+        if lines is not None:
+            visible_lines = len(lines)
+
+        score = min(1.0, visible_lines / 20)
+
+        return score

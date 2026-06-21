@@ -50,6 +50,7 @@ class FloodAnalyzer:
             'depth_details': {},
             'final_flood_level': 'No Flood Detected',
             'all_probabilities': {},
+            'road_visibility': water_result.get('road_visibility', 0),
         }
 
         # This is the early exit shared by photos and video frames.  No ML

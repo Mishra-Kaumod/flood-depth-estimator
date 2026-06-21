@@ -115,8 +115,14 @@ def process_single_image(image_path, model_path="severity_model.pth", storage_mo
         print("water_detected: Yes")
         print(f"Water  Level: {result['final_flood_level']}")
         print(f"Estimated Depth: {result['depth_cm']} cm")
+        print("\nDEBUG")
+        print("Water %:", result["water_percentage"])
+        print("Water Confidence:", result["water_confidence"])
         print("\nDepth Details:")
         print(result.get("depth_details", {}))
+        print("\nMethod Votes:")
+        print(result["method_votes"])
+        
     
     print("="*60 + "\n")
 
