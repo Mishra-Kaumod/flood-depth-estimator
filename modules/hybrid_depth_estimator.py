@@ -77,6 +77,9 @@ class HybridDepthEstimator:
                         method2_depth_cm = depth_result['depth_cm']
                         method2_confidence = depth_result['confidence']
                         object_info = depth_result
+                        if method2_confidence > 0.7:
+                            method2_confidence *= 2.0
+                        
         
         except Exception as e:
             pass  # YOLO optional, continue without it
@@ -84,18 +87,26 @@ class HybridDepthEstimator:
         # Method 3: Water percentage heuristic
         # Higher water percentage suggests deeper flooding
         if water_percentage > 0.7:
-            method3_depth_cm = 80  # High flood
-            method3_confidence = 0.6
+            method3_depth_cm = 80
         elif water_percentage > 0.4:
-            method3_depth_cm = 50  # Moderate
-            method3_confidence = 0.5
+            method3_depth_cm = 50
         elif water_percentage > 0.2:
-            method3_depth_cm = 25  # Minor
-            method3_confidence = 0.4
+            method3_depth_cm = 25
         else:
             method3_depth_cm = 10
-            method3_confidence = 0.3
+
+        method3_confidence = min(
+            0.8,
+            max(0.2, water_percentage)
+        )
         
+        # Consistency check between severity estimate and object estimate
+        if (
+            method2_depth_cm is not None
+            and abs(method2_depth_cm - method1_depth_cm) > 70
+        ):
+            method2_confidence *= 0.5
+
         # Ensemble: Weighted voting
         total_weight = method1_confidence + method2_confidence + method3_confidence
         
@@ -123,7 +134,11 @@ class HybridDepthEstimator:
             'depth_band': final_band,
             'water_percentage': round(water_percentage * 100, 2),
             'method': 'Ensemble (Severity + Object + Water %)',
-            'confidence': round(total_weight / 3, 4),  # Normalized to 0-1
+            # 'confidence': round(total_weight / 3, 4),  # Normalized to 0-1
+             'confidence': min(
+                 1.0,
+                 round(total_weight / 2.0, 4)
+                 ),
             'details': {
                 'method_1_severity': {
                     'depth_cm': method1_depth_cm,

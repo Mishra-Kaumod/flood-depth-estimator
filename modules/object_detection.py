@@ -27,8 +27,9 @@ class ObjectDetector:
         "bicycle": {"wheel_diameter": 56, "height": 100, "width": 70},
         "person": {"height": 170, "width": 45},
     }
-    
+  
     def __init__(self, model_name="yolov8n.pt"):
+        #yolov8s.pt
         """
         Initialize YOLO object detector.
         

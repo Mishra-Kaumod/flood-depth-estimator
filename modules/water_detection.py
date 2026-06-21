@@ -21,9 +21,21 @@ class WaterDetectionAnalyzer:
     """
     
     def __init__(self):
-        self.min_water_area_pct = 0.05  # At least 5% of image should be water
-        self.contrast_threshold = 0.15
-        self.edge_threshold = 0.1
+        # self.min_water_area_pct = 0.05  # At least 5% of image should be water
+        # self.contrast_threshold = 0.15
+        # self.edge_threshold = 0.1
+        self.min_water_area_pct = 0.05
+
+        self.method_weights = {
+            "rgb_color_analysis": 0.30,
+            "edge_detection": 0.10,
+            "contrast_analysis": 0.10,
+            "horizontal_line_detection": 0.25,
+            "depth_discontinuity": 0.15,
+            "optical_flow_ripples": 0.10
+        }
+
+        self.water_threshold = 0.45
         
     def detect_water_surface(self, image, depth_map=None):
         """
@@ -195,63 +207,171 @@ class WaterDetectionAnalyzer:
     
     def _detect_ripple_patterns(self, image):
         """Ripple/motion pattern detection."""
+        # gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # h, w = gray.shape
+        # local_var = np.zeros_like(gray, dtype=np.float32)
+        
+        # for i in range(1, h-1):
+        #     for j in range(1, w-1):
+        #         patch = gray[i-1:i+2, j-1:j+2].astype(np.float32)
+        #         local_var[i, j] = np.var(patch)
+        
+        # ripple_mask = (
+        #     (local_var > np.percentile(local_var, 30)) &
+        #     (local_var < np.percentile(local_var, 90))
+        # ).astype(np.uint8) * 255
+        
+        # ripple_pct = np.count_nonzero(ripple_mask) / (h * w)
+        
+        # return {
+        #     'water_detected': ripple_pct > 0.15,
+        #     'ripple_percentage': float(ripple_pct),
+        #     'mask': ripple_mask,
+        #     'method': 'Ripple Pattern Detection'
+        # }
+       
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        h, w = gray.shape
-        local_var = np.zeros_like(gray, dtype=np.float32)
-        
-        for i in range(1, h-1):
-            for j in range(1, w-1):
-                patch = gray[i-1:i+2, j-1:j+2].astype(np.float32)
-                local_var[i, j] = np.var(patch)
-        
+
+        gray = gray.astype(np.float32)
+
+        mean = cv2.blur(gray, (5, 5))
+        sqmean = cv2.blur(gray * gray, (5, 5))
+
+        local_var = sqmean - mean ** 2
+
         ripple_mask = (
-            (local_var > np.percentile(local_var, 30)) &
+            (local_var > np.percentile(local_var, 30))
+            &
             (local_var < np.percentile(local_var, 90))
         ).astype(np.uint8) * 255
-        
-        ripple_pct = np.count_nonzero(ripple_mask) / (h * w)
-        
+
+        ripple_pct = np.count_nonzero(ripple_mask) / ripple_mask.size
+
         return {
             'water_detected': ripple_pct > 0.15,
             'ripple_percentage': float(ripple_pct),
             'mask': ripple_mask,
             'method': 'Ripple Pattern Detection'
         }
-    
+    # def _aggregate_detections(self, results, h, w):
+    #     """Aggregate results from all methods."""
+    #     weighted_score = 0.0
+        # total_weight = 0.0
+
+        # method_votes = {}
+        # combined_mask = np.zeros((h, w), dtype=np.uint8)
+
+        # for method_name, result in results.items():
+
+        #     if result is None:
+        #         continue
+
+        #     weight = self.method_weights.get(method_name, 0.1)
+
+        #     total_weight += weight
+
+        #     detected = result.get("water_detected", False)
+
+        #     if detected:
+        #         weighted_score += weight
+
+        #     method_votes[method_name] = {
+        #         "detected": detected,
+        #         "weight": weight
+        #     }
+
+        #     if "mask" in result and result["mask"] is not None:
+        #         combined_mask = cv2.bitwise_or(
+        #             combined_mask,
+        #             result["mask"].astype(np.uint8)
+        #         )
+
+        # confidence = weighted_score / total_weight
+
+        # water_detected = confidence >= self.water_threshold
+        # total_methods = 0
+        # method_votes = {}
+        # combined_mask = np.zeros((h, w), dtype=np.uint8)
+        
+        # for method_name, result in results.items():
+        #     if result is None:
+        #         continue
+            
+        #     total_methods += 1
+        #     detected = result.get('water_detected', False)
+        #     if detected:
+        #         votes += 1
+            
+        #     method_votes[method_name] = {
+        #         'detected': detected,
+        #         'confidence': result.get('percentage', result.get('avg_contrast', result.get('discontinuity_percentage', 0)))
+        #     }
+            
+        #     if 'mask' in result and result['mask'] is not None:
+        #         combined_mask = cv2.bitwise_or(combined_mask, result['mask'].astype(np.uint8))
+        
+        # water_detected = votes >= 3
+        # confidence = votes / max(total_methods, 1)
+        # water_pct = np.count_nonzero(combined_mask) / (h * w) if h * w > 0 else 0
+        
+        # return {
+        #     'water_detected': water_detected,
+        #     'confidence': float(confidence),
+        #     'water_percentage': float(water_pct),
+        #     'method_votes': method_votes,
+        #     # 'votes_for_water': votes,
+        #     # 'total_methods': total_methods,
+        #     'water_mask': combined_mask
+        # }
     def _aggregate_detections(self, results, h, w):
-        """Aggregate results from all methods."""
-        votes = 0
-        total_methods = 0
+        """Aggregate results from all methods using weighted voting."""
+
+        weighted_score = 0.0
+        total_weight = 0.0
+
         method_votes = {}
         combined_mask = np.zeros((h, w), dtype=np.uint8)
-        
+
         for method_name, result in results.items():
+
             if result is None:
                 continue
-            
-            total_methods += 1
-            detected = result.get('water_detected', False)
+
+            weight = self.method_weights.get(method_name, 0.1)
+            total_weight += weight
+
+            detected = result.get("water_detected", False)
+
             if detected:
-                votes += 1
-            
+                weighted_score += weight
+
             method_votes[method_name] = {
-                'detected': detected,
-                'confidence': result.get('percentage', result.get('avg_contrast', result.get('discontinuity_percentage', 0)))
+                "detected": detected,
+                "weight": weight
             }
-            
-            if 'mask' in result and result['mask'] is not None:
-                combined_mask = cv2.bitwise_or(combined_mask, result['mask'].astype(np.uint8))
-        
-        water_detected = votes >= 3
-        confidence = votes / max(total_methods, 1)
-        water_pct = np.count_nonzero(combined_mask) / (h * w) if h * w > 0 else 0
-        
+
+            if "mask" in result and result["mask"] is not None:
+                combined_mask = cv2.bitwise_or(
+                    combined_mask,
+                    result["mask"].astype(np.uint8)
+                )
+
+        confidence = (
+            weighted_score / total_weight
+            if total_weight > 0 else 0
+        )
+
+        water_detected = confidence >= self.water_threshold
+
+        water_pct = (
+            np.count_nonzero(combined_mask) / (h * w)
+            if h * w > 0 else 0
+        )
+
         return {
-            'water_detected': water_detected,
-            'confidence': float(confidence),
-            'water_percentage': float(water_pct),
-            'method_votes': method_votes,
-            'votes_for_water': votes,
-            'total_methods': total_methods,
-            'water_mask': combined_mask
+            "water_detected": water_detected,
+            "confidence": float(confidence),
+            "water_percentage": float(water_pct),
+            "method_votes": method_votes,
+            "water_mask": combined_mask
         }

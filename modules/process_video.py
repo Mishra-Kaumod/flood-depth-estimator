@@ -3,6 +3,7 @@
 import cv2
 import pandas as pd
 from pathlib import Path
+from collections import deque
 
 from flood_analyzer import FloodAnalyzer
 
@@ -12,6 +13,9 @@ class VideoFloodAnalyzer:
 
     def __init__(self, model_path="severity_model.pth", use_hybrid=True):
         self.analyzer = FloodAnalyzer(model_path=model_path, use_hybrid=use_hybrid)
+        self.previous_depth = None
+        self.water_history = deque(maxlen=5)
+        
 
     def process_video(self, video_path, output_csv="video_analysis.csv",
                       skip_frames=1, save_frames_dir=None):
@@ -64,6 +68,33 @@ class VideoFloodAnalyzer:
 
                 processed_frames += 1
                 analysis = self.analyzer.analyze_bgr(frame, f"frame_{frame_num}")
+                self.water_history.append(
+                int(analysis["water_detected"])
+                )
+
+                if len(self.water_history) >= 3:
+
+                    majority_vote = (
+                        sum(self.water_history)
+                        >= len(self.water_history) // 2 + 1
+                    )
+
+                    analysis["water_detected"] = majority_vote
+               
+                if analysis["water_detected"]:
+
+                    current_depth = analysis["depth_cm"]
+
+                    if self.previous_depth is not None:
+
+                        current_depth = int(
+                            0.7 * self.previous_depth +
+                            0.3 * current_depth
+                        )
+
+                    analysis["depth_cm"] = current_depth
+
+                    self.previous_depth = current_depth    
 
                 results.append({
                     'frame_number': frame_num,

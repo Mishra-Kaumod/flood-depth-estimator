@@ -109,10 +109,10 @@ def process_single_image(image_path, model_path="severity_model.pth", storage_mo
     print(f"Image: {result['image_path']}")
 
     if not result['water_detected']:
-        print("Result: No Flood Detected")
+        print("Result: No water_detected")
     elif "error" not in result:
-        print("Flood Detected: Yes")
-        print(f"Flood Level: {result['final_flood_level']}")
+        print("water_detected: Yes")
+        print(f"Water Level: {result['final_flood_level']}")
         print(f"Estimated Depth: {result['depth_cm']} cm")
     
     print("="*60 + "\n")
