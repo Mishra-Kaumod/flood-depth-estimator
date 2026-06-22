@@ -2,97 +2,322 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Municipal Flood Depth Analytics Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bengaluru Flood Weather-style Report</title>
+    <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossorigin=""
+    />
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121214; color: #e1e1e6; margin: 0; padding: 40px; }
-        .container { max-width: 1000px; margin: 0 auto; background: #1d1d22; padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-        h1 { margin-top: 0; color: #04d361; border-bottom: 1px solid #29292e; padding-bottom: 15px; }
-        h2 { color: #04d361; margin-top: 40px; }
-        .form-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 8px; font-weight: 600; color: #a8a8b3; }
-        input[type="file"] { width: 100%; padding: 12px; background: #121214; border: 1px solid #29292e; border-radius: 4px; color: #fff; box-sizing: border-box; }
-        button { background: #04d361; color: #121214; font-weight: bold; border: none; padding: 12px 24px; border-radius: 4px; cursor: pointer; font-size: 16px; width: 100%; }
-        button:hover { background: #00b34d; }
-        .results-panel { margin-top: 30px; padding: 20px; background: #121214; border-left: 4px solid #04d361; border-radius: 4px; }
-        .metric-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #29292e; }
-        .metric-label { color: #a8a8b3; }
-        .metric-value { font-family: "SFMono-Regular", Consolas, monospace; font-weight: bold; color: #fff; }
-        .risk-alert { font-weight: bold; color: #ff3333; }
-        
-        /* Historical Logs Table styling */
-        .history-table { width: 100%; border-collapse: collapse; margin-top: 20px; text-align: left; }
-        .history-table th, .history-table td { padding: 12px; border-bottom: 1px solid #29292e; }
-        .history-table th { background-color: #121214; color: #a8a8b3; font-size: 14px; text-transform: uppercase; }
-        .history-table tr:hover { background-color: #29292e; }
+        :root {
+            color-scheme: dark;
+            --bg: #101318;
+            --panel: #171b22;
+            --panel-soft: #1f2530;
+            --border: #2b3442;
+            --text: #e7edf7;
+            --text-dim: #9fb0c8;
+            --ok: #22c55e;
+            --error: #ef4444;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            padding: 24px;
+        }
+        .layout {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            gap: 18px;
+        }
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 18px;
+        }
+        h1, h2, h3 { margin: 0 0 10px; }
+        .muted { color: var(--text-dim); }
+        .upload-grid {
+            display: grid;
+            gap: 12px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .upload-grid .full { grid-column: 1 / -1; }
+        label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 600;
+            color: var(--text-dim);
+            font-size: 13px;
+        }
+        input {
+            width: 100%;
+            background: var(--panel-soft);
+            border: 1px solid var(--border);
+            color: var(--text);
+            border-radius: 8px;
+            padding: 10px 12px;
+        }
+        .btn {
+            width: 100%;
+            border: 0;
+            border-radius: 10px;
+            padding: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            color: #041210;
+            background: linear-gradient(90deg, #34d399, #22c55e);
+        }
+        .status {
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .status.success { background: rgba(34, 197, 94, 0.14); border: 1px solid rgba(34, 197, 94, 0.4); }
+        .status.error { background: rgba(239, 68, 68, 0.14); border: 1px solid rgba(239, 68, 68, 0.4); }
+        .map-wrap { display: grid; gap: 10px; }
+        #bengaluru-map {
+            height: 460px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--panel-soft);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            padding: 5px 10px;
+        }
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .details-grid {
+            display: grid;
+            gap: 12px;
+            grid-template-columns: 280px 1fr;
+        }
+        .summary-box {
+            background: var(--panel-soft);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 12px;
+        }
+        pre {
+            margin: 0;
+            background: #0b0f14;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 12px;
+            font-size: 12px;
+            overflow: auto;
+            max-height: 360px;
+            color: #c8dbf8;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th, td {
+            border-bottom: 1px solid var(--border);
+            padding: 10px 8px;
+            text-align: left;
+        }
+        th { color: var(--text-dim); }
+        @media (max-width: 900px) {
+            .upload-grid, .details-grid { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Triple-Engine Automated Flood Inundation Matrix</h1>
-        <form method="POST" enctype="multipart/form-data">
-            {% csrf_token %}
-            <div class="form-group">
-                <label for="image_file">Upload Incident Scene Capture (Auto-Profiling & Database Sync Active):</label>
-                <input type="file" id="image_file" name="image_file" required>
-            </div>
-            <button type="submit">Run Automated Inference & Log Telemetry</button>
-        </form>
+    <div class="layout">
+        <section class="card">
+            <h1>Bengaluru Flood Weather-style Dashboard</h1>
+            <p class="muted">
+                Upload random camera images. Each image is mapped to a Bengaluru point (camera latitude/longitude if provided, otherwise randomized).
+            </p>
 
-        {% if success %}
-        <div class="results-panel">
-            <h2>Real-Time Telemetry Payload Saved (Record ID: {{ telemetry.record_id }})</h2>
-            <div class="metric-row">
-                <span class="metric-label">Pipeline Strategy Applied:</span>
-                <span class="metric-value" style="color: #ffb800;">{{ telemetry.strategy_applied }}</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-label">Surface Water Confirmation Score:</span>
-                <span class="metric-value">{{ telemetry.surface_water_confirmed }}</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-label">Computed Fluid Depth:</span>
-                <span class="metric-value" style="color: #04d361;">{{ telemetry.computed_depth_cm }} cm</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-label">Consolidated Safety Risk Assessment:</span>
-                <span class="metric-value risk-alert">{{ telemetry.safety_risk_assessment }}</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-label">Total System Confidence Matrix:</span>
-                <span class="metric-value">{{ telemetry.system_confidence_score }}</span>
-            </div>
-        </div>
-        {% endif %}
+            {% if success %}
+                <div class="status success">{{ message }}</div>
+            {% endif %}
+            {% if error %}
+                <div class="status error">{{ error }}</div>
+            {% endif %}
 
-        <h2>Historical Inundation Logs (Internal Reporting Feed)</h2>
-        <table class="history-table">
-            <thead>
-                <tr>
-                    <th>Timestamp (UTC)</th>
-                    <th>Source File</th>
-                    <th>Strategy</th>
-                    <th>Water Confirm</th>
-                    <th>Depth</th>
-                    <th>Risk Assessment</th>
-                </tr>
-            </thead>
-            <tbody>
+            <form method="POST" enctype="multipart/form-data">
+                {% csrf_token %}
+                <div class="upload-grid">
+                    <div class="full">
+                        <label for="image_file">Flood image(s)</label>
+                        <input type="file" id="image_file" name="image_file" accept="image/*" multiple required>
+                    </div>
+                    <div>
+                        <label for="camera_id">Camera ID (optional)</label>
+                        <input type="text" id="camera_id" name="camera_id" placeholder="cam_001">
+                    </div>
+                    <div>
+                        <label for="location_id">Location ID (optional)</label>
+                        <input type="text" id="location_id" name="location_id" placeholder="blr_zone_12">
+                    </div>
+                    <div>
+                        <label for="location_name">Location name (optional)</label>
+                        <input type="text" id="location_name" name="location_name" placeholder="KR Puram Junction">
+                    </div>
+                    <div>
+                        <label for="latitude">Latitude (optional)</label>
+                        <input type="text" id="latitude" name="latitude" placeholder="12.9716">
+                    </div>
+                    <div>
+                        <label for="longitude">Longitude (optional)</label>
+                        <input type="text" id="longitude" name="longitude" placeholder="77.5946">
+                    </div>
+                    <div class="full">
+                        <button class="btn" type="submit">Upload & Map Flood Reports</button>
+                    </div>
+                </div>
+            </form>
+        </section>
+
+        <section class="card map-wrap">
+            <h2>Bengaluru flood intensity map (cm, 5-point scale)</h2>
+            <div id="bengaluru-map"></div>
+            <div class="legend">
+                <span class="pill"><span class="dot" style="background:#22c55e;"></span>Scale 1: 0-5 cm</span>
+                <span class="pill"><span class="dot" style="background:#84cc16;"></span>Scale 2: 6-20 cm</span>
+                <span class="pill"><span class="dot" style="background:#facc15;"></span>Scale 3: 21-50 cm</span>
+                <span class="pill"><span class="dot" style="background:#f97316;"></span>Scale 4: 51-80 cm</span>
+                <span class="pill"><span class="dot" style="background:#ef4444;"></span>Scale 5: 81+ cm</span>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Selected point details (JSON output)</h2>
+            <div class="details-grid">
+                <div class="summary-box">
+                    <h3 style="margin-top:0;">Current selection</h3>
+                    <div id="selection-summary" class="muted">Click any map point to inspect details.</div>
+                </div>
+                <pre id="point-json">{
+  "message": "No map point selected yet."
+}</pre>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Latest telemetry records</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Camera</th>
+                        <th>Image</th>
+                        <th>Depth (cm)</th>
+                        <th>Water %</th>
+                        <th>Risk</th>
+                    </tr>
+                </thead>
+                <tbody>
                 {% for record in historical_records %}
-                <tr>
-                    <td>{{ record.timestamp|date:"Y-m-d H:i:s" }}</td>
-                    <td style="color: #a8a8b3;">{{ record.image_name }}</td>
-                    <td>{{ record.strategy_applied }}</td>
-                    <td>{{ record.surface_water_confirmed_pct }}%</td>
-                    <td style="color: #04d361; font-weight: bold;">{{ record.computed_depth_cm }} cm</td>
-                    <td style="color: #ff3333;">{{ record.safety_risk_assessment }}</td>
-                </tr>
+                    <tr>
+                        <td>{{ record.timestamp|date:"Y-m-d H:i:s" }}</td>
+                        <td>{{ record.camera.camera_id|default:"N/A" }}</td>
+                        <td>{{ record.image_name }}</td>
+                        <td>{{ record.computed_depth_cm }}</td>
+                        <td>{{ record.surface_water_confirmed_pct }}</td>
+                        <td>{{ record.safety_risk_assessment }}</td>
+                    </tr>
                 {% empty %}
-                <tr>
-                    <td colspan="6" style="text-align: center; color: #a8a8b3;">No telemetry records logged yet. Run an inference above to generate state database rows.</td>
-                </tr>
+                    <tr>
+                        <td colspan="6" class="muted">No telemetry yet. Upload images above to start.</td>
+                    </tr>
                 {% endfor %}
-            </tbody>
-        </table>
+                </tbody>
+            </table>
+        </section>
     </div>
+
+    <script
+        src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin="">
+    </script>
+    <script>
+        const mapPoints = JSON.parse('{{ map_points_json|escapejs }}');
+        const intensityColor = {
+            1: "#22c55e",
+            2: "#84cc16",
+            3: "#facc15",
+            4: "#f97316",
+            5: "#ef4444"
+        };
+
+        const map = L.map("bengaluru-map").setView([12.9716, 77.5946], 11);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            maxZoom: 19,
+            attribution: "&copy; OpenStreetMap contributors"
+        }).addTo(map);
+
+        const selectionSummary = document.getElementById("selection-summary");
+        const pointJson = document.getElementById("point-json");
+
+        function showPointDetails(point) {
+            selectionSummary.innerHTML =
+                `<strong>${point.location_name}</strong><br>` +
+                `Camera: ${point.camera_id}<br>` +
+                `Depth: ${point.depth_cm} cm (Scale ${point.intensity_scale})<br>` +
+                `Response Verdict: <strong>${point.response_verdict}</strong>`;
+            pointJson.textContent = JSON.stringify(point, null, 2);
+        }
+
+        if (mapPoints.length === 0) {
+            selectionSummary.textContent = "No points available yet. Upload images and wait for telemetry generation.";
+        } else {
+            const bounds = [];
+            mapPoints.forEach((point) => {
+                const color = intensityColor[point.intensity_scale] || "#3b82f6";
+                const marker = L.circleMarker([point.latitude, point.longitude], {
+                    radius: 9,
+                    color: "#0f172a",
+                    weight: 1,
+                    fillColor: color,
+                    fillOpacity: 0.9
+                }).addTo(map);
+
+                marker.bindPopup(
+                    `<b>${point.location_name}</b><br>` +
+                    `Camera: ${point.camera_id}<br>` +
+                    `Depth: ${point.depth_cm} cm<br>` +
+                    `Scale: ${point.intensity_scale}/5<br>` +
+                    `Verdict: ${point.response_verdict}`
+                );
+                marker.on("click", () => showPointDetails(point));
+                bounds.push([point.latitude, point.longitude]);
+            });
+
+            map.fitBounds(bounds, { padding: [25, 25] });
+            showPointDetails(mapPoints[0]);
+        }
+    </script>
 </body>
 </html>

@@ -3,28 +3,37 @@ import os
 import torch
 from celery import shared_task
 from transformers import pipeline
-from django.utils import timezone
 from core_logic import TripleEnginePipeline, estimate_flood_depth
-from cv_engine import FloodDepthEngine
 from .models import FloodInundationTelemetry, CameraLocation
 from .temporal_analysis import TemporalFloodAnalyzer
+from .services.prediction_policy import harmonize_prediction
 
 print("[+] Initializing Core Vision Models...")
 ml_pipeline = TripleEnginePipeline()
-cv_engine = FloodDepthEngine()
 temporal_analyzer = TemporalFloodAnalyzer()
 
 print("[+] Initializing Local Open-Weight LLM (Zero Marginal Cost)...")
 # Loading a highly optimized 1.5B parameter model into memory.
-try:
-    llm_generator = pipeline(
-        "text-generation", 
-        model="Qwen/Qwen2.5-1.5B-Instruct", 
-        device_map="auto", 
-        torch_dtype=torch.float16
-    )
-except Exception as e:
-    print(f"[!] LLM failed to load. Defaulting to strict math thresholds. Error: {e}")
+if os.getenv("ENABLE_LOCAL_LLM", "0").lower() in ("1", "true", "yes"):
+    try:
+        if torch.cuda.is_available():
+            llm_generator = pipeline(
+                "text-generation",
+                model="Qwen/Qwen2.5-1.5B-Instruct",
+                device_map="auto",
+                torch_dtype=torch.float16
+            )
+        else:
+            llm_generator = pipeline(
+                "text-generation",
+                model="Qwen/Qwen2.5-1.5B-Instruct",
+                device=-1
+            )
+    except Exception as e:
+        print(f"[!] LLM failed to load. Defaulting to strict math thresholds. Error: {e}")
+        llm_generator = None
+else:
+    print("[!] Local LLM disabled by default. Using strict math thresholds only.")
     llm_generator = None
 
 @shared_task(bind=True, max_retries=3)
@@ -56,37 +65,39 @@ def process_and_refine_telemetry(self, image_filepath, filename, external_contex
     # Get flood classification confidence
     flood_prob = ml_pipeline.predict_flood_probability(img_matrix)
     
-    # Use enhanced CV engine for depth + anchor tracking
-    cv_results = cv_engine.process_frame(img_matrix)
-    
-    raw_depth = cv_results["calculated_depth_cm"]
-    raw_confidence = flood_prob
-    strategy = cv_results["strategy_applied"]
-    detected_anchors = cv_results["anchors_tracked"]
-    num_anchors = cv_results["num_anchors_detected"]
-    is_fallback = cv_results["is_fallback_mode"]
+    # Use in-repo ensemble depth engine for depth + strategy
+    cv_results = estimate_flood_depth(img_matrix)
+    if cv_results.get("status") != "success":
+        return {"status": "error", "message": "Depth estimation failed"}
 
-    # --- STAGE 2: HALLUCINATION PREVENTION - Single Image Level ---
-    # Even a single image should have reference objects for credibility
-    if num_anchors == 0 and raw_depth > 20:
-        # Fallback detection - low confidence
-        is_water_confirmed = raw_confidence >= 0.6
-        hallucination_warning = "⚠️ NO REFERENCE OBJECTS DETECTED - Depth unvalidated"
-    elif num_anchors == 1 and raw_depth > 20:
-        # Single object - moderate confidence
-        is_water_confirmed = raw_confidence >= 0.5
-        hallucination_warning = "⚠️ Only 1 reference object - consider multi-image sequence"
-    elif num_anchors >= 2:
-        # Multiple objects - good confidence
-        is_water_confirmed = raw_confidence >= 0.4
-        hallucination_warning = ""
+    raw_depth = float(cv_results.get("estimated_depth_cm", 0.0))
+    ensemble_confidence = float(cv_results.get("ensemble_confidence", 0.0))
+    raw_confidence = max(float(flood_prob), ensemble_confidence)
+    strategy = cv_results.get("calculation_mode", "Ensemble")
+
+    if "No anchor" in strategy:
+        detected_anchors = []
     else:
-        # No water detected
-        is_water_confirmed = False
-        hallucination_warning = "No water detected"
+        detected_anchors = ["anchor_detected"]
+    num_anchors = len(detected_anchors)
+    is_fallback = num_anchors == 0
+
+    # --- STAGE 2: CONSISTENCY POLICY ---
+    policy = harmonize_prediction(
+        raw_depth_cm=raw_depth,
+        water_pct=flood_prob * 100.0,
+        raw_confidence=raw_confidence,
+        num_anchors=num_anchors,
+    )
+    raw_depth = policy["depth_cm"]
+    is_water_confirmed = policy["is_water_confirmed"]
+    hallucination_warning = policy["warning"]
     
     # --- STAGE 3: HEURISTIC GATING & LLM REFINEMENT ---
-    if raw_depth <= 20.0:
+    if not is_water_confirmed:
+        refined_risk = "Low"
+        llm_justification = "System: Depth is structurally safe for standard transit."
+    elif raw_depth <= 20.0:
         refined_risk = "Low"
         llm_justification = "System: Depth is structurally safe for standard transit."
     
