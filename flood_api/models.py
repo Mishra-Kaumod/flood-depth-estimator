@@ -172,3 +172,71 @@ class FailedTaskEvent(models.Model):
 
     def __str__(self):
         return f"FailedTask<{self.task_name}> retries={self.retry_count} resolved={self.resolved}"
+
+
+class SecureRandomImageUploadResult(models.Model):
+    INTENSITY_CHOICES = [
+        ("SAFE", "Safe - No Flood"),
+        ("MEDIUM", "Medium - Uncertain"),
+        ("HIGH", "High - Significant Flood"),
+        ("CRITICAL", "Critical - Severe Flood"),
+    ]
+
+    batch_id = models.CharField(max_length=100, unique=True, primary_key=True)
+    user_ip = models.GenericIPAddressField(null=True)
+    scenario_name = models.CharField(max_length=100)
+    location = models.CharField(max_length=100)
+    camera_id = models.CharField(max_length=50, default="bengaluru_default")
+    latitude = models.FloatField(default=13.1939)
+    longitude = models.FloatField(default=77.59)
+    description = models.TextField(blank=True)
+
+    total_images = models.IntegerField()
+    flooded_count = models.IntegerField()
+    dry_count = models.IntegerField()
+    avg_confidence = models.FloatField()
+    avg_depth_cm = models.FloatField()
+    max_intensity = models.CharField(max_length=10, choices=INTENSITY_CHOICES, default="SAFE")
+
+    results_json = models.JSONField()
+    report_path = models.CharField(max_length=500)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "secure_random_image_upload_result"
+        verbose_name = "Secure Image Upload Result"
+        verbose_name_plural = "Secure Image Upload Results"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.batch_id} - {self.scenario_name}"
+
+
+class AuditLog(models.Model):
+    ACTION_CHOICES = [
+        ("UPLOAD_START", "Upload Started"),
+        ("UPLOAD_SUCCESS", "Upload Successful"),
+        ("UPLOAD_FAILED", "Upload Failed"),
+        ("REPORT_GENERATED", "Report Generated"),
+        ("REPORT_VIEWED", "Report Viewed"),
+        ("REPORT_DOWNLOADED", "Report Downloaded"),
+    ]
+
+    batch_id = models.CharField(max_length=100)
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    ip_address = models.GenericIPAddressField()
+    user_agent = models.TextField(blank=True)
+    status = models.CharField(max_length=20)
+    details = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "audit_log"
+        verbose_name = "Audit Log"
+        verbose_name_plural = "Audit Logs"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.batch_id} - {self.action} - {self.created_at}"

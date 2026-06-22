@@ -1,4 +1,4 @@
-# flood_api/secure_random_image_views.py
+﻿# flood_api/secure_random_image_views.py
 # SECURE IMAGE UPLOAD WITH VALIDATION, AUTHENTICATION, AND RATE LIMITING
 
 import os
@@ -15,7 +15,6 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 from django.core.files.storage import default_storage
 from django.middleware.csrf import get_token
-from django.db import models
 from django.contrib.auth.decorators import login_required
 from django.utils.decorators import method_decorator
 from django.views.generic import View
@@ -29,6 +28,7 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 import cv2
 import numpy as np
 from functools import wraps
+from .models import SecureRandomImageUploadResult, AuditLog
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECURITY CONFIGURATION
@@ -97,6 +97,20 @@ def sanitize_filename(filename):
     """Generate safe filename using UUID"""
     ext = filename.split('.')[-1].lower()
     return f"{uuid.uuid4().hex}.{ext}"
+
+def to_json_safe(value):
+    """Recursively convert values to JSON-serializable Python natives."""
+    if isinstance(value, dict):
+        return {str(k): to_json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [to_json_safe(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, Path):
+        return str(value)
+    return value
 
 # ─────────────────────────────────────────────────────────────────────────────
 # INPUT VALIDATION & SANITIZATION
@@ -186,82 +200,8 @@ class SecureImageUploadForm:
         }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MODELS
-# ─────────────────────────────────────────────────────────────────────────────
-
-class SecureRandomImageUploadResult(models.Model):
-    """Secure storage for upload results"""
-    
-    INTENSITY_CHOICES = [
-        ('SAFE', 'Safe - No Flood'),
-        ('MEDIUM', 'Medium - Uncertain'),
-        ('HIGH', 'High - Significant Flood'),
-        ('CRITICAL', 'Critical - Severe Flood'),
-    ]
-    
-    batch_id = models.CharField(max_length=100, unique=True, primary_key=True)
-    user_ip = models.GenericIPAddressField(null=True)
-    scenario_name = models.CharField(max_length=100)
-    location = models.CharField(max_length=100)
-    camera_id = models.CharField(max_length=50, default=DEFAULT_CAMERA_ID)
-    latitude = models.FloatField(default=DEFAULT_LAT)
-    longitude = models.FloatField(default=DEFAULT_LNG)
-    description = models.TextField(blank=True)
-    
-    total_images = models.IntegerField()
-    flooded_count = models.IntegerField()
-    dry_count = models.IntegerField()
-    avg_confidence = models.FloatField()
-    avg_depth_cm = models.FloatField()
-    max_intensity = models.CharField(max_length=10, choices=INTENSITY_CHOICES, default='SAFE')
-    
-    results_json = models.JSONField()  # Per-image detailed results
-    report_path = models.CharField(max_length=500)
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    class Meta:
-        db_table = 'secure_random_image_upload_result'
-        verbose_name = 'Secure Image Upload Result'
-        verbose_name_plural = 'Secure Image Upload Results'
-        ordering = ['-created_at']
-    
-    def __str__(self):
-        return f"{self.batch_id} - {self.scenario_name}"
-
-# ─────────────────────────────────────────────────────────────────────────────
 # AUDIT LOGGING
 # ─────────────────────────────────────────────────────────────────────────────
-
-class AuditLog(models.Model):
-    """Track all uploads for security audit"""
-    
-    ACTION_CHOICES = [
-        ('UPLOAD_START', 'Upload Started'),
-        ('UPLOAD_SUCCESS', 'Upload Successful'),
-        ('UPLOAD_FAILED', 'Upload Failed'),
-        ('REPORT_GENERATED', 'Report Generated'),
-        ('REPORT_VIEWED', 'Report Viewed'),
-        ('REPORT_DOWNLOADED', 'Report Downloaded'),
-    ]
-    
-    batch_id = models.CharField(max_length=100)
-    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
-    ip_address = models.GenericIPAddressField()
-    user_agent = models.TextField(blank=True)
-    status = models.CharField(max_length=20)  # success, failed
-    details = models.JSONField(default=dict)
-    created_at = models.DateTimeField(auto_now_add=True)
-    
-    class Meta:
-        db_table = 'audit_log'
-        verbose_name = 'Audit Log'
-        verbose_name_plural = 'Audit Logs'
-        ordering = ['-created_at']
-    
-    def __str__(self):
-        return f"{self.batch_id} - {self.action} - {self.created_at}"
 
 def get_client_ip(request):
     """Extract client IP from request"""
@@ -281,7 +221,7 @@ def log_audit(batch_id, action, request, status, details=None):
             ip_address=get_client_ip(request),
             user_agent=request.META.get('HTTP_USER_AGENT', '')[:500],
             status=status,
-            details=details or {}
+            details=to_json_safe(details or {})
         )
     except Exception as e:
         print(f"Audit log failed: {str(e)}")
@@ -439,6 +379,7 @@ def secure_random_image_upload_process(request):
                     continue
                 
                 # Update statistics
+                analysis = to_json_safe(analysis)
                 if analysis['is_flood']:
                     flooded_count += 1
                 depth_values.append(analysis['depth_cm'])
@@ -490,7 +431,7 @@ def secure_random_image_upload_process(request):
             avg_depth_cm=float(avg_depth),
             max_intensity=max_intensity,
             results_json={
-                'images': results,
+                'images': to_json_safe(results),
                 'timestamp': timezone.now().isoformat(),
             },
             report_path=f'/report/{batch_id}/'
@@ -525,29 +466,58 @@ def secure_random_image_upload_process(request):
 @require_http_methods(["GET"])
 def view_report_secure(request, batch_id):
     """View secure report with results table"""
-    
+    import json as _json
     try:
         result = get_object_or_404(SecureRandomImageUploadResult, batch_id=batch_id)
-        
-        log_audit(batch_id, 'REPORT_VIEWED', request, 'success')
-        
+        log_audit(batch_id, "REPORT_VIEWED", request, "success")
+
+        flat_results = []
+        for img in result.results_json.get("images", []):
+            if img.get("status") != "success":
+                continue
+            a = img.get("analysis", {})
+            flat_results.append({
+                "filename": img.get("filename", ""),
+                "flooded": bool(a.get("is_flood", False)),
+                "confidence": round(float(a.get("confidence", 0)), 1),
+                "intensity": a.get("intensity", "SAFE"),
+                "estimated_depth": int(a.get("depth_cm", 0)),
+                "water_percentage": round(float(a.get("water_pixels", 0)), 1),
+                "brightness": round(float(a.get("brightness", 0)), 1),
+                "latitude": float(result.latitude),
+                "longitude": float(result.longitude),
+                "image_data": "",
+            })
+
+        n_flood = result.flooded_count
+        n_total = result.total_images
+        intensity = result.max_intensity
+        if intensity == "CRITICAL":
+            assessment = f"CRITICAL: {n_flood} of {n_total} images show severe flooding. Immediate emergency response required."
+        elif intensity == "HIGH":
+            assessment = f"HIGH RISK: {n_flood} of {n_total} images indicate significant flooding. Deploy monitoring teams."
+        elif intensity == "MEDIUM":
+            assessment = f"MEDIUM RISK: {n_flood} of {n_total} images show possible flooding. Increased monitoring advised."
+        else:
+            assessment = f"LOW RISK: No flooding detected across {n_total} images. Routine monitoring continues."
+
         context = {
-            'batch': result,
-            'results': result.results_json.get('images', []),
-            'stats': {
-                'total': result.total_images,
-                'flooded': result.flooded_count,
-                'dry': result.dry_count,
-                'avg_confidence': result.avg_confidence,
-                'avg_depth': result.avg_depth_cm,
-            },
-            'bengaluru_name': 'Bengaluru (Bangalore), India',
+            "batch_id": result.batch_id,
+            "location": result.location,
+            "timestamp": result.created_at.strftime("%d %b %Y, %H:%M"),
+            "total_images": result.total_images,
+            "flooded_count": result.flooded_count,
+            "avg_confidence": round(float(result.avg_confidence), 1),
+            "avg_depth": round(float(result.avg_depth_cm), 1),
+            "max_intensity": result.max_intensity,
+            "assessment_summary": assessment,
+            "model_version": "1.0.0-cv-basic",
+            "processing_time": "< 5",
+            "results_json": _json.dumps(flat_results),
         }
-        
-        return render(request, 'enterprise_report.html', context)
-        
+        return render(request, "enterprise_report.html", context)
     except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
+        return JsonResponse({"error": str(e)}, status=500)
 
 @require_http_methods(["GET"])
 def download_report_secure(request, batch_id):

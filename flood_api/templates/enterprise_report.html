@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -589,9 +589,6 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://html2pdf.com/jspdf.min.js"></script>
-    <script src="https://html2pdf.com/html2canvas.min.js"></script>
-    <script src="https://html2pdf.com/html2pdf.bundle.min.js"></script>
     <script>
         const reportData = {
             batch_id: '{{ batch_id }}',
@@ -604,102 +601,73 @@
             results: {{ results_json|safe }}
         };
 
+        const intensityColor = {
+            'SAFE': '#228b22',
+            'MEDIUM': '#f59e0b',
+            'HIGH': '#f97316',
+            'CRITICAL': '#8b0000'
+        };
+
         function initMap() {
             const map = L.map('map').setView([12.9716, 77.5946], 11);
-
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap',
-                maxZoom: 19
+                attribution: '&copy; OpenStreetMap', maxZoom: 19
             }).addTo(map);
 
-            const colorMap = {
-                'SAFE': '#228b22',
-                'MEDIUM': '#ffa500',
-                'HIGH': '#ff4500',
-                'CRITICAL': '#8b0000'
-            };
-
-            reportData.results.forEach(result => {
-                const color = colorMap[result.intensity] || '#9ca3af';
-                L.circleMarker([result.latitude, result.longitude], {
-                    radius: 8,
-                    fillColor: color,
-                    color: color,
-                    weight: 2,
-                    opacity: 0.8,
-                    fillOpacity: 0.7
-                }).addTo(map).bindPopup(`
-                    <strong>${result.filename}</strong><br>
-                    Status: ${result.flooded ? 'Flooded' : 'Safe'}<br>
-                    Confidence: ${result.confidence}%<br>
-                    Intensity: ${result.intensity}<br>
-                    Depth: ${result.estimated_depth} cm
-                `);
+            reportData.results.forEach(r => {
+                const color = intensityColor[r.intensity] || '#9ca3af';
+                L.circleMarker([r.latitude, r.longitude], {
+                    radius: 10, fillColor: color, color: color,
+                    weight: 2, opacity: 0.9, fillOpacity: 0.75
+                }).addTo(map).bindPopup(
+                    `<strong>${r.filename}</strong><br>
+                     Status: ${r.flooded ? '<b style="color:#8b0000">Flooded</b>' : '<b style="color:#228b22">Safe</b>'}<br>
+                     Confidence: ${r.confidence}%<br>
+                     Intensity: <b>${r.intensity}</b><br>
+                     Depth: ${r.estimated_depth} cm`
+                );
             });
         }
 
         function populateResults() {
             const grid = document.getElementById('resultsGrid');
-            const table = document.getElementById('detailTable');
+            const tbody = document.getElementById('detailTable');
 
-            reportData.results.forEach(result => {
-                // Card view
+            reportData.results.forEach(r => {
+                const color = intensityColor[r.intensity] || '#9ca3af';
+
+                // ── Card ──
                 const card = document.createElement('div');
-                card.className = `result-card ${result.flooded ? 'flooded' : 'safe'}`;
+                card.className = `result-card ${r.flooded ? 'flooded' : 'safe'}`;
                 card.innerHTML = `
-                    <img src="${result.image_data}" class="result-card-image" alt="${result.filename}">
-                    <div class="result-card-content">
-                        <div class="result-card-title">${result.filename}</div>
-                        <div class="intensity-badge intensity-${result.intensity.toLowerCase()}">
-                            ${result.intensity}
+                    <div class="result-card-content" style="width:100%">
+                        <div class="result-card-title">${r.filename}</div>
+                        <span class="intensity-badge" style="background:${color};color:#fff;padding:6px 12px;border-radius:4px;font-size:12px;font-weight:700;display:inline-block;margin:6px 0">${r.intensity}</span>
+                        <div class="result-card-meta" style="margin-top:10px">
+                            <div class="meta-item-small">Flooding<strong>${r.flooded ? 'Yes' : 'No'}</strong></div>
+                            <div class="meta-item-small">Confidence<strong>${r.confidence}%</strong></div>
+                            <div class="meta-item-small">Depth<strong>${r.estimated_depth} cm</strong></div>
+                            <div class="meta-item-small">Water Cover<strong>${r.water_percentage}%</strong></div>
                         </div>
-                        <div class="result-card-meta">
-                            <div class="meta-item-small">
-                                Flooding
-                                <strong>${result.flooded ? '✓ Yes' : '✗ No'}</strong>
-                            </div>
-                            <div class="meta-item-small">
-                                Confidence
-                                <strong>${result.confidence}%</strong>
-                            </div>
-                            <div class="meta-item-small">
-                                Depth
-                                <strong>${result.estimated_depth} cm</strong>
-                            </div>
-                            <div class="meta-item-small">
-                                Water
-                                <strong>${result.water_percentage}%</strong>
-                            </div>
-                        </div>
-                    </div>
-                `;
+                    </div>`;
                 grid.appendChild(card);
 
-                // Table row
+                // ── Table row ──
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td><strong>${result.filename}</strong></td>
-                    <td>${result.flooded ? '✓ Flooded' : '✗ Safe'}</td>
-                    <td>${result.confidence}%</td>
-                    <td><span class="intensity-badge intensity-${result.intensity.toLowerCase()}">${result.intensity}</span></td>
-                    <td>${result.estimated_depth}</td>
-                    <td>${result.brightness}</td>
-                    <td>${result.water_percentage}%</td>
-                `;
-                table.appendChild(row);
+                    <td><strong>${r.filename}</strong></td>
+                    <td style="font-weight:600;color:${r.flooded ? '#8b0000' : '#228b22'}">${r.flooded ? 'Flooded' : 'Safe'}</td>
+                    <td>${r.confidence}%</td>
+                    <td><span style="background:${color};color:#fff;padding:4px 10px;border-radius:4px;font-size:12px;font-weight:600">${r.intensity}</span></td>
+                    <td>${r.estimated_depth}</td>
+                    <td>${r.brightness}</td>
+                    <td>${r.water_percentage}%</td>`;
+                tbody.appendChild(row);
             });
         }
 
         function downloadReport() {
-            const element = document.querySelector('.container');
-            const opt = {
-                margin: 10,
-                filename: `flood-report-${reportData.batch_id}.pdf`,
-                image: { type: 'jpeg', quality: 0.98 },
-                html2canvas: { scale: 2 },
-                jsPDF: { orientation: 'portrait', unit: 'mm', format: 'a4' }
-            };
-            html2pdf().set(opt).save();
+            window.print();
         }
 
         document.addEventListener('DOMContentLoaded', () => {
