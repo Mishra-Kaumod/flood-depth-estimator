@@ -4,9 +4,10 @@ from . import views
 from . import secure_random_image_views
 
 urlpatterns = [
-    # Mapping the empty path redirects root traffic to the dashboard instantly
-    path('', views.dashboard_view, name='web_dashboard'),
-    path('dashboard/', views.dashboard_view, name='web_dashboard_alias'),
+    # Serve the secure full-page upload experience as the primary landing page.
+    path('', secure_random_image_views.secure_random_image_upload_page, name='web_dashboard'),
+    path('dashboard/', secure_random_image_views.secure_random_image_upload_page, name='web_dashboard_alias'),
+    path('legacy-dashboard/', views.dashboard_view, name='legacy_web_dashboard'),
     
     # High-speed API endpoints
     path('api/v1/estimate/', views.high_speed_api_endpoint, name='rapid_api_gateway'),
