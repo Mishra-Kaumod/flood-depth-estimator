@@ -1,814 +1,295 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Flood Detection Analysis Platform | Bengaluru Municipal Analytics</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #f8f9fa;
-            color: #1f2937;
-            line-height: 1.6;
-        }
-
-        /* HEADER - Professional Enterprise Style */
-        .header {
-            background: #ffffff;
-            border-bottom: 1px solid #e5e7eb;
-            padding: 24px 40px;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-        }
-
-        .header-content {
-            max-width: 1400px;
-            margin: 0 auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .logo {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-weight: 700;
-            color: #1f2937;
-            font-size: 18px;
-        }
-
-        .logo-icon {
-            font-size: 28px;
-        }
-
-        .header-status {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            font-size: 13px;
-        }
-
-        .status-badge {
-            background: #ecfdf5;
-            color: #065f46;
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-weight: 500;
-        }
-
-        /* MAIN CONTAINER */
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 40px 40px;
-        }
-
-        /* PAGE TITLE */
-        .page-header {
-            margin-bottom: 40px;
-        }
-
-        .page-title {
-            font-size: 32px;
-            font-weight: 700;
-            color: #1f2937;
-            margin-bottom: 8px;
-        }
-
-        .page-subtitle {
-            font-size: 15px;
-            color: #6b7280;
-            font-weight: 400;
-        }
-
-        /* GRID LAYOUT */
-        .content-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 32px;
-            margin-bottom: 40px;
-        }
-
-        @media (max-width: 1024px) {
-            .content-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        /* CARD STYLING */
-        .card {
-            background: white;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 32px;
-            transition: box-shadow 0.2s ease;
-        }
-
-        .card:hover {
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
-        }
-
-        .card-title {
-            font-size: 18px;
-            font-weight: 600;
-            color: #1f2937;
-            margin-bottom: 24px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        /* UPLOAD ZONE */
-        .upload-zone {
-            border: 2px dashed #d1d5db;
-            border-radius: 8px;
-            padding: 48px 24px;
-            text-align: center;
-            background: #f9fafb;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            min-height: 240px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-        }
-
-        .upload-zone:hover {
-            border-color: #3b82f6;
-            background: #f0f9ff;
-        }
-
-        .upload-zone.dragging {
-            border-color: #3b82f6;
-            background: #eff6ff;
-        }
-
-        .upload-icon {
-            font-size: 56px;
-            margin-bottom: 16px;
-            opacity: 0.7;
-        }
-
-        .upload-zone p {
-            color: #374151;
-            font-size: 15px;
-            margin: 8px 0;
-        }
-
-        .upload-zone .primary-text {
-            font-weight: 600;
-            color: #1f2937;
-        }
-
-        .upload-zone .secondary-text {
-            font-size: 13px;
-            color: #6b7280;
-            margin-top: 8px;
-        }
-
-        #fileInput {
-            display: none;
-        }
-
-        /* FILE LIST */
-        .file-list {
-            margin-top: 24px;
-            max-height: 300px;
-            overflow-y: auto;
-        }
-
-        .file-item {
-            background: #f9fafb;
-            padding: 12px 16px;
-            margin: 8px 0;
-            border-radius: 6px;
-            border-left: 3px solid #3b82f6;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            font-size: 13px;
-        }
-
-        .file-item-name {
-            color: #1f2937;
-            font-weight: 500;
-        }
-
-        .file-item-size {
-            color: #9ca3af;
-            font-size: 12px;
-        }
-
-        .file-item .remove {
-            background: #fee2e2;
-            color: #991b1b;
-            border: none;
-            padding: 6px 12px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            font-weight: 500;
-            transition: background 0.2s;
-        }
-
-        .file-item .remove:hover {
-            background: #fecaca;
-        }
-
-        /* FORM SECTION */
-        .form-group {
-            margin-bottom: 24px;
-        }
-
-        .form-group label {
-            display: block;
-            color: #374151;
-            font-weight: 500;
-            margin-bottom: 8px;
-            font-size: 14px;
-        }
-
-        .form-group input,
-        .form-group textarea {
-            width: 100%;
-            padding: 12px 14px;
-            border: 1px solid #d1d5db;
-            border-radius: 6px;
-            font-family: 'Inter', sans-serif;
-            font-size: 14px;
-            color: #1f2937;
-            background: white;
-            transition: border-color 0.2s;
-        }
-
-        .form-group input:focus,
-        .form-group textarea:focus {
-            outline: none;
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-        }
-
-        .form-group textarea {
-            resize: vertical;
-            min-height: 100px;
-        }
-
-        .required {
-            color: #ef4444;
-        }
-
-        /* MAP SECTION */
-        #map {
-            width: 100%;
-            height: 320px;
-            border-radius: 6px;
-            border: 1px solid #e5e7eb;
-            margin-top: 16px;
-        }
-
-        .coord-display {
-            background: #f9fafb;
-            padding: 16px;
-            border-radius: 6px;
-            margin-top: 16px;
-            font-size: 13px;
-            border: 1px solid #e5e7eb;
-        }
-
-        .coord-display p {
-            margin: 6px 0;
-        }
-
-        .coord-display strong {
-            color: #3b82f6;
-            font-weight: 600;
-        }
-
-        /* BUTTONS */
-        .button-group {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-            margin-top: 32px;
-        }
-
-        button {
-            padding: 14px 20px;
-            border: none;
-            border-radius: 6px;
-            font-weight: 600;
-            cursor: pointer;
-            font-size: 14px;
-            transition: all 0.2s ease;
-            font-family: 'Inter', sans-serif;
-        }
-
-        .btn-primary {
-            background: #3b82f6;
-            color: white;
-        }
-
-        .btn-primary:hover {
-            background: #2563eb;
-        }
-
-        .btn-primary:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .btn-secondary {
-            background: #f3f4f6;
-            color: #374151;
-            border: 1px solid #e5e7eb;
-        }
-
-        .btn-secondary:hover {
-            background: #e5e7eb;
-        }
-
-        /* MESSAGES */
-        .message {
-            padding: 16px 20px;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            font-size: 14px;
-            display: none;
-            border-left: 4px solid transparent;
-        }
-
-        .message.show {
-            display: block;
-        }
-
-        .message.success {
-            background: #ecfdf5;
-            border-left-color: #10b981;
-            color: #065f46;
-        }
-
-        .message.error {
-            background: #fef2f2;
-            border-left-color: #ef4444;
-            color: #7f1d1d;
-        }
-
-        .message.info {
-            background: #eff6ff;
-            border-left-color: #3b82f6;
-            color: #1e40af;
-        }
-
-        /* LOADING */
-        .loading {
-            display: none;
-            text-align: center;
-            padding: 32px 20px;
-        }
-
-        .loading.show {
-            display: block;
-        }
-
-        .spinner {
-            display: inline-block;
-            width: 40px;
-            height: 40px;
-            border: 3px solid #e5e7eb;
-            border-top-color: #3b82f6;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        .loading p {
-            margin-top: 16px;
-            color: #6b7280;
-            font-size: 14px;
-        }
-
-        /* FOOTER */
-        .footer {
-            background: white;
-            border-top: 1px solid #e5e7eb;
-            padding: 32px 40px;
-            text-align: center;
-            font-size: 12px;
-            color: #9ca3af;
-            margin-top: 60px;
-        }
-
-        .footer p {
-            margin: 4px 0;
-        }
-
-        /* SECURITY SECTION */
-        .security-info {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 16px;
-            margin-top: 24px;
-        }
-
-        .security-item {
-            background: #f9fafb;
-            padding: 16px;
-            border-radius: 6px;
-            text-align: center;
-            font-size: 12px;
-            border: 1px solid #e5e7eb;
-        }
-
-        .security-item strong {
-            color: #3b82f6;
-            display: block;
-            margin-bottom: 6px;
-            font-weight: 600;
-        }
-
-        .security-item-text {
-            color: #6b7280;
-        }
-
-        /* RESPONSIVE */
-        @media (max-width: 768px) {
-            .container {
-                padding: 24px 20px;
-            }
-
-            .header-content {
-                padding: 0 20px;
-            }
-
-            .page-title {
-                font-size: 24px;
-            }
-
-            .button-group {
-                grid-template-columns: 1fr;
-            }
-
-            .security-info {
-                grid-template-columns: 1fr;
-            }
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flood Detection Platform | Bengaluru Municipal Analytics</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f1f5f9;color:#1e293b}
+
+  /* ── TOP NAV ── */
+  .nav{height:56px;background:#0f172a;display:flex;align-items:center;justify-content:space-between;padding:0 28px;flex-shrink:0;z-index:200}
+  .nav-brand{display:flex;align-items:center;gap:10px;color:#fff;font-size:16px;font-weight:700;letter-spacing:-.3px}
+  .nav-brand span{font-size:22px}
+  .nav-right{display:flex;align-items:center;gap:16px;font-size:13px;color:#94a3b8}
+  .live-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;margin-right:6px;animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+  /* ── PAGE SHELL ── */
+  .shell{display:flex;height:calc(100vh - 56px);overflow:hidden}
+
+  /* ── LEFT PANEL ── */
+  .left-panel{width:420px;flex-shrink:0;background:#fff;border-right:1px solid #e2e8f0;display:flex;flex-direction:column;overflow:hidden}
+  .panel-header{padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;flex-shrink:0}
+  .panel-title{font-size:15px;font-weight:700;color:#0f172a}
+  .panel-sub{font-size:12px;color:#64748b;margin-top:3px}
+  .panel-body{flex:1;overflow-y:auto;padding:20px 24px}
+  .panel-footer{padding:16px 24px;border-top:1px solid #f1f5f9;flex-shrink:0}
+
+  /* ── UPLOAD ZONE ── */
+  .upload-zone{border:2px dashed #cbd5e1;border-radius:10px;padding:28px 20px;text-align:center;background:#f8fafc;cursor:pointer;transition:all .25s}
+  .upload-zone:hover,.upload-zone.drag{border-color:#3b82f6;background:#eff6ff}
+  .upload-icon{font-size:40px;margin-bottom:10px;opacity:.7}
+  .upload-main{font-weight:600;font-size:14px;color:#1e293b}
+  .upload-sub{font-size:12px;color:#94a3b8;margin-top:4px}
+
+  /* ── FILE LIST ── */
+  .file-list{margin-top:14px;display:flex;flex-direction:column;gap:6px;max-height:160px;overflow-y:auto}
+  .file-item{background:#f8fafc;border:1px solid #e2e8f0;border-left:3px solid #3b82f6;border-radius:6px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;font-size:12px}
+  .file-name{font-weight:500;color:#1e293b;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .file-size{color:#94a3b8;font-size:11px}
+  .file-remove{background:#fee2e2;color:#991b1b;border:none;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600}
+
+  /* ── FORM ── */
+  .form-group{margin-bottom:14px}
+  .form-label{display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:5px;text-transform:uppercase;letter-spacing:.4px}
+  .form-input{width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-family:'Inter',sans-serif;font-size:13px;color:#1e293b;background:#fff;transition:border-color .2s}
+  .form-input:focus{outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.1)}
+  textarea.form-input{resize:none;height:72px}
+  .req{color:#ef4444}
+  .section-divider{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#94a3b8;margin:18px 0 12px;display:flex;align-items:center;gap:8px}
+  .section-divider::after{content:'';flex:1;height:1px;background:#e2e8f0}
+
+  /* ── BUTTONS ── */
+  .btn-primary{width:100%;padding:12px;background:#3b82f6;color:#fff;border:none;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;transition:background .2s;font-family:'Inter',sans-serif}
+  .btn-primary:hover{background:#2563eb}
+  .btn-primary:disabled{opacity:.5;cursor:not-allowed}
+  .btn-secondary{width:100%;padding:10px;background:#f8fafc;color:#374151;border:1px solid #e2e8f0;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer;margin-top:8px;font-family:'Inter',sans-serif}
+  .btn-secondary:hover{background:#f1f5f9}
+
+  /* ── ALERTS ── */
+  .alert{padding:10px 14px;border-radius:6px;font-size:13px;margin-bottom:12px;display:none;border-left:4px solid transparent}
+  .alert.show{display:block}
+  .alert-success{background:#f0fdf4;border-color:#22c55e;color:#14532d}
+  .alert-error{background:#fef2f2;border-color:#ef4444;color:#7f1d1d}
+  .alert-info{background:#eff6ff;border-color:#3b82f6;color:#1e40af}
+
+  /* ── SPINNER ── */
+  .spinner-wrap{display:none;text-align:center;padding:20px}
+  .spinner-wrap.show{display:block}
+  .spinner{display:inline-block;width:32px;height:32px;border:3px solid #e2e8f0;border-top-color:#3b82f6;border-radius:50%;animation:spin .7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* ── RIGHT PANEL ── */
+  .right-panel{flex:1;display:flex;flex-direction:column;overflow:hidden}
+  .map-header{padding:14px 24px;background:#fff;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
+  .map-title{font-size:14px;font-weight:700;color:#0f172a}
+  .coord-pills{display:flex;gap:8px;font-size:12px}
+  .coord-pill{background:#f1f5f9;padding:5px 12px;border-radius:20px;color:#374151;font-weight:500}
+  .coord-pill span{font-weight:700;color:#3b82f6}
+
+  #map{flex:1;min-height:0}
+
+  /* ── STATS BAR ── */
+  .stats-bar{height:64px;background:#0f172a;display:flex;align-items:center;padding:0 28px;gap:0;flex-shrink:0}
+  .stat-item{flex:1;text-align:center;border-right:1px solid rgba(255,255,255,.08)}
+  .stat-item:last-child{border-right:none}
+  .stat-num{font-size:20px;font-weight:700;color:#fff}
+  .stat-lbl{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.6px;margin-top:1px}
+</style>
 </head>
 <body>
-    <!-- HEADER -->
-    <div class="header">
-        <div class="header-content">
-            <div class="logo">
-                <span class="logo-icon">🌊</span>
-                <span>Flood Detection Platform</span>
-            </div>
-            <div class="header-status">
-                <span class="status-badge">● LIVE</span>
-                <span>Bengaluru Metropolitan</span>
-            </div>
-        </div>
+
+<!-- NAV -->
+<div class="nav">
+  <div class="nav-brand"><span>🌊</span> Bengaluru Flood Intelligence Platform</div>
+  <div class="nav-right"><span class="live-dot"></span>Live Analysis &nbsp;|&nbsp; BBMP Command Centre &nbsp;|&nbsp; Secure Upload</div>
+</div>
+
+<!-- SHELL -->
+<div class="shell">
+
+  <!-- LEFT: Upload + Form -->
+  <div class="left-panel">
+    <div class="panel-header">
+      <div class="panel-title">Image Upload &amp; Incident Details</div>
+      <div class="panel-sub">Upload 1 – 10 images for automated flood analysis</div>
     </div>
 
-    <!-- MAIN CONTENT -->
-    <div class="container">
-        <!-- PAGE HEADER -->
-        <div class="page-header">
-            <h1 class="page-title">Flood Analysis Dashboard</h1>
-            <p class="page-subtitle">Upload satellite and ground-level images for automated flood detection and severity analysis</p>
-        </div>
+    <div class="panel-body">
+      <div id="alertBox" class="alert"></div>
 
-        <!-- MESSAGE CONTAINER -->
-        <div id="messageContainer"></div>
+      <!-- Upload Zone -->
+      <div class="upload-zone" id="uploadZone">
+        <div class="upload-icon">📸</div>
+        <div class="upload-main">Drag images here or click to browse</div>
+        <div class="upload-sub">JPG, PNG, BMP &nbsp;·&nbsp; Max 50 MB each &nbsp;·&nbsp; Up to 10 images</div>
+      </div>
+      <input type="file" id="fileInput" multiple accept=".jpg,.jpeg,.png,.gif,.bmp" style="display:none">
+      <div class="file-list" id="fileList"></div>
 
-        <!-- CONTENT GRID -->
-        <div class="content-grid">
-            <!-- LEFT COLUMN -->
-            <div>
-                <!-- UPLOAD CARD -->
-                <div class="card">
-                    <div class="card-title">
-                        <span>📤</span>
-                        <span>Image Upload</span>
-                    </div>
+      <div class="section-divider">Incident Metadata</div>
 
-                    <div class="upload-zone" id="uploadZone">
-                        <div class="upload-icon">📸</div>
-                        <p class="primary-text">Drag images here or click to browse</p>
-                        <p class="secondary-text">Supported: JPG, PNG, GIF, BMP (up to 50MB each)</p>
-                    </div>
-
-                    <input type="file" id="fileInput" multiple accept=".jpg,.jpeg,.png,.gif,.bmp">
-
-                    <div class="file-list" id="fileList"></div>
-                </div>
-
-                <!-- LOCATION DETAILS CARD -->
-                <div class="card" style="margin-top: 32px;">
-                    <div class="card-title">
-                        <span>📋</span>
-                        <span>Incident Details</span>
-                    </div>
-
-                    <div class="form-group">
-                        <label>Scenario Name <span class="required">*</span></label>
-                        <input type="text" id="scenarioName" value="Bengaluru Flood Assessment" required>
-                    </div>
-
-                    <div class="form-group">
-                        <label>Location <span class="required">*</span></label>
-                        <input type="text" id="location" value="Bengaluru, Karnataka" required>
-                    </div>
-
-                    <div class="form-group">
-                        <label>Camera / Sensor ID</label>
-                        <input type="text" id="cameraId" value="{{ default_camera_id }}" placeholder="e.g., CAM_001">
-                    </div>
-
-                    <div class="form-group">
-                        <label>Observations</label>
-                        <textarea id="description" placeholder="Add any relevant notes about the incident..."></textarea>
-                    </div>
-
-                    <div class="button-group">
-                        <button class="btn-primary" id="uploadBtn" onclick="submitUpload()">
-                            ✓ Analyze Images
-                        </button>
-                        <button class="btn-secondary" onclick="clearForm()">
-                            ↻ Clear Form
-                        </button>
-                    </div>
-
-                    <div class="loading" id="loading">
-                        <div class="spinner"></div>
-                        <p>Processing images... Please wait</p>
-                    </div>
-                </div>
-            </div>
-
-            <!-- RIGHT COLUMN -->
-            <div>
-                <!-- MAP CARD -->
-                <div class="card">
-                    <div class="card-title">
-                        <span>📍</span>
-                        <span>Geographic Location</span>
-                    </div>
-                    <p style="font-size: 13px; color: #6b7280; margin-bottom: 12px;">
-                        Click or drag the marker to set incident coordinates
-                    </p>
-
-                    <div id="map"></div>
-
-                    <div class="coord-display">
-                        <p><strong>Latitude:</strong> <span id="latDisplay">{{ default_lat }}</span>°</p>
-                        <p><strong>Longitude:</strong> <span id="lngDisplay">{{ default_lng }}</span>°</p>
-                        <p style="color: #9ca3af; margin-top: 8px; font-size: 12px;">
-                            📍 {{ bengaluru_name }}
-                        </p>
-                    </div>
-
-                    <input type="hidden" id="latitude" value="{{ default_lat }}">
-                    <input type="hidden" id="longitude" value="{{ default_lng }}">
-                </div>
-
-                <!-- SECURITY CARD -->
-                <div class="card" style="margin-top: 32px;">
-                    <div class="card-title">
-                        <span>🔒</span>
-                        <span>Security & Compliance</span>
-                    </div>
-
-                    <div class="security-info">
-                        <div class="security-item">
-                            <strong>Validated</strong>
-                            <div class="security-item-text">File type & size verified</div>
-                        </div>
-                        <div class="security-item">
-                            <strong>Protected</strong>
-                            <div class="security-item-text">CSRF & XSS prevention</div>
-                        </div>
-                        <div class="security-item">
-                            <strong>Audited</strong>
-                            <div class="security-item-text">All actions logged</div>
-                        </div>
-                    </div>
-
-                    <p style="font-size: 12px; color: #9ca3af; margin-top: 16px; text-align: center;">
-                        GDPR Compliant • ISO 27001 Ready • Enterprise Grade
-                    </p>
-                </div>
-            </div>
-        </div>
+      <div class="form-group">
+        <label class="form-label">Scenario Name <span class="req">*</span></label>
+        <input class="form-input" type="text" id="scenarioName" value="Bengaluru Flood Assessment">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Location <span class="req">*</span></label>
+        <input class="form-input" type="text" id="location" value="Bengaluru, Karnataka">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Camera / Sensor ID</label>
+        <input class="form-input" type="text" id="cameraId" value="{{ default_camera_id }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Observations</label>
+        <textarea class="form-input" id="description" placeholder="Optional field notes…"></textarea>
+      </div>
     </div>
 
-    <!-- FOOTER -->
-    <div class="footer">
-        <p><strong>Bengaluru Municipal Flood Detection System</strong></p>
-        <p>Real-time satellite and ground-level image analysis for flood risk assessment</p>
-        <p style="margin-top: 12px; color: #d1d5db;">© 2026 Bengaluru Municipality | Powered by Advanced ML</p>
+    <div class="panel-footer">
+      <div class="spinner-wrap" id="loading"><div class="spinner"></div></div>
+      <button class="btn-primary" id="uploadBtn" onclick="submitUpload()">Analyze Images</button>
+      <button class="btn-secondary" onclick="clearForm()">Clear Form</button>
+    </div>
+  </div>
+
+  <!-- RIGHT: Map + Stats -->
+  <div class="right-panel">
+    <div class="map-header">
+      <div class="map-title">Geographic Location &nbsp;<small style="font-weight:400;color:#64748b;font-size:12px">Click or drag marker to adjust</small></div>
+      <div class="coord-pills">
+        <div class="coord-pill">Lat <span id="latDisplay">{{ default_lat }}</span>&deg;</div>
+        <div class="coord-pill">Lng <span id="lngDisplay">{{ default_lng }}</span>&deg;</div>
+        <div class="coord-pill" style="background:#f0fdf4;color:#065f46">{{ bengaluru_name }}</div>
+      </div>
     </div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script>
-        const csrfToken = '{{ csrf_token }}';
+    <div id="map"></div>
 
-        let map;
-        let marker;
+    <input type="hidden" id="latitude"  value="{{ default_lat }}">
+    <input type="hidden" id="longitude" value="{{ default_lng }}">
 
-        function initMap() {
-            const defaultLat = parseFloat(document.getElementById('latitude').value);
-            const defaultLng = parseFloat(document.getElementById('longitude').value);
+    <div class="stats-bar">
+      <div class="stat-item"><div class="stat-num" id="s-count">0</div><div class="stat-lbl">Images Queued</div></div>
+      <div class="stat-item"><div class="stat-num" id="s-size">0 MB</div><div class="stat-lbl">Total Size</div></div>
+      <div class="stat-item"><div class="stat-num">10</div><div class="stat-lbl">Max Batch</div></div>
+      <div class="stat-item"><div class="stat-num" style="color:#22c55e">AES-256</div><div class="stat-lbl">Encryption</div></div>
+      <div class="stat-item"><div class="stat-num" style="color:#22c55e">CSRF</div><div class="stat-lbl">Protected</div></div>
+      <div class="stat-item"><div class="stat-num" style="color:#f59e0b">10/hr</div><div class="stat-lbl">Rate Limit</div></div>
+    </div>
+  </div>
 
-            map = L.map('map').setView([defaultLat, defaultLng], 12);
+</div>
 
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap',
-                maxZoom: 19
-            }).addTo(map);
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const csrfToken = '{{ csrf_token }}';
+let map, marker, selectedFiles = [];
 
-            marker = L.marker([defaultLat, defaultLng], {
-                draggable: true
-            }).addTo(map);
+function initMap() {
+  const lat = parseFloat(document.getElementById('latitude').value);
+  const lng = parseFloat(document.getElementById('longitude').value);
+  map = L.map('map').setView([lat, lng], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap',maxZoom:19}).addTo(map);
+  marker = L.marker([lat, lng], {draggable:true}).addTo(map);
+  marker.on('drag dragend', updateCoords);
+  map.on('click', e => { marker.setLatLng(e.latlng); updateCoords(); });
+  setTimeout(() => map.invalidateSize(), 200);
+}
 
-            marker.on('drag', updateCoordinates);
-            marker.on('dragend', updateCoordinates);
+function updateCoords() {
+  const ll = marker.getLatLng();
+  document.getElementById('latitude').value  = ll.lat.toFixed(6);
+  document.getElementById('longitude').value = ll.lng.toFixed(6);
+  document.getElementById('latDisplay').textContent = ll.lat.toFixed(4);
+  document.getElementById('lngDisplay').textContent = ll.lng.toFixed(4);
+}
 
-            map.on('click', function(e) {
-                marker.setLatLng(e.latlng);
-                updateCoordinates();
-            });
-        }
+const zone = document.getElementById('uploadZone');
+const fi   = document.getElementById('fileInput');
+zone.addEventListener('click', () => fi.click());
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('drag'));
+zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('drag'); handleFiles(e.dataTransfer.files); });
+fi.addEventListener('change', e => handleFiles(e.target.files));
 
-        function updateCoordinates() {
-            const latlng = marker.getLatLng();
-            document.getElementById('latitude').value = latlng.lat.toFixed(6);
-            document.getElementById('longitude').value = latlng.lng.toFixed(6);
-            document.getElementById('latDisplay').textContent = latlng.lat.toFixed(6);
-            document.getElementById('lngDisplay').textContent = latlng.lng.toFixed(6);
-        }
+function handleFiles(files) {
+  selectedFiles = Array.from(files).slice(0, 10);
+  renderFileList();
+}
 
-        const uploadZone = document.getElementById('uploadZone');
-        const fileInput = document.getElementById('fileInput');
+function renderFileList() {
+  const list = document.getElementById('fileList');
+  list.innerHTML = '';
+  let totalBytes = 0;
+  selectedFiles.forEach((f, i) => {
+    totalBytes += f.size;
+    const d = document.createElement('div');
+    d.className = 'file-item';
+    d.innerHTML = `<div><div class="file-name">${f.name}</div><div class="file-size">${(f.size/1024).toFixed(1)} KB</div></div>
+      <button class="file-remove" onclick="removeFile(${i})">Remove</button>`;
+    list.appendChild(d);
+  });
+  document.getElementById('s-count').textContent = selectedFiles.length;
+  document.getElementById('s-size').textContent = (totalBytes/1048576).toFixed(1) + ' MB';
+}
 
-        uploadZone.addEventListener('click', () => fileInput.click());
-        uploadZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            uploadZone.classList.add('dragging');
-        });
-        uploadZone.addEventListener('dragleave', () => {
-            uploadZone.classList.remove('dragging');
-        });
-        uploadZone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            uploadZone.classList.remove('dragging');
-            handleFiles(e.dataTransfer.files);
-        });
+function removeFile(i) { selectedFiles.splice(i,1); renderFileList(); }
 
-        fileInput.addEventListener('change', (e) => {
-            handleFiles(e.target.files);
-        });
+function submitUpload() {
+  if (!selectedFiles.length) { showAlert('error','Select at least one image.'); return; }
+  const sc = document.getElementById('scenarioName').value.trim();
+  const lo = document.getElementById('location').value.trim();
+  if (sc.length < 3) { showAlert('error','Scenario name must be at least 3 characters.'); return; }
+  if (lo.length < 3) { showAlert('error','Location must be at least 3 characters.'); return; }
 
-        let selectedFiles = [];
+  document.getElementById('loading').classList.add('show');
+  document.getElementById('uploadBtn').disabled = true;
 
-        function handleFiles(files) {
-            selectedFiles = Array.from(files);
+  const fd = new FormData();
+  selectedFiles.forEach(f => fd.append('images', f));
+  fd.append('scenario_name', sc);
+  fd.append('location', lo);
+  fd.append('camera_id', document.getElementById('cameraId').value);
+  fd.append('latitude',  document.getElementById('latitude').value);
+  fd.append('longitude', document.getElementById('longitude').value);
+  fd.append('description', document.getElementById('description').value);
 
-            if (selectedFiles.length > 10) {
-                showMessage('error', 'Maximum 10 images allowed per upload');
-                selectedFiles = selectedFiles.slice(0, 10);
-            }
+  fetch('/api/v1/floods/random-upload-secure/', {
+    method: 'POST',
+    headers: {'X-CSRFToken': csrfToken},
+    body: fd
+  })
+  .then(r => r.ok ? r.json() : r.text().then(t => { throw new Error('Server error: ' + t.substring(0,200)); }))
+  .then(d => {
+    document.getElementById('loading').classList.remove('show');
+    document.getElementById('uploadBtn').disabled = false;
+    if (d.status === 'success') {
+      showAlert('success', 'Analysis complete — loading report...');
+      setTimeout(() => window.location.href = d.report_url, 1200);
+    } else {
+      showAlert('error', d.message || 'Upload failed.');
+    }
+  })
+  .catch(e => {
+    document.getElementById('loading').classList.remove('show');
+    document.getElementById('uploadBtn').disabled = false;
+    showAlert('error', e.message);
+  });
+}
 
-            updateFileList();
-        }
+function clearForm() {
+  selectedFiles = [];
+  renderFileList();
+  document.getElementById('scenarioName').value = 'Bengaluru Flood Assessment';
+  document.getElementById('location').value = 'Bengaluru, Karnataka';
+  document.getElementById('description').value = '';
+  showAlert('info','Form cleared.');
+}
 
-        function updateFileList() {
-            const fileList = document.getElementById('fileList');
-            fileList.innerHTML = '';
+function showAlert(type, msg) {
+  const el = document.getElementById('alertBox');
+  el.className = 'alert alert-' + type + ' show';
+  el.textContent = msg;
+  setTimeout(() => el.classList.remove('show'), 4000);
+}
 
-            selectedFiles.forEach((file, index) => {
-                const item = document.createElement('div');
-                item.className = 'file-item';
-                item.innerHTML = `
-                    <div>
-                        <div class="file-item-name">📄 ${file.name}</div>
-                        <div class="file-item-size">${(file.size / 1024).toFixed(1)} KB</div>
-                    </div>
-                    <button class="remove" onclick="removeFile(${index})">Remove</button>
-                `;
-                fileList.appendChild(item);
-            });
-        }
-
-        function removeFile(index) {
-            selectedFiles.splice(index, 1);
-            updateFileList();
-        }
-
-        function submitUpload() {
-            if (selectedFiles.length === 0) {
-                showMessage('error', 'Please select at least one image');
-                return;
-            }
-
-            const scenario = document.getElementById('scenarioName').value.trim();
-            const location = document.getElementById('location').value.trim();
-
-            if (!scenario || scenario.length < 3) {
-                showMessage('error', 'Scenario name must be at least 3 characters');
-                return;
-            }
-
-            if (!location || location.length < 3) {
-                showMessage('error', 'Location must be at least 3 characters');
-                return;
-            }
-
-            document.getElementById('loading').classList.add('show');
-            document.getElementById('uploadBtn').disabled = true;
-
-            const formData = new FormData();
-            selectedFiles.forEach(file => {
-                formData.append('images', file);
-            });
-            formData.append('scenario_name', scenario);
-            formData.append('location', location);
-            formData.append('camera_id', document.getElementById('cameraId').value);
-            formData.append('latitude', document.getElementById('latitude').value);
-            formData.append('longitude', document.getElementById('longitude').value);
-            formData.append('description', document.getElementById('description').value);
-
-            fetch('/api/v1/floods/random-upload-secure/', {
-                method: 'POST',
-                headers: {
-                    'X-CSRFToken': csrfToken
-                },
-                body: formData
-            })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                document.getElementById('loading').classList.remove('show');
-                document.getElementById('uploadBtn').disabled = false;
-
-                if (data.status === 'success') {
-                    showMessage('success', 'Analysis complete. Generating report...');
-                    setTimeout(() => {
-                        window.location.href = data.report_url;
-                    }, 1500);
-                } else {
-                    showMessage('error', data.message || 'Upload failed');
-                }
-            })
-            .catch(error => {
-                document.getElementById('loading').classList.remove('show');
-                document.getElementById('uploadBtn').disabled = false;
-                showMessage('error', `Error: ${error.message}`);
-            });
-        }
-
-        function clearForm() {
-            selectedFiles = [];
-            document.getElementById('fileList').innerHTML = '';
-            document.getElementById('scenarioName').value = 'Bengaluru Flood Assessment';
-            document.getElementById('location').value = 'Bengaluru, Karnataka';
-            document.getElementById('cameraId').value = '{{ default_camera_id }}';
-            document.getElementById('description').value = '';
-            showMessage('info', 'Form cleared');
-        }
-
-        function showMessage(type, message) {
-            const container = document.getElementById('messageContainer');
-            const div = document.createElement('div');
-            div.className = `message ${type} show`;
-            div.textContent = message;
-            container.innerHTML = '';
-            container.appendChild(div);
-
-            setTimeout(() => div.classList.remove('show'), 4000);
-        }
-
-        window.addEventListener('load', () => {
-            initMap();
-        });
-    </script>
+window.addEventListener('load', initMap);
+</script>
 </body>
 </html>
