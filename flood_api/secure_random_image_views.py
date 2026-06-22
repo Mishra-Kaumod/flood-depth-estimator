@@ -51,6 +51,19 @@ FILE_SIGNATURES = {
 DEFAULT_LAT = 13.1939
 DEFAULT_LNG = 77.5900
 DEFAULT_CAMERA_ID = 'bengaluru_default'
+# 10 real Bengaluru flood-prone zones used to spread map markers across images
+BENGALURU_FLOOD_ZONES = [
+    {"name": "Koramangala",       "lat": 12.9352, "lng": 77.6245},
+    {"name": "Bellandur Lake",    "lat": 12.9259, "lng": 77.6762},
+    {"name": "HSR Layout",        "lat": 12.9116, "lng": 77.6473},
+    {"name": "Whitefield",        "lat": 12.9698, "lng": 77.7499},
+    {"name": "Marathahalli",      "lat": 12.9591, "lng": 77.6972},
+    {"name": "Sarjapur Road",     "lat": 12.9010, "lng": 77.6874},
+    {"name": "Varthur Lake",      "lat": 12.9400, "lng": 77.7470},
+    {"name": "K R Puram",         "lat": 13.0033, "lng": 77.6963},
+    {"name": "Hebbal",            "lat": 13.0450, "lng": 77.5971},
+    {"name": "Silk Board Jn",     "lat": 12.9176, "lng": 77.6232},
+]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECURITY THROTTLE
@@ -385,10 +398,14 @@ def secure_random_image_upload_process(request):
                 depth_values.append(analysis['depth_cm'])
                 intensity_levels[analysis['intensity']] += 1
                 
+                zone = BENGALURU_FLOOD_ZONES[(idx - 1) % len(BENGALURU_FLOOD_ZONES)]
                 results.append({
                     'image_num': idx,
                     'filename': image_file.name,
                     'status': 'success',
+                    'zone_name': zone['name'],
+                    'latitude': zone['lat'],
+                    'longitude': zone['lng'],
                     'analysis': analysis
                 })
                 
@@ -484,8 +501,9 @@ def view_report_secure(request, batch_id):
                 "estimated_depth": int(a.get("depth_cm", 0)),
                 "water_percentage": round(float(a.get("water_pixels", 0)), 1),
                 "brightness": round(float(a.get("brightness", 0)), 1),
-                "latitude": float(result.latitude),
-                "longitude": float(result.longitude),
+                "latitude": float(img.get("latitude", result.latitude)),
+                "longitude": float(img.get("longitude", result.longitude)),
+                "zone_name": img.get("zone_name", result.location),
                 "image_data": "",
             })
 
@@ -655,3 +673,4 @@ def generate_report_html(result):
     """
     
     return html
+

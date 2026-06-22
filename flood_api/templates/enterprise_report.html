@@ -642,6 +642,7 @@
                 card.innerHTML = `
                     <div class="result-card-content" style="width:100%">
                         <div class="result-card-title">${r.filename}</div>
+                        <div style="font-size:11px;color:#6b7280;margin-bottom:4px">${r.zone_name}</div>
                         <span class="intensity-badge" style="background:${color};color:#fff;padding:6px 12px;border-radius:4px;font-size:12px;font-weight:700;display:inline-block;margin:6px 0">${r.intensity}</span>
                         <div class="result-card-meta" style="margin-top:10px">
                             <div class="meta-item-small">Flooding<strong>${r.flooded ? 'Yes' : 'No'}</strong></div>
@@ -677,3 +678,4 @@
     </script>
 </body>
 </html>
+
