@@ -1,0 +1,59 @@
+name: Model Readiness Gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "evaluate_model_readiness.py"
+      - "flood_api/**"
+      - "core_logic.py"
+      - "test_images/**"
+      - ".github/workflows/model-readiness-gate.yml"
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONUNBUFFERED: "1"
+      FLOOD_RUNTIME_ROOT: /tmp/flood_runtime
+      HF_HUB_DISABLE_SYMLINKS_WARNING: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_v2.txt
+
+      - name: Build enterprise labeled manifest
+        run: |
+          python create_labeled_manifest.py \
+            --source test_images/evaluation_manifest_ai_seeded.csv \
+            --output test_images/evaluation_manifest_labeled.csv
+
+      - name: Run readiness quality gate
+        run: |
+          python evaluate_model_readiness.py \
+            --input-dir test_images \
+            --manifest test_images/evaluation_manifest_labeled.csv \
+            --enforce-gates \
+            --min-labeled-flood 50 \
+            --min-labeled-depth 20 \
+            --min-barren 25 \
+            --min-f1 0.90 \
+            --max-depth-mae 15 \
+            --min-depth-labels-per-band 3 \
+            --max-mae-0-20 8 \
+            --max-mae-20-50 12 \
+            --max-mae-50-80 15 \
+            --max-mae-80-plus 20 \
+            --max-barren-fp-rate 0.05 \
+            --max-p95-latency 8 \
+            --max-contradictions 0

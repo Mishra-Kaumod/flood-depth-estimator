@@ -1,13 +1,27 @@
 import sys
+
 import torch
-import torch.nn as nn
+import torchvision
 
 from PIL import Image
 
+from model_paths import get_flood_model_path, get_severity_model_path
+from severity_model_loader import load_severity_model
 from torchvision import transforms
-from torchvision.models import efficientnet_b0
 
-MODEL_PATH = "models/severity_efficientnet.pth"
+
+def _load_model():
+    model = torchvision.models.mobilenet_v3_small(weights=None)
+    model.classifier[0] = torch.nn.Linear(model.classifier[0].in_features, 256)
+    model.classifier[3] = torch.nn.Linear(256, 5)
+    ckpt = torch.load(get_flood_model_path(), map_location="cpu")
+    model.load_state_dict(ckpt.get("model_state_dict", ckpt))
+    model.eval()
+    return model
+
+
+_MODEL = _load_model()
+_REAL_MODEL = True
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -31,22 +45,7 @@ transform = transforms.Compose([
     transforms.ToTensor()
 ])
 
-model = efficientnet_b0(weights=None)
-
-model.classifier[1] = nn.Linear(
-    model.classifier[1].in_features,
-    5
-)
-
-model.load_state_dict(
-    torch.load(
-        MODEL_PATH,
-        map_location=device
-    )
-)
-
-model.to(device)
-model.eval()
+model = load_severity_model(get_severity_model_path(), device)
 
 image = Image.open(image_path).convert("RGB")
 image = transform(image)

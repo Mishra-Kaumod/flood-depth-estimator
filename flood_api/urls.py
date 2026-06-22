@@ -1,6 +1,7 @@
 # flood_api/urls.py
 from django.urls import path
 from . import views
+from . import secure_random_image_views
 
 urlpatterns = [
     # Mapping the empty path redirects root traffic to the dashboard instantly
@@ -29,4 +30,12 @@ urlpatterns = [
     path('api/v1/floods/feedback-summary/', views.feedback_summary_api, name='feedback_summary_api'),
     path('api/v1/ml-ops/retrain-trigger-manual/', views.retrain_trigger_manual, name='retrain_trigger_manual'),
     path('api/v1/ml-ops/model-promotion/', views.model_promotion_api, name='model_promotion_api'),
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # SECURE RANDOM IMAGE UPLOAD SYSTEM (NEW)
+    # ─────────────────────────────────────────────────────────────────────────
+    path('random-upload/', secure_random_image_views.secure_random_image_upload_page, name='secure_upload_page'),
+    path('api/v1/floods/random-upload-secure/', secure_random_image_views.secure_random_image_upload_process, name='secure_upload_process'),
+    path('report/<str:batch_id>/', secure_random_image_views.view_report_secure, name='secure_report_view'),
+    path('download-report/<str:batch_id>/', secure_random_image_views.download_report_secure, name='secure_report_download'),
 ]
