@@ -1,0 +1,10 @@
+torch==2.2.1
+torchvision==0.17.1
+opencv-python-headless==4.9.0.80
+Pillow>=10.0.0
+numpy==1.26.4
+scipy>=1.10.0
+pandas>=2.0.0
+ultralytics==8.2.0
+boto3>=1.26.0
+
