@@ -37,6 +37,7 @@ urlpatterns = [
     # ─────────────────────────────────────────────────────────────────────────
     path('random-upload/', secure_random_image_views.secure_random_image_upload_page, name='secure_upload_page'),
     path('api/v1/floods/random-upload-secure/', secure_random_image_views.secure_random_image_upload_process, name='secure_upload_process'),
+    path('api/v1/floods/agentic-live/', secure_random_image_views.agentic_live_status, name='agentic_live_status'),
     path('report/<str:batch_id>/', secure_random_image_views.view_report_secure, name='secure_report_view'),
     path('download-report/<str:batch_id>/', secure_random_image_views.download_report_secure, name='secure_report_download'),
 ]

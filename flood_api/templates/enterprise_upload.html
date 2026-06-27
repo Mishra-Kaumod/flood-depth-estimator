@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -8,120 +8,149 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
-  html,body{height:100%;overflow:hidden;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#ffffff;color:#0f172a}
+  html,body{height:100%;overflow:hidden;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#ffffff;color:#0f172a;font-size:16px;line-height:1.45}
 
-  /* ── TOP NAV ── */
-  .nav{height:56px;background:#ffffff;display:flex;align-items:center;justify-content:space-between;padding:0 28px;flex-shrink:0;z-index:200;border-bottom:1px solid #e2e8f0}
-  .nav-brand{display:flex;align-items:center;gap:10px;color:#0f172a;font-size:16px;font-weight:700;letter-spacing:-.3px}
+  .nav{height:56px;background:#ffffff;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid #e2e8f0}
+  .nav-brand{display:flex;align-items:center;gap:10px;color:#0f172a;font-size:18px;font-weight:700;letter-spacing:-.3px}
   .nav-brand span{font-size:22px}
   .nav-right{display:flex;align-items:center;gap:16px;font-size:13px;color:#64748b}
   .live-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;margin-right:6px;animation:pulse 2s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
-  /* ── PAGE SHELL ── */
   .shell{display:flex;height:calc(100vh - 56px);overflow:hidden}
+  .left-panel{width:430px;flex-shrink:0;background:#fff;border-right:1px solid #e2e8f0;display:flex;flex-direction:column;overflow:hidden}
+  .panel-header{padding:20px 24px 16px;border-bottom:1px solid #f1f5f9}
+  .panel-title{font-size:17px;font-weight:700;color:#0f172a}
+  .panel-sub{font-size:13px;color:#64748b;margin-top:4px}
+  .panel-body{flex:1;overflow-y:auto;padding:18px 24px}
+  .panel-footer{padding:16px 24px;border-top:1px solid #f1f5f9}
 
-  /* ── LEFT PANEL ── */
-  .left-panel{width:420px;flex-shrink:0;background:#fff;border-right:1px solid #e2e8f0;display:flex;flex-direction:column;overflow:hidden}
-  .panel-header{padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;flex-shrink:0}
-  .panel-title{font-size:15px;font-weight:700;color:#0f172a}
-  .panel-sub{font-size:12px;color:#64748b;margin-top:3px}
-  .panel-body{flex:1;overflow-y:auto;padding:20px 24px}
-  .panel-footer{padding:16px 24px;border-top:1px solid #f1f5f9;flex-shrink:0}
+  .upload-zone{border:2px dashed #cbd5e1;border-radius:10px;padding:26px 20px;text-align:center;background:#ffffff;cursor:pointer;transition:all .2s}
+  .upload-zone:hover,.upload-zone.drag{border-color:#2563eb;background:#f8fbff}
+  .upload-icon{font-size:38px;margin-bottom:8px;opacity:.8}
+  .upload-main{font-weight:600;font-size:15px;color:#1e293b}
+  .upload-sub{font-size:13px;color:#94a3b8;margin-top:4px}
 
-  /* ── UPLOAD ZONE ── */
-  .upload-zone{border:2px dashed #cbd5e1;border-radius:10px;padding:28px 20px;text-align:center;background:#ffffff;cursor:pointer;transition:all .25s}
-  .upload-zone:hover,.upload-zone.drag{border-color:#3b82f6;background:#f8fbff}
-  .upload-icon{font-size:40px;margin-bottom:10px;opacity:.7}
-  .upload-main{font-weight:600;font-size:14px;color:#1e293b}
-  .upload-sub{font-size:12px;color:#94a3b8;margin-top:4px}
+  .file-list{margin-top:12px;display:flex;flex-direction:column;gap:6px;max-height:160px;overflow-y:auto}
+  .file-item{background:#ffffff;border:1px solid #e2e8f0;border-left:3px solid #3b82f6;border-radius:6px;padding:9px 10px;display:flex;justify-content:space-between;align-items:center;font-size:13px}
+  .file-name{font-weight:500;color:#1e293b;max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .file-size{color:#94a3b8;font-size:12px}
+  .file-remove{background:#fee2e2;color:#991b1b;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600}
 
-  /* ── FILE LIST ── */
-  .file-list{margin-top:14px;display:flex;flex-direction:column;gap:6px;max-height:160px;overflow-y:auto}
-  .file-item{background:#ffffff;border:1px solid #e2e8f0;border-left:3px solid #3b82f6;border-radius:6px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;font-size:12px}
-  .file-name{font-weight:500;color:#1e293b;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .file-size{color:#94a3b8;font-size:11px}
-  .file-remove{background:#fee2e2;color:#991b1b;border:none;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600}
-
-  /* ── FORM ── */
-  .form-group{margin-bottom:14px}
-  .form-label{display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:5px;text-transform:uppercase;letter-spacing:.4px}
-  .form-input{width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:6px;font-family:'Inter',sans-serif;font-size:13px;color:#1e293b;background:#fff;transition:border-color .2s}
+  .form-group{margin-bottom:12px}
+  .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .form-label{display:block;font-size:12px;font-weight:700;color:#374151;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+  .form-input{width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:6px;font-family:'Inter',sans-serif;font-size:14px;color:#1e293b;background:#fff;transition:border-color .2s}
   .form-input:focus{outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.1)}
-  textarea.form-input{resize:none;height:72px}
+  textarea.form-input{resize:none;height:70px}
+  .form-help{font-size:12px;color:#64748b;margin-top:4px}
   .req{color:#ef4444}
-  .section-divider{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#94a3b8;margin:18px 0 12px;display:flex;align-items:center;gap:8px}
+  .section-divider{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#94a3b8;margin:16px 0 10px;display:flex;align-items:center;gap:8px}
   .section-divider::after{content:'';flex:1;height:1px;background:#e2e8f0}
 
-  /* ── BUTTONS ── */
-  .btn-primary{width:100%;padding:12px;background:#3b82f6;color:#fff;border:none;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;transition:background .2s;font-family:'Inter',sans-serif}
-  .btn-primary:hover{background:#2563eb}
-  .btn-primary:disabled{opacity:.5;cursor:not-allowed}
-  .btn-secondary{width:100%;padding:10px;background:#ffffff;color:#374151;border:1px solid #e2e8f0;border-radius:8px;font-weight:600;font-size:13px;cursor:pointer;margin-top:8px;font-family:'Inter',sans-serif}
-  .btn-secondary:hover{background:#f1f5f9}
+  .chip-panel{display:none;margin-bottom:12px;padding:10px;border:1px solid #dbeafe;background:#eff6ff;border-radius:8px}
+  .chip-panel.show{display:block}
+  .chip-panel-title{font-size:12px;color:#1e40af;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+  .chip-list{display:flex;flex-wrap:wrap;gap:6px}
+  .prefill-chip{border:1px solid #bfdbfe;background:#ffffff;color:#1e3a8a;border-radius:16px;padding:7px 11px;font-size:12px;cursor:pointer}
+  .prefill-chip:hover{background:#dbeafe}
 
-  /* ── ALERTS ── */
-  .alert{padding:10px 14px;border-radius:6px;font-size:13px;margin-bottom:12px;display:none;border-left:4px solid transparent}
+  .btn-primary{width:100%;padding:13px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-weight:700;font-size:15px;cursor:pointer}
+  .btn-primary:hover{background:#1d4ed8}
+  .btn-primary:disabled{opacity:.5;cursor:not-allowed}
+  .btn-secondary{width:100%;padding:11px;background:#ffffff;color:#374151;border:1px solid #e2e8f0;border-radius:8px;font-weight:600;font-size:14px;cursor:pointer;margin-top:8px}
+  .btn-secondary:hover{background:#f8fafc}
+  .report-ready{display:none;margin-top:10px}
+
+  .alert{padding:11px 14px;border-radius:6px;font-size:14px;margin-bottom:12px;display:none;border-left:4px solid transparent}
   .alert.show{display:block}
   .alert-success{background:#f0fdf4;border-color:#22c55e;color:#14532d}
   .alert-error{background:#fef2f2;border-color:#ef4444;color:#7f1d1d}
   .alert-info{background:#eff6ff;border-color:#3b82f6;color:#1e40af}
 
-  /* ── SPINNER ── */
-  .spinner-wrap{display:none;text-align:center;padding:20px}
+  .spinner-wrap{display:none;text-align:center;padding:16px}
   .spinner-wrap.show{display:block}
-  .spinner{display:inline-block;width:32px;height:32px;border:3px solid #e2e8f0;border-top-color:#3b82f6;border-radius:50%;animation:spin .7s linear infinite}
+  .spinner{display:inline-block;width:30px;height:30px;border:3px solid #e2e8f0;border-top-color:#3b82f6;border-radius:50%;animation:spin .7s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
 
-  /* ── RIGHT PANEL ── */
   .right-panel{flex:1;display:flex;flex-direction:column;overflow:hidden;background:#ffffff}
-  .map-header{padding:14px 24px;background:#fff;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
-  .map-title{font-size:14px;font-weight:700;color:#0f172a}
-  .coord-pills{display:flex;gap:8px;font-size:12px}
-  .coord-pill{background:#f8fafc;padding:5px 12px;border-radius:20px;color:#374151;font-weight:500;border:1px solid #e2e8f0}
+  .map-header{padding:12px 18px;background:#fff;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .map-title{font-size:15px;font-weight:700;color:#0f172a}
+  .coord-pills{display:flex;gap:6px;font-size:13px;align-items:center}
+  .coord-pill{background:#f8fafc;padding:6px 11px;border-radius:20px;color:#374151;font-weight:500;border:1px solid #e2e8f0}
   .coord-pill span{font-weight:700;color:#3b82f6}
+  .layer-toggles{display:flex;gap:6px}
+  .layer-btn{border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:14px;padding:6px 10px;font-size:12px;cursor:pointer}
+  .layer-btn.active{background:#dbeafe;border-color:#93c5fd;color:#1e3a8a}
 
   #map{flex:1;min-height:0}
 
-  /* ── STATS BAR ── */
-  .stats-bar{height:64px;background:#ffffff;display:flex;align-items:center;padding:0 28px;gap:0;flex-shrink:0;border-top:1px solid #e2e8f0}
+  .stats-bar{height:66px;background:#ffffff;display:flex;align-items:center;padding:0 20px;border-top:1px solid #e2e8f0}
   .stat-item{flex:1;text-align:center;border-right:1px solid #f1f5f9}
   .stat-item:last-child{border-right:none}
   .stat-num{font-size:20px;font-weight:700;color:#0f172a}
-  .stat-lbl{font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.6px;margin-top:1px}
+  .stat-lbl{font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.6px;margin-top:2px}
+
+  .agentic-center{position:fixed;right:18px;bottom:84px;width:390px;max-height:62vh;background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:12px;box-shadow:0 12px 30px rgba(2,6,23,.35);display:flex;flex-direction:column;overflow:hidden;z-index:700;transition:width .18s ease,bottom .18s ease}
+  .agentic-center.minimized{width:300px;max-height:none}
+  .agentic-center.minimized .agentic-head{border-bottom:none}
+  .agentic-center.minimized .agentic-feed{display:none}
+  .agentic-head{padding:10px 12px;border-bottom:1px solid #1e293b;display:flex;justify-content:space-between;align-items:center}
+  .agentic-title{font-size:13px;font-weight:700;letter-spacing:.4px;text-transform:uppercase}
+  .agentic-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;margin-right:6px}
+  .agentic-controls{display:flex;align-items:center;gap:8px}
+  .agentic-state{font-size:11px;color:#94a3b8}
+  .agentic-toggle{border:1px solid #334155;background:#111827;color:#e2e8f0;border-radius:999px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer}
+  .agentic-toggle:hover{background:#1e293b}
+  .agentic-feed{padding:10px;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
+  .agentic-item{border:1px solid #1e293b;border-radius:8px;padding:8px 9px;background:#111827}
+  .agentic-item h4{font-size:13px;margin-bottom:4px}
+  .agentic-item p{font-size:12px;color:#cbd5e1;line-height:1.45}
+  .agentic-item pre{margin-top:6px;background:#020617;color:#93c5fd;font-size:11px;padding:7px;border-radius:6px;white-space:pre-wrap;word-break:break-word}
+  .sev-info h4{color:#93c5fd}
+  .sev-success h4{color:#86efac}
+  .sev-warning h4{color:#fbbf24}
+  .sev-error h4{color:#fca5a5}
+
+  @media (max-width:1300px){
+    .agentic-center{width:340px}
+    .left-panel{width:395px}
+  }
+  @media (max-width:900px){
+    .form-grid{grid-template-columns:1fr}
+  }
 </style>
 </head>
 <body>
 
-<!-- NAV -->
 <div class="nav">
   <div class="nav-brand"><span>🌊</span> Bengaluru Flood Intelligence Platform</div>
-  <div class="nav-right"><span class="live-dot"></span>Live Analysis &nbsp;|&nbsp; BBMP Command Centre &nbsp;|&nbsp; Secure Upload</div>
+  <div class="nav-right"><span class="live-dot"></span>Agentic Operations Mode &nbsp;|&nbsp; BBMP Command Centre</div>
 </div>
 
-<!-- SHELL -->
 <div class="shell">
-
-  <!-- LEFT: Upload + Form -->
   <div class="left-panel">
     <div class="panel-header">
-      <div class="panel-title">Image Upload &amp; Incident Details</div>
-      <div class="panel-sub">Upload 1 – 10 images for automated flood analysis</div>
+      <div class="panel-title">Image Upload &amp; Incident Metadata</div>
+      <div class="panel-sub">Automated triage, escalation, and governance checks for 1 to 10 images.</div>
     </div>
 
     <div class="panel-body">
       <div id="alertBox" class="alert"></div>
 
-      <!-- Upload Zone -->
       <div class="upload-zone" id="uploadZone">
         <div class="upload-icon">📸</div>
-        <div class="upload-main">Drag images here or click to browse</div>
-        <div class="upload-sub">JPG, PNG, BMP &nbsp;·&nbsp; Max 50 MB each &nbsp;·&nbsp; Up to 10 images</div>
+        <div class="upload-main">Drop flood images here or click to browse</div>
+        <div class="upload-sub">JPG, PNG, BMP · Max 50 MB each · Up to 10 images per batch</div>
       </div>
       <input type="file" id="fileInput" multiple accept=".jpg,.jpeg,.png,.gif,.bmp" style="display:none">
       <div class="file-list" id="fileList"></div>
 
       <div class="section-divider">Incident Metadata</div>
+      <div id="chipPanel" class="chip-panel">
+        <div class="chip-panel-title">Agentic suggested values (click to apply)</div>
+        <div class="chip-list" id="chipList"></div>
+      </div>
 
       <div class="form-group">
         <label class="form-label">Scenario Name <span class="req">*</span></label>
@@ -129,11 +158,26 @@
       </div>
       <div class="form-group">
         <label class="form-label">Location <span class="req">*</span></label>
-        <input class="form-input" type="text" id="location" value="Bengaluru, Karnataka">
+        <input class="form-input" type="text" id="location" value="{{ default_location }}">
       </div>
       <div class="form-group">
         <label class="form-label">Camera / Sensor ID</label>
         <input class="form-input" type="text" id="cameraId" value="{{ default_camera_id }}">
+        <div class="form-help">If camera metadata is missing, the system falls back to <strong>{{ default_camera_id }}</strong>.</div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Latitude</label>
+          <input class="form-input" type="number" step="0.000001" id="latitude" value="{{ default_lat }}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Longitude</label>
+          <input class="form-input" type="number" step="0.000001" id="longitude" value="{{ default_lng }}">
+        </div>
+      </div>
+      <div class="form-help" style="margin-top:-4px;margin-bottom:12px">
+        If latitude/longitude are not available from the incoming data, the platform defaults to
+        <strong>{{ default_location }}</strong> ({{ default_lat }}, {{ default_lng }}).
       </div>
       <div class="form-group">
         <label class="form-label">Observations</label>
@@ -143,70 +187,298 @@
 
     <div class="panel-footer">
       <div class="spinner-wrap" id="loading"><div class="spinner"></div></div>
-      <button class="btn-primary" id="uploadBtn" onclick="submitUpload()">Analyze Images</button>
+      <button class="btn-primary" id="uploadBtn" onclick="submitUpload()">Run Agentic Triage</button>
       <button class="btn-secondary" onclick="clearForm()">Clear Form</button>
+      <div class="report-ready" id="reportReady">
+        <button class="btn-secondary" id="openReportBtn">Open Detailed Report</button>
+      </div>
     </div>
   </div>
 
-  <!-- RIGHT: Map + Stats -->
   <div class="right-panel">
     <div class="map-header">
-      <div class="map-title">Geographic Location &nbsp;<small style="font-weight:400;color:#64748b;font-size:12px">Click or drag marker to adjust</small></div>
+      <div class="map-title">Bengaluru geospatial operations map</div>
       <div class="coord-pills">
-        <div class="coord-pill">Lat <span id="latDisplay">{{ default_lat }}</span>&deg;</div>
-        <div class="coord-pill">Lng <span id="lngDisplay">{{ default_lng }}</span>&deg;</div>
+        <div class="coord-pill">Lat <span id="latDisplay">{{ default_lat }}</span>°</div>
+        <div class="coord-pill">Lng <span id="lngDisplay">{{ default_lng }}</span>°</div>
         <div class="coord-pill" style="background:#f0fdf4;color:#065f46">{{ bengaluru_name }}</div>
+      </div>
+      <div class="layer-toggles">
+        <button class="layer-btn" id="toggleSwd" onclick="toggleLayerButton('swd_network')">SWD</button>
+        <button class="layer-btn" id="toggleTraffic" onclick="toggleLayerButton('traffic')">Traffic</button>
       </div>
     </div>
 
     <div id="map"></div>
 
-    <input type="hidden" id="latitude"  value="{{ default_lat }}">
-    <input type="hidden" id="longitude" value="{{ default_lng }}">
-
     <div class="stats-bar">
-      <div class="stat-item"><div class="stat-num" id="s-count">0</div><div class="stat-lbl">Images Queued</div></div>
-      <div class="stat-item"><div class="stat-num" id="s-size">0 MB</div><div class="stat-lbl">Total Size</div></div>
-      <div class="stat-item"><div class="stat-num">10</div><div class="stat-lbl">Max Batch</div></div>
-      <div class="stat-item"><div class="stat-num" style="color:#22c55e">AES-256</div><div class="stat-lbl">Encryption</div></div>
-      <div class="stat-item"><div class="stat-num" style="color:#22c55e">CSRF</div><div class="stat-lbl">Protected</div></div>
-      <div class="stat-item"><div class="stat-num" style="color:#f59e0b">10/hr</div><div class="stat-lbl">Rate Limit</div></div>
+      <div class="stat-item"><div class="stat-num" id="m-active-incidents">0</div><div class="stat-lbl">Active Incidents</div></div>
+      <div class="stat-item"><div class="stat-num" id="m-pending-escalations">0</div><div class="stat-lbl">Pending Escalations</div></div>
+      <div class="stat-item"><div class="stat-num" id="m-integrity-flags">0</div><div class="stat-lbl">Integrity Flags</div></div>
+      <div class="stat-item"><div class="stat-num" id="m-avg-depth">0.0</div><div class="stat-lbl">Avg Depth (cm)</div></div>
+      <div class="stat-item"><div class="stat-num" id="m-clustered-bubbles">0</div><div class="stat-lbl">Clustered Bubbles</div></div>
+      <div class="stat-item"><div class="stat-num" id="m-ready-batches">0</div><div class="stat-lbl">Ready Batches</div></div>
     </div>
   </div>
-
 </div>
+
+<aside class="agentic-center minimized" id="agenticCenter">
+  <div class="agentic-head">
+    <div class="agentic-title"><span class="agentic-dot"></span>Agentic Command Center</div>
+    <div class="agentic-controls">
+      <div class="agentic-state" id="agenticState">Minimized</div>
+      <button type="button" class="agentic-toggle" id="agenticToggle" onclick="toggleAgenticCenter()">Expand</button>
+    </div>
+  </div>
+  <div class="agentic-feed" id="agenticFeed"></div>
+</aside>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const csrfToken = '{{ csrf_token }}';
+const defaultLat = {{ default_lat }};
+const defaultLng = {{ default_lng }};
+const defaultLocation = '{{ default_location|escapejs }}';
+const defaultCameraId = '{{ default_camera_id|escapejs }}';
 let map, marker, selectedFiles = [];
+let incidentLayer, swdLayer, trafficLayer;
+const layerState = { swd_network: false, traffic: false };
+const seenNotifications = new Set();
+
+function toggleAgenticCenter(forceExpanded = null) {
+  const center = document.getElementById('agenticCenter');
+  const toggle = document.getElementById('agenticToggle');
+  const state = document.getElementById('agenticState');
+  const shouldExpand = forceExpanded === null ? center.classList.contains('minimized') : !!forceExpanded;
+  center.classList.toggle('minimized', !shouldExpand);
+  toggle.textContent = shouldExpand ? 'Minimize' : 'Expand';
+  state.textContent = shouldExpand ? 'Expanded' : 'Minimized';
+}
+
+function pushAgenticItem({title, message, severity = 'info', command = null}) {
+  const feed = document.getElementById('agenticFeed');
+  const item = document.createElement('div');
+  item.className = `agentic-item sev-${severity}`;
+  item.innerHTML = `<h4>${title}</h4><p>${message || ''}</p>`;
+  if (command) {
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(command, null, 2);
+    item.appendChild(pre);
+  }
+  feed.prepend(item);
+  while (feed.children.length > 20) {
+    feed.removeChild(feed.lastChild);
+  }
+}
+
+function mapSeverityColor(severity) {
+  if (severity === 'CRITICAL') return '#8b0000';
+  if (severity === 'HIGH') return '#f97316';
+  if (severity === 'MEDIUM') return '#f59e0b';
+  return '#16a34a';
+}
+
+function applyTelemetryMetrics(metrics) {
+  if (!metrics) return;
+  const avgDepth = Number(metrics.avg_depth_cm ?? 0);
+  document.getElementById('m-active-incidents').textContent = metrics.active_incidents ?? 0;
+  document.getElementById('m-pending-escalations').textContent = metrics.pending_escalations ?? 0;
+  document.getElementById('m-integrity-flags').textContent = metrics.integrity_flags ?? 0;
+  document.getElementById('m-avg-depth').textContent = avgDepth.toFixed(1);
+  document.getElementById('m-clustered-bubbles').textContent = metrics.clustered_bubbles ?? 0;
+  document.getElementById('m-ready-batches').textContent = metrics.ready_batches ?? 0;
+}
+
+function renderMetadataChips(chips) {
+  const panel = document.getElementById('chipPanel');
+  const list = document.getElementById('chipList');
+  list.innerHTML = '';
+  if (!chips || !chips.length) {
+    panel.classList.remove('show');
+    return;
+  }
+  const fieldIdMap = {
+    scenario_name: 'scenarioName',
+    location: 'location',
+    camera_id: 'cameraId'
+  };
+  chips.forEach((chip) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'prefill-chip';
+    btn.textContent = `${chip.field}: ${chip.value} (${chip.confidence_pct}%)`;
+    btn.title = chip.rationale || 'Agentic suggestion';
+    btn.addEventListener('click', () => {
+      const inputId = fieldIdMap[chip.field];
+      if (inputId && document.getElementById(inputId)) {
+        document.getElementById(inputId).value = chip.value;
+        showAlert('info', `${chip.field} updated from agentic suggestion.`);
+      }
+    });
+    list.appendChild(btn);
+  });
+  panel.classList.add('show');
+}
+
+function updateIncidentBubbles(clusters) {
+  incidentLayer.clearLayers();
+  if (!clusters || !clusters.length) return;
+  clusters.forEach((cluster, idx) => {
+    const color = mapSeverityColor(cluster.severity);
+    const radius = Math.max(10, Math.min(20, 8 + (cluster.image_count * 2)));
+    const markerBubble = L.circleMarker([cluster.latitude, cluster.longitude], {
+      radius: radius,
+      color: '#ffffff',
+      weight: 2,
+      fillColor: color,
+      fillOpacity: 0.88
+    }).addTo(incidentLayer);
+    markerBubble.bindPopup(
+      `<div style="font-family:Inter,sans-serif;min-width:190px">
+        <strong>${cluster.bubble_type || 'Incident Cluster'}</strong><br>
+        Zones: ${cluster.zones_label || 'Unknown'}<br>
+        Images: ${cluster.image_count}<br>
+        Flooded: ${cluster.flooded_images}<br>
+        Max depth: ${cluster.max_depth_cm} cm<br>
+        Severity: <strong style="color:${color}">${cluster.severity}</strong>
+      </div>`
+    );
+    const label = L.divIcon({
+      className: '',
+      html: `<div style="width:18px;height:18px;border-radius:50%;background:${color};color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;border:1px solid #fff">${idx + 1}</div>`,
+      iconSize: [18, 18],
+      iconAnchor: [9, 9]
+    });
+    L.marker([cluster.latitude, cluster.longitude], { icon: label }).addTo(incidentLayer).on('click', () => markerBubble.openPopup());
+  });
+}
+
+function setInfrastructureLayer(layerName, enabled) {
+  layerState[layerName] = !!enabled;
+  if (layerName === 'swd_network') {
+    if (enabled) { if (!map.hasLayer(swdLayer)) map.addLayer(swdLayer); }
+    else { if (map.hasLayer(swdLayer)) map.removeLayer(swdLayer); }
+    document.getElementById('toggleSwd').classList.toggle('active', enabled);
+  }
+  if (layerName === 'traffic') {
+    if (enabled) { if (!map.hasLayer(trafficLayer)) map.addLayer(trafficLayer); }
+    else { if (map.hasLayer(trafficLayer)) map.removeLayer(trafficLayer); }
+    document.getElementById('toggleTraffic').classList.toggle('active', enabled);
+  }
+}
+
+function toggleLayerButton(layerName) {
+  setInfrastructureLayer(layerName, !layerState[layerName]);
+}
+
+function applyUICommand(command, shouldLog = true) {
+  if (!command || !command.type) return;
+  const payload = command.payload || {};
+
+  if (command.type === 'notification.push') {
+    const key = `${payload.title || ''}|${payload.message || ''}|${payload.batch_id || ''}|${payload.timestamp || ''}`;
+    if (!seenNotifications.has(key)) {
+      seenNotifications.add(key);
+      pushAgenticItem({
+        title: payload.title || 'Notification',
+        message: payload.message || '',
+        severity: payload.severity || 'info',
+        command: shouldLog ? command : null
+      });
+    }
+    return;
+  }
+  if (command.type === 'form.prefill_chips') {
+    renderMetadataChips(payload.chips || []);
+  } else if (command.type === 'telemetry.update_metrics') {
+    applyTelemetryMetrics(payload);
+  } else if (command.type === 'map.replace_incident_bubbles') {
+    updateIncidentBubbles(payload.clusters || []);
+  } else if (command.type === 'map.toggle_layers') {
+    const layers = payload.layers || {};
+    Object.keys(layers).forEach((k) => setInfrastructureLayer(k, layers[k]));
+  }
+
+  if (shouldLog) {
+    pushAgenticItem({
+      title: `UI command: ${command.type}`,
+      message: 'Applied by front-end rendering engine.',
+      severity: 'info',
+      command
+    });
+  }
+}
+
+function seedInfrastructureLayers() {
+  const swdPaths = [
+    [[12.9240, 77.6660], [12.9310, 77.6750], [12.9390, 77.6820]],
+    [[12.9172, 77.6221], [12.9270, 77.6248], [12.9380, 77.6261]],
+    [[12.9560, 77.6910], [12.9650, 77.7040], [12.9730, 77.7160]]
+  ];
+  swdPaths.forEach((path) => {
+    L.polyline(path, { color: '#2563eb', weight: 3, opacity: 0.75, dashArray: '6 4' })
+      .bindTooltip('Storm Water Drain Segment')
+      .addTo(swdLayer);
+  });
+
+  const trafficPaths = [
+    [[12.9176, 77.6232], [12.9290, 77.6400], [12.9410, 77.6620]],
+    [[12.9591, 77.6972], [12.9730, 77.7020], [12.9890, 77.7080]]
+  ];
+  trafficPaths.forEach((path) => {
+    L.polyline(path, { color: '#f97316', weight: 2.5, opacity: 0.7 })
+      .bindTooltip('Traffic congestion corridor')
+      .addTo(trafficLayer);
+  });
+}
 
 function initMap() {
   const lat = parseFloat(document.getElementById('latitude').value);
   const lng = parseFloat(document.getElementById('longitude').value);
   map = L.map('map').setView([lat, lng], 12);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap',maxZoom:19}).addTo(map);
-  marker = L.marker([lat, lng], {draggable:true}).addTo(map);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap',
+    maxZoom: 19
+  }).addTo(map);
+
+  incidentLayer = L.layerGroup().addTo(map);
+  swdLayer = L.layerGroup();
+  trafficLayer = L.layerGroup();
+  seedInfrastructureLayers();
+
+  marker = L.marker([lat, lng], { draggable: true }).addTo(map);
   marker.on('drag dragend', updateCoords);
-  map.on('click', e => { marker.setLatLng(e.latlng); updateCoords(); });
+  map.on('click', (e) => { marker.setLatLng(e.latlng); updateCoords(); });
   setTimeout(() => map.invalidateSize(), 200);
 }
 
 function updateCoords() {
   const ll = marker.getLatLng();
-  document.getElementById('latitude').value  = ll.lat.toFixed(6);
+  document.getElementById('latitude').value = ll.lat.toFixed(6);
   document.getElementById('longitude').value = ll.lng.toFixed(6);
   document.getElementById('latDisplay').textContent = ll.lat.toFixed(4);
   document.getElementById('lngDisplay').textContent = ll.lng.toFixed(4);
 }
 
+function syncMapFromInputs() {
+  const lat = parseFloat(document.getElementById('latitude').value);
+  const lng = parseFloat(document.getElementById('longitude').value);
+  if (Number.isFinite(lat) && Number.isFinite(lng) && marker && map) {
+    marker.setLatLng([lat, lng]);
+    map.panTo([lat, lng]);
+    updateCoords();
+  }
+}
+
 const zone = document.getElementById('uploadZone');
-const fi   = document.getElementById('fileInput');
+const fi = document.getElementById('fileInput');
 zone.addEventListener('click', () => fi.click());
-zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag'); });
+zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('drag'); });
 zone.addEventListener('dragleave', () => zone.classList.remove('drag'));
-zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('drag'); handleFiles(e.dataTransfer.files); });
-fi.addEventListener('change', e => handleFiles(e.target.files));
+zone.addEventListener('drop', (e) => { e.preventDefault(); zone.classList.remove('drag'); handleFiles(e.dataTransfer.files); });
+fi.addEventListener('change', (e) => handleFiles(e.target.files));
+document.getElementById('latitude').addEventListener('change', syncMapFromInputs);
+document.getElementById('longitude').addEventListener('change', syncMapFromInputs);
 
 function handleFiles(files) {
   selectedFiles = Array.from(files).slice(0, 10);
@@ -216,80 +488,136 @@ function handleFiles(files) {
 function renderFileList() {
   const list = document.getElementById('fileList');
   list.innerHTML = '';
-  let totalBytes = 0;
   selectedFiles.forEach((f, i) => {
-    totalBytes += f.size;
     const d = document.createElement('div');
     d.className = 'file-item';
-    d.innerHTML = `<div><div class="file-name">${f.name}</div><div class="file-size">${(f.size/1024).toFixed(1)} KB</div></div>
+    d.innerHTML = `<div><div class="file-name">${f.name}</div><div class="file-size">${(f.size / 1024).toFixed(1)} KB</div></div>
       <button class="file-remove" onclick="removeFile(${i})">Remove</button>`;
     list.appendChild(d);
   });
-  document.getElementById('s-count').textContent = selectedFiles.length;
-  document.getElementById('s-size').textContent = (totalBytes/1048576).toFixed(1) + ' MB';
 }
 
-function removeFile(i) { selectedFiles.splice(i,1); renderFileList(); }
-
-function submitUpload() {
-  if (!selectedFiles.length) { showAlert('error','Select at least one image.'); return; }
-  const sc = document.getElementById('scenarioName').value.trim();
-  const lo = document.getElementById('location').value.trim();
-  if (sc.length < 3) { showAlert('error','Scenario name must be at least 3 characters.'); return; }
-  if (lo.length < 3) { showAlert('error','Location must be at least 3 characters.'); return; }
-
-  document.getElementById('loading').classList.add('show');
-  document.getElementById('uploadBtn').disabled = true;
-
-  const fd = new FormData();
-  selectedFiles.forEach(f => fd.append('images', f));
-  fd.append('scenario_name', sc);
-  fd.append('location', lo);
-  fd.append('camera_id', document.getElementById('cameraId').value);
-  fd.append('latitude',  document.getElementById('latitude').value);
-  fd.append('longitude', document.getElementById('longitude').value);
-  fd.append('description', document.getElementById('description').value);
-
-  fetch('/api/v1/floods/random-upload-secure/', {
-    method: 'POST',
-    headers: {'X-CSRFToken': csrfToken},
-    body: fd
-  })
-  .then(r => r.ok ? r.json() : r.text().then(t => { throw new Error('Server error: ' + t.substring(0,200)); }))
-  .then(d => {
-    document.getElementById('loading').classList.remove('show');
-    document.getElementById('uploadBtn').disabled = false;
-    if (d.status === 'success') {
-      showAlert('success', 'Analysis complete — loading report...');
-      setTimeout(() => window.location.href = d.report_url, 1200);
-    } else {
-      showAlert('error', d.message || 'Upload failed.');
-    }
-  })
-  .catch(e => {
-    document.getElementById('loading').classList.remove('show');
-    document.getElementById('uploadBtn').disabled = false;
-    showAlert('error', e.message);
-  });
-}
-
-function clearForm() {
-  selectedFiles = [];
+function removeFile(i) {
+  selectedFiles.splice(i, 1);
   renderFileList();
-  document.getElementById('scenarioName').value = 'Bengaluru Flood Assessment';
-  document.getElementById('location').value = 'Bengaluru, Karnataka';
-  document.getElementById('description').value = '';
-  showAlert('info','Form cleared.');
 }
 
 function showAlert(type, msg) {
   const el = document.getElementById('alertBox');
   el.className = 'alert alert-' + type + ' show';
   el.textContent = msg;
-  setTimeout(() => el.classList.remove('show'), 4000);
+  setTimeout(() => el.classList.remove('show'), 4200);
 }
 
-window.addEventListener('load', initMap);
+async function submitUpload() {
+  if (!selectedFiles.length) { showAlert('error', 'Select at least one image.'); return; }
+  const sc = document.getElementById('scenarioName').value.trim();
+  const lo = document.getElementById('location').value.trim();
+  if (sc.length < 3) { showAlert('error', 'Scenario name must be at least 3 characters.'); return; }
+  if (lo.length < 3) { showAlert('error', 'Location must be at least 3 characters.'); return; }
+
+  document.getElementById('loading').classList.add('show');
+  document.getElementById('uploadBtn').disabled = true;
+  document.getElementById('reportReady').style.display = 'none';
+
+  const fd = new FormData();
+  selectedFiles.forEach((f) => fd.append('images', f));
+  fd.append('scenario_name', sc);
+  fd.append('location', lo);
+  fd.append('camera_id', document.getElementById('cameraId').value);
+  fd.append('latitude', document.getElementById('latitude').value);
+  fd.append('longitude', document.getElementById('longitude').value);
+  fd.append('description', document.getElementById('description').value);
+
+  try {
+    const r = await fetch('/api/v1/floods/random-upload-secure/', {
+      method: 'POST',
+      headers: { 'X-CSRFToken': csrfToken },
+      body: fd
+    });
+    const d = r.ok ? await r.json() : { status: 'error', message: await r.text() };
+
+    document.getElementById('loading').classList.remove('show');
+    document.getElementById('uploadBtn').disabled = false;
+
+    if (d.status !== 'success') {
+      showAlert('error', d.message || 'Upload failed.');
+      pushAgenticItem({
+        title: 'Upload failed',
+        message: d.message || 'Unknown upload error.',
+        severity: 'error',
+        command: d
+      });
+      return;
+    }
+
+    if (Array.isArray(d.ui_commands)) {
+      d.ui_commands.forEach((cmd) => applyUICommand(cmd, true));
+    }
+    if (d.agentic_summary && d.agentic_summary.team_brief) {
+      pushAgenticItem({
+        title: 'Operational brief',
+        message: d.agentic_summary.team_brief,
+        severity: 'info',
+        command: d.agentic_summary
+      });
+    }
+    showAlert('success', 'Agentic triage complete. Review command-center outputs, then open report.');
+    const reportBtnWrap = document.getElementById('reportReady');
+    const reportBtn = document.getElementById('openReportBtn');
+    reportBtn.onclick = () => window.location.href = d.report_url;
+    reportBtnWrap.style.display = 'block';
+  } catch (e) {
+    document.getElementById('loading').classList.remove('show');
+    document.getElementById('uploadBtn').disabled = false;
+    showAlert('error', e.message || 'Request failed');
+  }
+}
+
+function clearForm() {
+  selectedFiles = [];
+  renderFileList();
+  document.getElementById('scenarioName').value = 'Bengaluru Flood Assessment';
+  document.getElementById('location').value = defaultLocation;
+  document.getElementById('cameraId').value = defaultCameraId;
+  document.getElementById('latitude').value = defaultLat.toFixed(6);
+  document.getElementById('longitude').value = defaultLng.toFixed(6);
+  document.getElementById('description').value = '';
+  document.getElementById('chipPanel').classList.remove('show');
+  document.getElementById('reportReady').style.display = 'none';
+  syncMapFromInputs();
+  showAlert('info', 'Form cleared.');
+}
+
+async function refreshAgenticLive() {
+  try {
+    const r = await fetch('/api/v1/floods/agentic-live/?window_minutes=180', {
+      method: 'GET',
+      headers: { 'X-CSRFToken': csrfToken }
+    });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (Array.isArray(d.ui_commands)) {
+      d.ui_commands.forEach((cmd) => applyUICommand(cmd, false));
+    } else if (d.telemetry_metrics) {
+      applyTelemetryMetrics(d.telemetry_metrics);
+    }
+  } catch (e) {
+    // Polling failure is non-blocking for core upload workflow.
+  }
+}
+
+window.addEventListener('load', () => {
+  initMap();
+  pushAgenticItem({
+    title: 'System ready',
+    message: 'Agentic command center is active. Upload images to trigger triage, governance audits, and escalation guidance.',
+    severity: 'success',
+    command: { type: 'notification.push', payload: { status: 'ready' } }
+  });
+  refreshAgenticLive();
+  setInterval(refreshAgenticLive, 45000);
+});
 </script>
 </body>
 </html>
