@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BBMP Agentic Flood Intelligence Executive Report</title>
+<style>
+  :root{
+    --navy:#0f172a;
+    --blue:#2563eb;
+    --slate:#475569;
+    --muted:#64748b;
+    --line:#dbe4ee;
+    --bg:#f8fafc;
+    --white:#ffffff;
+    --green:#15803d;
+    --amber:#d97706;
+    --red:#b91c1c;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#e5edf6;font-family:Inter,Segoe UI,Arial,sans-serif;color:var(--navy);line-height:1.45}
+  body{padding:24px}
+  .report{max-width:1100px;margin:0 auto}
+  .page{
+    background:var(--white);
+    min-height:1320px;
+    margin:0 auto 24px;
+    padding:48px 54px;
+    box-shadow:0 20px 60px rgba(15,23,42,.10);
+    position:relative;
+    overflow:hidden;
+  }
+  .page-break{page-break-after:always}
+  .eyebrow{font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--blue);margin-bottom:14px}
+  h1{font-size:40px;line-height:1.08;margin:0 0 18px}
+  h2{font-size:28px;line-height:1.15;margin:0 0 14px}
+  h3{font-size:18px;line-height:1.25;margin:0 0 8px}
+  p{font-size:16px;color:var(--slate);margin:0 0 12px}
+  .lead{font-size:19px;color:#1e293b;max-width:900px}
+  .hero{
+    display:grid;
+    grid-template-columns:1.25fr .95fr;
+    gap:28px;
+    align-items:start;
+    margin-top:18px;
+  }
+  .panel{
+    border:1px solid var(--line);
+    border-radius:18px;
+    padding:22px;
+    background:#fbfdff;
+  }
+  .objective-box{
+    border:1px solid #bfdbfe;
+    background:linear-gradient(180deg,#eff6ff 0%,#ffffff 100%);
+    border-radius:20px;
+    padding:26px;
+  }
+  .metric-grid{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:12px;
+    margin-top:20px;
+  }
+  .metric{
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:16px;
+    background:#fff;
+  }
+  .metric .num{font-size:30px;font-weight:800;color:var(--navy)}
+  .metric .lbl{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:4px}
+  .bullet-list{margin:0;padding-left:18px}
+  .bullet-list li{font-size:16px;color:var(--slate);margin:0 0 10px}
+  .ribbon{
+    position:absolute;right:54px;top:44px;
+    border:1px solid #c7d7f7;background:#eff6ff;color:#1d4ed8;
+    padding:8px 14px;border-radius:999px;font-size:13px;font-weight:700
+  }
+  .page-num{
+    position:absolute;right:54px;bottom:30px;
+    font-size:13px;color:var(--muted)
+  }
+  .footer-note{
+    position:absolute;left:54px;bottom:30px;
+    font-size:13px;color:var(--muted)
+  }
+  .workflow-svg{width:100%;height:auto;border:1px solid var(--line);border-radius:18px;background:#fcfdff}
+  .detail-grid{
+    display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:14px;
+    margin-top:18px;
+  }
+  .detail-card{
+    border:1px solid var(--line);
+    border-radius:16px;
+    padding:16px;
+    background:#fff;
+  }
+  .detail-card p{font-size:14px;margin-bottom:0}
+  .compare-grid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:18px;
+    margin-top:18px;
+  }
+  table{
+    width:100%;
+    border-collapse:collapse;
+    font-size:14px;
+    margin-top:12px;
+  }
+  th,td{
+    border:1px solid var(--line);
+    padding:11px 12px;
+    text-align:left;
+    vertical-align:top;
+  }
+  th{
+    background:#f8fbff;
+    color:#0f172a;
+    font-size:13px;
+    text-transform:uppercase;
+    letter-spacing:.05em;
+  }
+  .good{color:var(--green);font-weight:700}
+  .warn{color:var(--amber);font-weight:700}
+  .risk{color:var(--red);font-weight:700}
+  .recommendation-grid{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:16px;
+    margin-top:20px;
+  }
+  .recommendation{
+    border:1px solid var(--line);
+    border-left:5px solid var(--blue);
+    border-radius:16px;
+    padding:18px;
+    background:#fff;
+  }
+  .timeline{
+    display:grid;
+    gap:14px;
+    margin-top:18px;
+  }
+  .timeline-item{
+    display:grid;
+    grid-template-columns:160px 1fr;
+    gap:18px;
+    align-items:start;
+    border:1px solid var(--line);
+    border-radius:16px;
+    padding:16px;
+    background:#fff;
+  }
+  .timeline-tag{
+    display:inline-block;
+    background:#eff6ff;
+    color:#1d4ed8;
+    padding:8px 12px;
+    border-radius:999px;
+    font-size:13px;
+    font-weight:700;
+    text-align:center;
+  }
+  .small{font-size:13px;color:var(--muted)}
+  @media print{
+    body{background:#fff;padding:0}
+    .page{box-shadow:none;margin:0;min-height:auto}
+  }
+</style>
+</head>
+<body>
+<div class="report">
+
+  <section class="page page-break">
+    <div class="ribbon">Executive HTML Report</div>
+    <div class="eyebrow">Bengaluru Flood Intelligence Platform</div>
+    <h1>Objective and value proposition for an agentic flood-intelligence operating system</h1>
+    <p class="lead">
+      The objective is to transform Bengaluru flood-response operations from a manual, image-by-image review process into an
+      autonomous digital colleague that triages field imagery, estimates water depth, validates geospatial integrity, projects
+      downstream choke points, and actively reduces cognitive load for a 6-member operations analytics team.
+    </p>
+
+    <div class="hero">
+      <div class="objective-box">
+        <h2 style="margin-bottom:10px">What this platform is designed to do</h2>
+        <ul class="bullet-list">
+          <li><strong>Ingest field imagery fast:</strong> accept 1 to 10 images in a single operational batch and immediately begin triage.</li>
+          <li><strong>Estimate flood depth and severity:</strong> classify incidents into SAFE, MEDIUM, HIGH, and CRITICAL bands for actionability.</li>
+          <li><strong>Protect data integrity:</strong> compare user-entered coordinates with image evidence and EXIF where available, then flag anomalies.</li>
+          <li><strong>Surface predictive risk:</strong> connect image findings to flood history, SWD network proximity, and likely downstream choke points.</li>
+          <li><strong>Drive the interface proactively:</strong> update telemetry, prefill metadata, cluster nearby incidents, and push notifications without waiting for manual clicks.</li>
+        </ul>
+      </div>
+
+      <div class="panel">
+        <h3>Operational outcome</h3>
+        <p>
+          Instead of treating the web application as a passive form, the platform acts as an active command layer that shortens
+          time-to-triage, improves coordinate trust, and standardizes escalation to the BBMP Command Centre.
+        </p>
+        <div class="metric-grid">
+          <div class="metric">
+            <div class="num">1-10</div>
+            <div class="lbl">Images per batch</div>
+          </div>
+          <div class="metric">
+            <div class="num">4</div>
+            <div class="lbl">Severity bands</div>
+          </div>
+          <div class="metric">
+            <div class="num">50 m</div>
+            <div class="lbl">Clustering radius</div>
+          </div>
+          <div class="metric">
+            <div class="num">6</div>
+            <div class="lbl">Core operations users</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:22px">
+      <h3>Success criteria</h3>
+      <ul class="bullet-list">
+        <li>Deliver rapid situational awareness from live image uploads with minimal analyst intervention.</li>
+        <li>Standardize escalation recommendations so similar incidents receive consistent action paths.</li>
+        <li>Replace static system indicators with live operational metrics such as active incidents and pending escalations.</li>
+        <li>Create a reusable platform base for drift detection, active learning, MLOps, and city-scale deployment.</li>
+      </ul>
+    </div>
+
+    <div class="footer-note">Prepared for platform strategy, architecture review, and deployment planning.</div>
+    <div class="page-num">Page 1</div>
+  </section>
+
+  <section class="page page-break">
+    <div class="eyebrow">Architecture and workflow</div>
+    <h2>How the platform works end-to-end</h2>
+    <p class="lead">
+      The operating model is designed as a five-stage municipal decision workflow: capture, validate, interpret, prioritize,
+      and coordinate. The goal is not only to detect flooding, but to translate field imagery into a trusted and actionable
+      command signal for BBMP operations teams.
+    </p>
+
+    <svg class="workflow-svg" viewBox="0 0 980 440" role="img" aria-label="Platform workflow">
+      <rect x="24" y="26" width="150" height="78" rx="14" fill="#eff6ff" stroke="#93c5fd" />
+      <text x="99" y="58" text-anchor="middle" font-size="18" font-weight="700" fill="#1d4ed8">Capture</text>
+      <text x="99" y="82" text-anchor="middle" font-size="13" fill="#334155">1-10 images, field inputs,</text>
+      <text x="99" y="100" text-anchor="middle" font-size="13" fill="#334155">location context</text>
+
+      <rect x="220" y="26" width="160" height="78" rx="14" fill="#f8fafc" stroke="#cbd5e1" />
+      <text x="300" y="58" text-anchor="middle" font-size="18" font-weight="700" fill="#0f172a">Validate</text>
+      <text x="300" y="82" text-anchor="middle" font-size="13" fill="#334155">Security checks, controls,</text>
+      <text x="300" y="100" text-anchor="middle" font-size="13" fill="#334155">audit-grade ingestion</text>
+
+      <rect x="430" y="26" width="160" height="78" rx="14" fill="#f8fafc" stroke="#cbd5e1" />
+      <text x="510" y="58" text-anchor="middle" font-size="18" font-weight="700" fill="#0f172a">Interpret</text>
+      <text x="510" y="82" text-anchor="middle" font-size="13" fill="#334155">Flood signal, depth band,</text>
+      <text x="510" y="100" text-anchor="middle" font-size="13" fill="#334155">confidence, severity</text>
+
+      <rect x="640" y="26" width="160" height="78" rx="14" fill="#f8fafc" stroke="#cbd5e1" />
+      <text x="720" y="58" text-anchor="middle" font-size="18" font-weight="700" fill="#0f172a">Prioritize</text>
+      <text x="720" y="82" text-anchor="middle" font-size="13" fill="#334155">Geo trust, anomaly review,</text>
+      <text x="720" y="100" text-anchor="middle" font-size="13" fill="#334155">risk ranking</text>
+
+      <rect x="806" y="26" width="150" height="78" rx="14" fill="#eff6ff" stroke="#93c5fd" />
+      <text x="881" y="58" text-anchor="middle" font-size="18" font-weight="700" fill="#1d4ed8">Coordinate</text>
+      <text x="881" y="82" text-anchor="middle" font-size="13" fill="#334155">UI commands, map actions,</text>
+      <text x="881" y="100" text-anchor="middle" font-size="13" fill="#334155">telemetry, escalation</text>
+
+      <rect x="136" y="182" width="190" height="92" rx="16" fill="#ffffff" stroke="#cbd5e1" />
+      <text x="231" y="213" text-anchor="middle" font-size="18" font-weight="700" fill="#0f172a">Historical Pattern Engine</text>
+      <text x="231" y="237" text-anchor="middle" font-size="13" fill="#334155">Nearby incidents, seasonal trend,</text>
+      <text x="231" y="255" text-anchor="middle" font-size="13" fill="#334155">flood occurrence profile</text>
+
+      <rect x="396" y="182" width="190" height="92" rx="16" fill="#ffffff" stroke="#cbd5e1" />
+      <text x="491" y="213" text-anchor="middle" font-size="18" font-weight="700" fill="#0f172a">SWD Projection Layer</text>
+      <text x="491" y="237" text-anchor="middle" font-size="13" fill="#334155">Downstream choke-point ranking</text>
+      <text x="491" y="255" text-anchor="middle" font-size="13" fill="#334155">using drainage proximity and depth</text>
+
+      <rect x="656" y="182" width="220" height="92" rx="16" fill="#ffffff" stroke="#cbd5e1" />
+      <text x="766" y="213" text-anchor="middle" font-size="18" font-weight="700" fill="#0f172a">Escalation Recommendation</text>
+      <text x="766" y="237" text-anchor="middle" font-size="13" fill="#334155">Ward desk, zonal control room,</text>
+      <text x="766" y="255" text-anchor="middle" font-size="13" fill="#334155">or BBMP command centre dispatch</text>
+
+      <rect x="250" y="330" width="480" height="72" rx="16" fill="#0f172a" stroke="#0f172a" />
+      <text x="490" y="360" text-anchor="middle" font-size="19" font-weight="700" fill="#ffffff">Executive Outcome</text>
+      <text x="490" y="384" text-anchor="middle" font-size="14" fill="#cbd5e1">Faster triage, stronger data trust, clearer escalation, and lower analyst burden</text>
+
+      <line x1="174" y1="65" x2="220" y2="65" stroke="#2563eb" stroke-width="3"/>
+      <line x1="380" y1="65" x2="430" y2="65" stroke="#2563eb" stroke-width="3"/>
+      <line x1="590" y1="65" x2="640" y2="65" stroke="#2563eb" stroke-width="3"/>
+      <line x1="800" y1="65" x2="806" y2="65" stroke="#2563eb" stroke-width="3"/>
+
+      <line x1="510" y1="104" x2="510" y2="182" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6 6"/>
+      <line x1="720" y1="104" x2="766" y2="182" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6 6"/>
+      <line x1="510" y1="274" x2="490" y2="330" stroke="#2563eb" stroke-width="3"/>
+      <line x1="766" y1="274" x2="610" y2="330" stroke="#2563eb" stroke-width="3"/>
+      <line x1="231" y1="274" x2="370" y2="330" stroke="#2563eb" stroke-width="3"/>
+    </svg>
+
+    <div class="detail-grid">
+      <div class="detail-card">
+        <h3>1. Capture and control</h3>
+        <p>Every field submission enters through a governed intake point with file validation, throttling, audit trails, and metadata normalization. This creates an operationally trustworthy starting point.</p>
+      </div>
+      <div class="detail-card">
+        <h3>2. Interpretation and confidence</h3>
+        <p>The system estimates water presence, depth, intensity, and confidence, then immediately pairs these with coordinate-governance checks so urgency and trust are assessed together.</p>
+      </div>
+      <div class="detail-card">
+        <h3>3. Predictive prioritization</h3>
+        <p>Historical flood recurrence and SWD choke-point projections move the workflow from incident recognition to forward-looking risk prioritization at ward and zone level.</p>
+      </div>
+      <div class="detail-card">
+        <h3>4. Agentic orchestration</h3>
+        <p>The interface acts on system outputs automatically: prefill chips, clustered incident bubbles, telemetry updates, and command-center alerts all reduce operator click-load.</p>
+      </div>
+      <div class="detail-card">
+        <h3>5. Operational communication</h3>
+        <p>Each batch produces a structured report for analysts, supervisors, and executive stakeholders, allowing evidence, severity, and geography to be reviewed in a single narrative.</p>
+      </div>
+      <div class="detail-card">
+        <h3>6. Scalable foundation</h3>
+        <p>The design is modular enough to support future extensions including drift detection, active learning, managed cloud deployment, and enterprise governance controls.</p>
+      </div>
+    </div>
+
+    <div class="footer-note">Architecture view: secure ingestion, analysis, prediction, interface control, and reporting.</div>
+    <div class="page-num">Page 2</div>
+  </section>
+
+  <section class="page page-break">
+    <div class="eyebrow">Why this platform is better</div>
+    <h2>Competitive and cloud comparison</h2>
+    <p class="lead">
+      The platform is stronger than a conventional dashboard-only flood workflow because it combines analysis, governance,
+      predictive context, and UI automation in the same operational surface.
+    </p>
+
+    <div class="compare-grid">
+      <div class="panel">
+        <h3>Comparison with nearest practical rival</h3>
+        <p class="small">Nearest rival assumed here: a legacy municipal flood dashboard with manual review, manual escalation, and static mapping.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Dimension</th>
+              <th>This Platform</th>
+              <th>Legacy Dashboard Rival</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Triage speed</td>
+              <td class="good">Automated per-image triage on upload</td>
+              <td class="risk">Analyst must inspect each image manually</td>
+            </tr>
+            <tr>
+              <td>Data integrity</td>
+              <td class="good">Governance audit with anomaly flags</td>
+              <td class="warn">Trust mostly depends on operator discipline</td>
+            </tr>
+            <tr>
+              <td>Predictive depth</td>
+              <td class="good">Historical + SWD choke-point projection</td>
+              <td class="risk">Little to no downstream forecasting</td>
+            </tr>
+            <tr>
+              <td>Operator burden</td>
+              <td class="good">Prefill chips, clustering, proactive alerts</td>
+              <td class="risk">High click-load and fragmented decisions</td>
+            </tr>
+            <tr>
+              <td>Escalation quality</td>
+              <td class="good">Structured recommendation and rationale</td>
+              <td class="warn">Escalation varies by operator experience</td>
+            </tr>
+            <tr>
+              <td>Executive reporting</td>
+              <td class="good">Printable report with map + evidence</td>
+              <td class="warn">Often requires manual slide/report creation</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <h3>Strategic advantage summary</h3>
+        <ul class="bullet-list">
+          <li><strong>Fewer manual steps:</strong> operations staff spend more time deciding and less time formatting, copying, and correlating.</li>
+          <li><strong>Better trust model:</strong> image evidence, coordinates, and historical context are evaluated together.</li>
+          <li><strong>Higher actionability:</strong> outputs are operational recommendations, not just model scores.</li>
+          <li><strong>Stronger executive visibility:</strong> the platform supports both field execution and leadership reporting from the same source.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:20px">
+      <h3>Cloud onboarding and running-cost comparison</h3>
+      <p class="small">
+        Indicative ranges for a small production deployment supporting web upload, APIs, image storage, managed PostgreSQL, and monitoring.
+        These are starter-level operating ranges and will vary by traffic, region, HA, and retention policies.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Cloud option</th>
+            <th>Recommended stack</th>
+            <th>Onboarding effort</th>
+            <th>Indicative onboarding scope</th>
+            <th>Indicative starter run-cost / month</th>
+            <th>Consulting view</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>GCP</strong></td>
+            <td>Cloud Run + Cloud SQL + Cloud Storage</td>
+            <td class="good">Easy to low-medium</td>
+            <td>Fastest path to first deployment; lower platform friction, fewer control layers to configure initially.</td>
+            <td><strong>$60 - $110</strong></td>
+            <td>Strong for rapid proof-of-value, but slightly less aligned if the target state requires deep enterprise controls and broader AWS integration.</td>
+          </tr>
+          <tr>
+            <td><strong>AWS</strong></td>
+            <td>ECS Fargate + RDS PostgreSQL + S3</td>
+            <td class="warn">Medium</td>
+            <td>Requires VPC, IAM, security group, logging, and deployment-pipeline setup, but these same elements create a stronger production operating model.</td>
+            <td><strong>$45 - $115</strong></td>
+            <td><strong>Best long-term operating choice:</strong> slightly heavier onboarding, but strongest balance of control, resilience options, observability maturity, and enterprise extensibility.</td>
+          </tr>
+          <tr>
+            <td><strong>Azure</strong></td>
+            <td>Container Apps + Azure PostgreSQL + Blob Storage</td>
+            <td class="warn">Medium-high</td>
+            <td>Reasonable fit when Azure is already the enterprise standard; onboarding flow is less streamlined for this use case.</td>
+            <td><strong>$50 - $95</strong></td>
+            <td>Viable and cost-competitive, but not the strongest fit here unless the wider organization is already standardized on Azure.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top:12px">
+        <strong>Recommendation:</strong> use <strong>AWS</strong> as the preferred target platform when the objective is a durable municipal operating system rather than only a fast prototype.
+        GCP remains the quickest route for a lightweight pilot, while Azure is most relevant when broader enterprise dependency on Microsoft services already exists.
+      </p>
+      <p class="small">
+        In practical terms, AWS asks for more upfront platform design, but that investment improves security posture, deployment control, integration flexibility, and long-term scalability.
+      </p>
+    </div>
+
+    <div class="footer-note">Cloud comparison uses current high-level starter ranges for a small production deployment.</div>
+    <div class="page-num">Page 3</div>
+  </section>
+
+  <section class="page">
+    <div class="eyebrow">What next</div>
+    <h2>Recommendations to make the platform stronger</h2>
+    <p class="lead">
+      The current foundation is already credible for executive demos and controlled rollout. The next step is to turn it into a
+      resilient municipal operating system with stronger models, tighter governance, and clearer cloud economics.
+    </p>
+
+    <div class="recommendation-grid">
+      <div class="recommendation">
+        <h3>Recommendation 1: strengthen geo-validation</h3>
+        <p>Upgrade EXIF checks with landmark-based visual geolocation and camera registry matching so coordinate trust becomes a first-class quality gate.</p>
+      </div>
+      <div class="recommendation">
+        <h3>Recommendation 2: productionize the predictive layer</h3>
+        <p>Connect SWD topology, rainfall nowcasts, and low-lying road segments to move from choke-point scoring to route-aware impact forecasting.</p>
+      </div>
+      <div class="recommendation">
+        <h3>Recommendation 3: operationalize model governance</h3>
+        <p>Add drift detection, active learning, field feedback review, and rollback triggers so models remain calibrated through monsoon cycles.</p>
+      </div>
+      <div class="recommendation">
+        <h3>Recommendation 4: design the AWS landing zone early</h3>
+        <p>Stand up the target AWS foundation up front: VPC, IAM boundaries, logging standards, S3 lifecycle rules, Fargate service patterns, and RDS backup policies.</p>
+      </div>
+    </div>
+
+    <div class="timeline">
+      <div class="timeline-item">
+        <div><span class="timeline-tag">Next 2 weeks</span></div>
+        <div>
+          <h3>Operational hardening</h3>
+          <p>Finalize escalation playbooks, tighten data-quality rules, and complete acceptance tests with field-image scenarios.</p>
+        </div>
+      </div>
+      <div class="timeline-item">
+        <div><span class="timeline-tag">Next 30 days</span></div>
+        <div>
+          <h3>Smart monitoring</h3>
+          <p>Launch drift detection, notification thresholds, cloud cost dashboards, and structured review queues for low-confidence predictions.</p>
+        </div>
+      </div>
+      <div class="timeline-item">
+        <div><span class="timeline-tag">Next 60-90 days</span></div>
+        <div>
+          <h3>City-scale readiness</h3>
+          <p>Move into AWS-based managed deployment, model promotion controls, incident-history reporting, multi-zone dashboards, and stronger resilience patterns.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:22px">
+      <h3>Final recommendation</h3>
+      <p>
+        Proceed with the platform as an <strong>agentic municipal flood-operations layer</strong>, not only as a prediction tool.
+        The differentiator is not the model alone; it is the combination of triage, trust, prediction, escalation, and interface automation.
+        <strong>Final recommendation: deploy on AWS</strong> using a baseline architecture of ECS Fargate, RDS PostgreSQL, S3, and CloudWatch.
+        While AWS requires more onboarding effort than GCP, it provides the strongest long-term operating model for a municipal system that will likely need tighter governance,
+        richer integration patterns, stronger network controls, and a clearer path to enterprise-scale resilience.
+      </p>
+    </div>
+
+    <div class="footer-note">Suggested file use: executive review, stakeholder demo, funding case, or cloud deployment discussion.</div>
+    <div class="page-num">Page 4</div>
+  </section>
+
+</div>
+</body>
+</html>

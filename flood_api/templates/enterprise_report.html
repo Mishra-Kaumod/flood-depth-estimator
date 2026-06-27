@@ -8,7 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
-  html,body{height:100%;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f1f5f9;color:#1e293b}
+  html,body{height:100%;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f1f5f9;color:#1e293b;font-size:17px;line-height:1.5}
 
   @media print{
     .no-print{display:none!important}
@@ -18,60 +18,65 @@
 
   /* NAV */
   .nav{height:56px;background:#0f172a;display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:200}
-  .nav-brand{display:flex;align-items:center;gap:10px;color:#fff;font-size:16px;font-weight:700}
+  .nav-brand{display:flex;align-items:center;gap:10px;color:#fff;font-size:20px;font-weight:700}
   .nav-brand span{font-size:22px}
   .nav-actions{display:flex;gap:10px}
-  .nav-btn{background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.2);padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;font-family:'Inter',sans-serif;transition:background .2s}
+  .nav-btn{background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.2);padding:10px 16px;border-radius:6px;cursor:pointer;font-size:16px;font-weight:500;font-family:'Inter',sans-serif;transition:background .2s}
   .nav-btn:hover{background:rgba(255,255,255,.2)}
 
   /* KPI STRIP */
   .kpi-strip{background:#fff;border-bottom:1px solid #e2e8f0;display:flex;height:80px}
   .kpi{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;border-right:1px solid #f1f5f9;padding:0 12px}
   .kpi:last-child{border-right:none}
-  .kpi-num{font-size:26px;font-weight:800;color:#0f172a;line-height:1}
-  .kpi-lbl{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.6px;margin-top:4px}
+  .kpi-num{font-size:30px;font-weight:800;color:#0f172a;line-height:1}
+  .kpi-lbl{font-size:14px;color:#64748b;text-transform:uppercase;letter-spacing:.6px;margin-top:4px}
   .kpi-num.critical{color:#8b0000}
   .kpi-num.high{color:#f97316}
   .kpi-num.medium{color:#f59e0b}
   .kpi-num.safe{color:#16a34a}
 
   /* BODY GRID */
-  .body{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:auto 1fr;height:calc(100vh - 136px);overflow:hidden}
+  .body{display:grid;grid-template-columns:minmax(0,1.18fr) minmax(380px,.82fr);grid-template-rows:auto 1fr;height:calc(100vh - 136px);overflow:hidden}
 
   /* LEFT COL: cards + table */
   .left-col{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid #e2e8f0}
 
   /* CARDS AREA */
-  .cards-area{flex:0 0 auto;padding:16px 20px;background:#fff;border-bottom:1px solid #f1f5f9;overflow-y:auto;max-height:54vh}
-  .section-head{font-size:13px;font-weight:700;color:#0f172a;margin-bottom:12px;display:flex;align-items:center;gap:8px;text-transform:uppercase;letter-spacing:.5px}
+  .cards-area{flex:0 0 auto;padding:20px 24px;background:#fff;border-bottom:1px solid #f1f5f9;overflow-y:auto;max-height:62vh}
+  .section-head{font-size:16px;font-weight:700;color:#0f172a;margin-bottom:12px;display:flex;align-items:center;gap:8px;text-transform:uppercase;letter-spacing:.5px}
 
-  .result-cards{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  .rcard{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;border-left:4px solid #94a3b8}
+  .result-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
+  .rcard{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px;border-left:5px solid #94a3b8;min-height:190px;display:flex;flex-direction:column;justify-content:space-between}
   .rcard.flooded{border-left-color:#8b0000;background:#fef2f2}
   .rcard.safe{border-left-color:#16a34a;background:#f0fdf4}
-  .rcard-name{font-size:12px;font-weight:600;color:#1e293b;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .rcard-zone{font-size:11px;color:#64748b;margin-bottom:6px}
-  .rcard-badge{display:inline-block;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:700;color:#fff;margin-bottom:6px}
-  .rcard-stats{display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px}
+  .rcard-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px}
+  .rcard-name{font-size:17px;font-weight:700;color:#1e293b;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rcard-zone{font-size:15px;color:#64748b}
+  .rcard-badge{display:inline-block;padding:5px 10px;border-radius:999px;font-size:14px;font-weight:700;color:#fff;white-space:nowrap}
+  .rcard-highlight{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:12px}
+  .rcard-highlight-box{background:rgba(255,255,255,.72);border:1px solid rgba(148,163,184,.25);border-radius:10px;padding:10px}
+  .rcard-highlight-value{font-size:24px;font-weight:800;color:#0f172a;line-height:1}
+  .rcard-highlight-label{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-top:4px}
+  .rcard-stats{display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:14px}
   .rcard-stat{color:#64748b}
   .rcard-stat b{color:#1e293b;font-weight:600}
 
   /* TABLE AREA */
   .table-area{flex:1;overflow-y:auto;background:#fff}
-  .table-wrap{min-width:700px}
-  table{width:100%;border-collapse:collapse;font-size:12px}
+  .table-wrap{min-width:100%}
+  table{width:100%;border-collapse:collapse;font-size:15px}
   thead{position:sticky;top:0;z-index:10}
-  th{background:#0f172a;color:#94a3b8;padding:10px 14px;text-align:left;font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.5px;white-space:nowrap}
-  td{padding:9px 14px;border-bottom:1px solid #f1f5f9;color:#374151}
+  th{background:#0f172a;color:#94a3b8;padding:12px 14px;text-align:left;font-weight:600;text-transform:uppercase;font-size:14px;letter-spacing:.5px;white-space:nowrap}
+  td{padding:11px 14px;border-bottom:1px solid #f1f5f9;color:#374151}
   tbody tr:hover{background:#f8fafc}
-  .badge{display:inline-block;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:700;color:#fff}
+  .badge{display:inline-block;padding:4px 8px;border-radius:3px;font-size:14px;font-weight:700;color:#fff}
 
   /* RIGHT COL: map + assessment */
   .right-col{display:flex;flex-direction:column;overflow:hidden}
   #map{flex:1;min-height:0}
-  .assessment-bar{padding:14px 20px;background:#fff;border-top:1px solid #e2e8f0;flex-shrink:0}
-  .assessment-title{font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px}
-  .assessment-text{font-size:13px;color:#1e293b;line-height:1.5}
+  .assessment-bar{padding:16px 22px;background:#fff;border-top:1px solid #e2e8f0;flex-shrink:0}
+  .assessment-title{font-size:14px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px}
+  .assessment-text{font-size:16px;color:#1e293b;line-height:1.6}
 
   /* INTENSITY COLORS */
   .c-critical{background:#8b0000}
@@ -98,8 +103,8 @@
   <div class="kpi"><div class="kpi-num">{{ avg_confidence }}%</div><div class="kpi-lbl">Avg Confidence</div></div>
   <div class="kpi"><div class="kpi-num">{{ avg_depth }} cm</div><div class="kpi-lbl">Avg Depth Est.</div></div>
   <div class="kpi"><div class="kpi-num" id="kpiIntensity">{{ max_intensity }}</div><div class="kpi-lbl">Max Intensity</div></div>
-  <div class="kpi"><div class="kpi-num" style="font-size:13px;color:#64748b">{{ timestamp }}</div><div class="kpi-lbl">Report Generated</div></div>
-  <div class="kpi"><div class="kpi-num" style="font-size:13px;color:#64748b">{{ location }}</div><div class="kpi-lbl">Location</div></div>
+  <div class="kpi"><div class="kpi-num" style="font-size:15px;color:#64748b">{{ timestamp }}</div><div class="kpi-lbl">Report Generated</div></div>
+  <div class="kpi"><div class="kpi-num" style="font-size:15px;color:#64748b">{{ location }}</div><div class="kpi-lbl">Location</div></div>
 </div>
 
 <!-- BODY GRID -->
@@ -209,14 +214,30 @@ function populateCards() {
     const card = document.createElement('div');
     card.className = 'rcard ' + cls;
     card.innerHTML = `
-      <div class="rcard-name">${r.filename}</div>
-      <div class="rcard-zone">${r.zone_name}</div>
-      <span class="rcard-badge" style="background:${color}">${r.intensity}</span>
+      <div>
+        <div class="rcard-top">
+          <div>
+            <div class="rcard-name">${r.filename}</div>
+            <div class="rcard-zone">${r.zone_name}</div>
+          </div>
+          <span class="rcard-badge" style="background:${color}">${r.intensity}</span>
+        </div>
+        <div class="rcard-highlight">
+          <div class="rcard-highlight-box">
+            <div class="rcard-highlight-value">${r.estimated_depth}</div>
+            <div class="rcard-highlight-label">Depth cm</div>
+          </div>
+          <div class="rcard-highlight-box">
+            <div class="rcard-highlight-value">${r.confidence}%</div>
+            <div class="rcard-highlight-label">Confidence</div>
+          </div>
+        </div>
+      </div>
       <div class="rcard-stats">
         <div class="rcard-stat">Flooded: <b style="color:${r.flooded?'#8b0000':'#16a34a'}">${r.flooded?'Yes':'No'}</b></div>
-        <div class="rcard-stat">Conf: <b>${r.confidence}%</b></div>
-        <div class="rcard-stat">Depth: <b>${r.estimated_depth} cm</b></div>
-        <div class="rcard-stat">Water: <b>${r.water_percentage}%</b></div>
+        <div class="rcard-stat">Water cover: <b>${r.water_percentage}%</b></div>
+        <div class="rcard-stat">Brightness: <b>${r.brightness}</b></div>
+        <div class="rcard-stat">Marker zone: <b>${r.zone_name}</b></div>
       </div>`;
     grid.appendChild(card);
 
