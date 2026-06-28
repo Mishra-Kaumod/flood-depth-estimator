@@ -1,0 +1,299 @@
+"""
+DATASET LAYER - Amazon S3 Data Processing & PyTorch Custom Dataset
+Modular data ingestion with support for local filesystem and AWS S3.
+"""
+import os
+import yaml
+from pathlib import Path
+from typing import Optional, Tuple, List
+import torch
+from torch.utils.data import Dataset
+from torchvision import transforms
+from PIL import Image
+import boto3
+from botocore.exceptions import ClientError
+import logging
+
+logger = logging.getLogger(__name__)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CONFIGURATION LOADER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def load_config(config_path: str = "config/config.yaml") -> dict:
+    """Load YAML configuration file."""
+    try:
+        with open(config_path, "r") as f:
+            return yaml.safe_load(f)
+    except FileNotFoundError:
+        logger.error(f"Config file not found: {config_path}")
+        raise
+    except yaml.YAMLError as e:
+        logger.error(f"Invalid YAML: {e}")
+        raise
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# S3 STORAGE HANDLER
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class S3DataHandler:
+    """Interface for reading images from AWS S3."""
+    
+    def __init__(self, bucket: str, region: str = "ap-south-1"):
+        self.bucket = bucket
+        self.region = region
+        self.s3_client = boto3.client("s3", region_name=region)
+    
+    def list_objects(self, prefix: str) -> List[str]:
+        """List all objects under S3 prefix."""
+        try:
+            paginator = self.s3_client.get_paginator("list_objects_v2")
+            pages = paginator.paginate(Bucket=self.bucket, Prefix=prefix)
+            
+            objects = []
+            for page in pages:
+                if "Contents" in page:
+                    objects.extend([obj["Key"] for obj in page["Contents"]])
+            return objects
+        except ClientError as e:
+            logger.error(f"S3 list error: {e}")
+            return []
+    
+    def get_image(self, s3_key: str) -> Optional[Image.Image]:
+        """Fetch image from S3 and return PIL Image object."""
+        try:
+            response = self.s3_client.get_object(Bucket=self.bucket, Key=s3_key)
+            img = Image.open(response["Body"])
+            return img.convert("RGB")
+        except ClientError as e:
+            logger.error(f"Failed to fetch {s3_key}: {e}")
+            return None
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# PYTORCH CUSTOM DATASET
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class FloodDataset(Dataset):
+    """
+    Production-grade PyTorch Dataset for flood depth estimation.
+    
+    Supports:
+    - Local filesystem loading
+    - AWS S3 dynamic loading
+    - Configurable augmentation (training mode only)
+    - Normalized image preprocessing
+    """
+    
+    def __init__(
+        self,
+        config: dict,
+        dataset_type: str = "train",
+        use_s3: bool = False,
+        s3_bucket: Optional[str] = None,
+        s3_region: str = "ap-south-1",
+    ):
+        """
+        Initialize FloodDataset.
+        
+        Args:
+            config: YAML config dict
+            dataset_type: "train", "val", or "test"
+            use_s3: Use AWS S3 or local filesystem
+            s3_bucket: S3 bucket name (if use_s3=True)
+            s3_region: AWS region
+        """
+        self.config = config
+        self.dataset_type = dataset_type
+        self.use_s3 = use_s3
+        
+        # Get configuration
+        data_cfg = config.get("data", {})
+        train_cfg = config.get("training", {})
+        
+        self.image_size = tuple(train_cfg.get("image_size", [224, 224]))
+        self.normalization = train_cfg.get("normalization", {
+            "mean": [0.485, 0.456, 0.406],
+            "std": [0.229, 0.224, 0.225]
+        })
+        
+        # Build transform pipeline
+        self.transform = self._build_transforms(train_cfg)
+        
+        # Load image paths
+        if use_s3:
+            self.s3_handler = S3DataHandler(s3_bucket, s3_region)
+            prefix = data_cfg.get(f"s3_{dataset_type}_prefix", f"{dataset_type}/")
+            self.image_paths = self._load_s3_images(prefix)
+        else:
+            dataset_dir = data_cfg.get(f"{dataset_type}_dir", f"flood_dataset/{dataset_type}")
+            self.image_paths = self._load_local_images(dataset_dir)
+        
+        logger.info(f"Loaded {len(self.image_paths)} {dataset_type} images")
+    
+    def _build_transforms(self, train_cfg: dict) -> transforms.Compose:
+        """Build augmentation pipeline based on dataset type."""
+        base_transforms = [
+            transforms.Resize(self.image_size),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=self.normalization["mean"],
+                std=self.normalization["std"]
+            )
+        ]
+        
+        # Add augmentation ONLY for training
+        if self.dataset_type == "train":
+            aug_cfg = train_cfg.get("augmentation", {})
+            augmentations = [
+                transforms.RandomHorizontalFlip(aug_cfg.get("horizontal_flip_prob", 0.5)),
+                transforms.RandomRotation(aug_cfg.get("rotation_degrees", 15)),
+                transforms.ColorJitter(
+                    brightness=aug_cfg.get("color_jitter", {}).get("brightness", 0.2),
+                    contrast=aug_cfg.get("color_jitter", {}).get("contrast", 0.2),
+                    saturation=aug_cfg.get("color_jitter", {}).get("saturation", 0.2),
+                )
+            ]
+            # Insert augmentations before tensor conversion
+            return transforms.Compose(
+                augmentations +
+                [
+                    transforms.Resize(self.image_size),
+                    transforms.ToTensor(),
+                    transforms.Normalize(
+                        mean=self.normalization["mean"],
+                        std=self.normalization["std"]
+                    )
+                ]
+            )
+        
+        return transforms.Compose(base_transforms)
+    
+    def _load_local_images(self, dataset_dir: str) -> List[Tuple[str, int]]:
+        """Load image paths and depth labels from local filesystem."""
+        supported_formats = self.config.get("data", {}).get("supported_formats", [".jpg", ".png"])
+        image_paths = []
+        
+        dataset_path = Path(dataset_dir)
+        if not dataset_path.exists():
+            logger.warning(f"Dataset directory not found: {dataset_dir}")
+            return []
+        
+        # Assume depth labels are in parent directory filenames or metadata
+        for img_file in dataset_path.rglob("*"):
+            if img_file.suffix.lower() in supported_formats:
+                # Extract depth from filename or use default
+                depth_cm = self._extract_depth_from_filename(img_file.name)
+                image_paths.append((str(img_file), depth_cm))
+        
+        return image_paths
+    
+    def _load_s3_images(self, prefix: str) -> List[Tuple[str, int]]:
+        """Load image paths from AWS S3."""
+        objects = self.s3_handler.list_objects(prefix)
+        supported_formats = self.config.get("data", {}).get("supported_formats", [".jpg", ".png"])
+        
+        image_paths = []
+        for obj_key in objects:
+            if any(obj_key.lower().endswith(fmt) for fmt in supported_formats):
+                depth_cm = self._extract_depth_from_filename(obj_key)
+                image_paths.append((obj_key, depth_cm))
+        
+        return image_paths
+    
+    def _extract_depth_from_filename(self, filename: str) -> int:
+        """Extract depth value from filename. Format: 'image_depth25cm.jpg' -> 25."""
+        import re
+        match = re.search(r'depth(\d+)cm', filename.lower())
+        return int(match.group(1)) if match else 0
+    
+    def __len__(self) -> int:
+        return len(self.image_paths)
+    
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Fetch image and depth label, apply transforms."""
+        image_path, depth_cm = self.image_paths[idx]
+        
+        try:
+            # Load image
+            if self.use_s3:
+                img = self.s3_handler.get_image(image_path)
+            else:
+                img = Image.open(image_path).convert("RGB")
+            
+            if img is None:
+                logger.warning(f"Failed to load image: {image_path}")
+                # Return blank tensor and zero depth on error
+                return torch.zeros((3, *self.image_size)), torch.tensor(0.0)
+            
+            # Apply transforms
+            img_tensor = self.transform(img)
+            
+            # Convert depth to float tensor (normalized 0-1 where 100cm = 1.0)
+            depth_tensor = torch.tensor(min(depth_cm / 100.0, 1.0), dtype=torch.float32)
+            
+            return img_tensor, depth_tensor
+        
+        except Exception as e:
+            logger.error(f"Error loading {image_path}: {e}")
+            return torch.zeros((3, *self.image_size)), torch.tensor(0.0)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# DATALOADER FACTORY
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def create_dataloaders(
+    config: dict,
+    use_s3: bool = False,
+    s3_bucket: Optional[str] = None,
+    s3_region: str = "ap-south-1",
+) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
+    """Factory function to create train and validation dataloaders."""
+    
+    train_cfg = config.get("training", {})
+    batch_size = train_cfg.get("batch_size", 32)
+    num_workers = train_cfg.get("num_workers", 4)
+    pin_memory = train_cfg.get("pin_memory", True)
+    
+    # Create datasets
+    train_dataset = FloodDataset(
+        config, dataset_type="train", use_s3=use_s3, s3_bucket=s3_bucket, s3_region=s3_region
+    )
+    val_dataset = FloodDataset(
+        config, dataset_type="val", use_s3=use_s3, s3_bucket=s3_bucket, s3_region=s3_region
+    )
+    
+    # Create dataloaders
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        drop_last=True
+    )
+    
+    val_loader = torch.utils.data.DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        drop_last=False
+    )
+    
+    return train_loader, val_loader
+
+if __name__ == "__main__":
+    # Quick test
+    logging.basicConfig(level=logging.INFO)
+    cfg = load_config()
+    train_loader, val_loader = create_dataloaders(cfg, use_s3=False)
+    print(f"Train batches: {len(train_loader)}")
+    print(f"Val batches: {len(val_loader)}")
+    
+    # Inspect one batch
+    for images, depths in train_loader:
+        print(f"Image batch shape: {images.shape}")
+        print(f"Depth batch shape: {depths.shape}")
+        print(f"Depth range: [{depths.min():.3f}, {depths.max():.3f}]")
+        break

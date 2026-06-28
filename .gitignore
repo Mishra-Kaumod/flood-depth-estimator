@@ -28,7 +28,9 @@ __pycache__/
 datasets/
 *.zip
 
-# Models
+# Models (kept in .gitignore for GitHub Codespace - download from S3 in production)
+models/*.pth
+models/*.pt
 *.pth
 *.pt
 

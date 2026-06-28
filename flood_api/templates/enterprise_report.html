@@ -1,0 +1,266 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flood Analysis Report | {{ batch_id }}</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f1f5f9;color:#1e293b;font-size:17px;line-height:1.5}
+
+  @media print{
+    .no-print{display:none!important}
+    .page-section{page-break-inside:avoid}
+    body{background:#fff}
+  }
+
+  /* NAV */
+  .nav{height:56px;background:#0f172a;display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:200}
+  .nav-brand{display:flex;align-items:center;gap:10px;color:#fff;font-size:20px;font-weight:700}
+  .nav-brand span{font-size:22px}
+  .nav-actions{display:flex;gap:10px}
+  .nav-btn{background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.2);padding:10px 16px;border-radius:6px;cursor:pointer;font-size:16px;font-weight:500;font-family:'Inter',sans-serif;transition:background .2s}
+  .nav-btn:hover{background:rgba(255,255,255,.2)}
+
+  /* KPI STRIP */
+  .kpi-strip{background:#fff;border-bottom:1px solid #e2e8f0;display:flex;height:80px}
+  .kpi{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;border-right:1px solid #f1f5f9;padding:0 12px}
+  .kpi:last-child{border-right:none}
+  .kpi-num{font-size:30px;font-weight:800;color:#0f172a;line-height:1}
+  .kpi-lbl{font-size:14px;color:#64748b;text-transform:uppercase;letter-spacing:.6px;margin-top:4px}
+  .kpi-num.critical{color:#8b0000}
+  .kpi-num.high{color:#f97316}
+  .kpi-num.medium{color:#f59e0b}
+  .kpi-num.safe{color:#16a34a}
+
+  /* BODY GRID */
+  .body{display:grid;grid-template-columns:minmax(0,1.18fr) minmax(380px,.82fr);grid-template-rows:auto 1fr;height:calc(100vh - 136px);overflow:hidden}
+
+  /* LEFT COL: cards + table */
+  .left-col{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid #e2e8f0}
+
+  /* CARDS AREA */
+  .cards-area{flex:0 0 auto;padding:20px 24px;background:#fff;border-bottom:1px solid #f1f5f9;overflow-y:auto;max-height:62vh}
+  .section-head{font-size:16px;font-weight:700;color:#0f172a;margin-bottom:12px;display:flex;align-items:center;gap:8px;text-transform:uppercase;letter-spacing:.5px}
+
+  .result-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
+  .rcard{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px;border-left:5px solid #94a3b8;min-height:190px;display:flex;flex-direction:column;justify-content:space-between}
+  .rcard.flooded{border-left-color:#8b0000;background:#fef2f2}
+  .rcard.safe{border-left-color:#16a34a;background:#f0fdf4}
+  .rcard-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px}
+  .rcard-name{font-size:17px;font-weight:700;color:#1e293b;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rcard-zone{font-size:15px;color:#64748b}
+  .rcard-badge{display:inline-block;padding:5px 10px;border-radius:999px;font-size:14px;font-weight:700;color:#fff;white-space:nowrap}
+  .rcard-highlight{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:12px}
+  .rcard-highlight-box{background:rgba(255,255,255,.72);border:1px solid rgba(148,163,184,.25);border-radius:10px;padding:10px}
+  .rcard-highlight-value{font-size:24px;font-weight:800;color:#0f172a;line-height:1}
+  .rcard-highlight-label{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-top:4px}
+  .rcard-stats{display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:14px}
+  .rcard-stat{color:#64748b}
+  .rcard-stat b{color:#1e293b;font-weight:600}
+
+  /* TABLE AREA */
+  .table-area{flex:1;overflow-y:auto;background:#fff}
+  .table-wrap{min-width:100%}
+  table{width:100%;border-collapse:collapse;font-size:15px}
+  thead{position:sticky;top:0;z-index:10}
+  th{background:#0f172a;color:#94a3b8;padding:12px 14px;text-align:left;font-weight:600;text-transform:uppercase;font-size:14px;letter-spacing:.5px;white-space:nowrap}
+  td{padding:11px 14px;border-bottom:1px solid #f1f5f9;color:#374151}
+  tbody tr:hover{background:#f8fafc}
+  .badge{display:inline-block;padding:4px 8px;border-radius:3px;font-size:14px;font-weight:700;color:#fff}
+
+  /* RIGHT COL: map + assessment */
+  .right-col{display:flex;flex-direction:column;overflow:hidden}
+  #map{flex:1;min-height:0}
+  .assessment-bar{padding:16px 22px;background:#fff;border-top:1px solid #e2e8f0;flex-shrink:0}
+  .assessment-title{font-size:14px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px}
+  .assessment-text{font-size:16px;color:#1e293b;line-height:1.6}
+
+  /* INTENSITY COLORS */
+  .c-critical{background:#8b0000}
+  .c-high{background:#f97316}
+  .c-medium{background:#f59e0b}
+  .c-safe{background:#16a34a}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<div class="nav">
+  <div class="nav-brand"><span>🌊</span> Flood Analysis Report &mdash; {{ batch_id }}</div>
+  <div class="nav-actions no-print">
+    <button class="nav-btn" onclick="window.print()">Print Report</button>
+    <button class="nav-btn" onclick="window.location.href='/'">New Upload</button>
+  </div>
+</div>
+
+<!-- KPI STRIP -->
+<div class="kpi-strip">
+  <div class="kpi"><div class="kpi-num">{{ total_images }}</div><div class="kpi-lbl">Images Analyzed</div></div>
+  <div class="kpi"><div class="kpi-num" style="color:#8b0000">{{ flooded_count }}</div><div class="kpi-lbl">Flooded Zones</div></div>
+  <div class="kpi"><div class="kpi-num">{{ avg_confidence }}%</div><div class="kpi-lbl">Avg Confidence</div></div>
+  <div class="kpi"><div class="kpi-num">{{ avg_depth }} cm</div><div class="kpi-lbl">Avg Depth Est.</div></div>
+  <div class="kpi"><div class="kpi-num" id="kpiIntensity">{{ max_intensity }}</div><div class="kpi-lbl">Max Intensity</div></div>
+  <div class="kpi"><div class="kpi-num" style="font-size:15px;color:#64748b">{{ timestamp }}</div><div class="kpi-lbl">Report Generated</div></div>
+  <div class="kpi"><div class="kpi-num" style="font-size:15px;color:#64748b">{{ location }}</div><div class="kpi-lbl">Location</div></div>
+</div>
+
+<!-- BODY GRID -->
+<div class="body">
+
+  <!-- LEFT: Cards + Table -->
+  <div class="left-col">
+    <div class="cards-area" id="cardsArea">
+      <div class="section-head">Per-Image Results</div>
+      <div class="result-cards" id="resultsGrid"></div>
+    </div>
+    <div class="table-area">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Image</th>
+              <th>Zone</th>
+              <th>Flooded</th>
+              <th>Confidence</th>
+              <th>Intensity</th>
+              <th>Depth cm</th>
+              <th>Water %</th>
+              <th>Brightness</th>
+            </tr>
+          </thead>
+          <tbody id="detailTable"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Map + Assessment -->
+  <div class="right-col">
+    <div id="map"></div>
+    <div class="assessment-bar">
+      <div class="assessment-title">Assessment Summary</div>
+      <div class="assessment-text">{{ assessment_summary }}</div>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const results = {{ results_json|safe }};
+
+const IC = { CRITICAL:'#8b0000', HIGH:'#f97316', MEDIUM:'#f59e0b', SAFE:'#16a34a' };
+
+// Colour the KPI intensity chip
+const chip = document.getElementById('kpiIntensity');
+chip.style.color = IC[chip.textContent.trim()] || '#0f172a';
+
+function initMap() {
+  // Centre on centroid of all result points
+  const lats = results.map(r => r.latitude);
+  const lngs = results.map(r => r.longitude);
+  const cLat = lats.reduce((a,b)=>a+b,0)/lats.length;
+  const cLng = lngs.reduce((a,b)=>a+b,0)/lngs.length;
+
+  const map = L.map('map').setView([cLat || 12.97, cLng || 77.59], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    {attribution:'&copy; OpenStreetMap',maxZoom:19}).addTo(map);
+
+  results.forEach((r, i) => {
+    const color = IC[r.intensity] || '#94a3b8';
+    const marker = L.circleMarker([r.latitude, r.longitude], {
+      radius: 13, fillColor: color, color: '#fff',
+      weight: 2, opacity: 1, fillOpacity: 0.9
+    }).addTo(map);
+
+    marker.bindPopup(`
+      <div style="font-family:Inter,sans-serif;min-width:180px">
+        <div style="font-weight:700;font-size:13px;margin-bottom:4px">${r.zone_name}</div>
+        <div style="font-size:11px;color:#64748b;margin-bottom:8px">${r.filename}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:12px">
+          <div>Status:</div><div><b style="color:${r.flooded?'#8b0000':'#16a34a'}">${r.flooded?'Flooded':'Safe'}</b></div>
+          <div>Intensity:</div><div><b style="color:${color}">${r.intensity}</b></div>
+          <div>Confidence:</div><div><b>${r.confidence}%</b></div>
+          <div>Depth:</div><div><b>${r.estimated_depth} cm</b></div>
+          <div>Water cover:</div><div><b>${r.water_percentage}%</b></div>
+        </div>
+      </div>
+    `);
+
+    // Number label
+    const icon = L.divIcon({
+      html:`<div style="width:20px;height:20px;border-radius:50%;background:${color};color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)">${i+1}</div>`,
+      className:'', iconSize:[20,20], iconAnchor:[10,10]
+    });
+    L.marker([r.latitude, r.longitude], {icon}).addTo(map).on('click',()=>marker.openPopup());
+  });
+
+  setTimeout(() => map.invalidateSize(), 100);
+}
+
+function populateCards() {
+  const grid = document.getElementById('resultsGrid');
+  const tbody = document.getElementById('detailTable');
+
+  results.forEach((r, i) => {
+    const color = IC[r.intensity] || '#94a3b8';
+    const cls = r.flooded ? 'flooded' : 'safe';
+
+    // Card
+    const card = document.createElement('div');
+    card.className = 'rcard ' + cls;
+    card.innerHTML = `
+      <div>
+        <div class="rcard-top">
+          <div>
+            <div class="rcard-name">${r.filename}</div>
+            <div class="rcard-zone">${r.zone_name}</div>
+          </div>
+          <span class="rcard-badge" style="background:${color}">${r.intensity}</span>
+        </div>
+        <div class="rcard-highlight">
+          <div class="rcard-highlight-box">
+            <div class="rcard-highlight-value">${r.estimated_depth}</div>
+            <div class="rcard-highlight-label">Depth cm</div>
+          </div>
+          <div class="rcard-highlight-box">
+            <div class="rcard-highlight-value">${r.confidence}%</div>
+            <div class="rcard-highlight-label">Confidence</div>
+          </div>
+        </div>
+      </div>
+      <div class="rcard-stats">
+        <div class="rcard-stat">Flooded: <b style="color:${r.flooded?'#8b0000':'#16a34a'}">${r.flooded?'Yes':'No'}</b></div>
+        <div class="rcard-stat">Water cover: <b>${r.water_percentage}%</b></div>
+        <div class="rcard-stat">Brightness: <b>${r.brightness}</b></div>
+        <div class="rcard-stat">Marker zone: <b>${r.zone_name}</b></div>
+      </div>`;
+    grid.appendChild(card);
+
+    // Table row
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td style="color:#94a3b8;font-weight:500">${i+1}</td>
+      <td style="font-weight:600;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.filename}</td>
+      <td style="color:#475569">${r.zone_name}</td>
+      <td style="font-weight:600;color:${r.flooded?'#8b0000':'#16a34a'}">${r.flooded?'Flooded':'Safe'}</td>
+      <td>${r.confidence}%</td>
+      <td><span class="badge" style="background:${color}">${r.intensity}</span></td>
+      <td>${r.estimated_depth}</td>
+      <td>${r.water_percentage}%</td>
+      <td>${r.brightness}</td>`;
+    tbody.appendChild(row);
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  initMap();
+  populateCards();
+});
+</script>
+</body>
+</html>

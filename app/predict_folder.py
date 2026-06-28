@@ -2,8 +2,10 @@ from pathlib import Path
 from PIL import Image
 import pandas as pd
 import torch
-import torch.nn as nn
-from torchvision import transforms, models
+from torchvision import transforms
+
+from model_paths import get_severity_model_path
+from severity_model_loader import load_severity_model
 
 # -----------------------------
 # Config
@@ -24,15 +26,7 @@ LABELS = {
 # -----------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-model = models.resnet18(weights=None)
-model.fc = nn.Linear(model.fc.in_features, 5)
-
-model.load_state_dict(
-    torch.load("severity_model.pth", map_location=device)
-)
-
-model.to(device)
-model.eval()
+model = load_severity_model(get_severity_model_path(), device)
 
 # -----------------------------
 # Transform

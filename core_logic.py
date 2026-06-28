@@ -10,15 +10,29 @@ low confidence contributes proportionally less to the final answer.
 """
 
 import os
+from pathlib import Path
 
 import cv2
 import numpy as np
 import torch
+import torch.nn as nn
 import torchvision.models as models
 import torchvision.transforms as transforms
 from PIL import Image
+
+runtime_root = os.getenv("FLOOD_RUNTIME_ROOT", r"E:\flood_runtime")
+if os.path.exists(r"E:\\") or runtime_root != r"E:\flood_runtime":
+    os.makedirs(runtime_root, exist_ok=True)
+    os.environ.setdefault("TORCH_HOME", os.path.join(runtime_root, "torch_cache"))
+    os.environ.setdefault("HF_HOME", os.path.join(runtime_root, "hf_cache"))
+    os.environ.setdefault("ULTRALYTICS_CONFIG_DIR", os.path.join(runtime_root, "ultralytics"))
+
 from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 from ultralytics import YOLO
+
+# PyTorch 2.6+ defaults torch.load(..., weights_only=True), which breaks
+# trusted Ultralytics checkpoint loading (e.g. yolov8n.pt).
+os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
 
 # ---------------------------------------------------------------------------
 # Global model cache  (loaded once at import time)
@@ -61,6 +75,74 @@ INFERENCE_SIZE = 448
 # TripleEnginePipeline  —  unchanged classifier (kept for flood detection)
 # ---------------------------------------------------------------------------
 class TripleEnginePipeline:
+    def __init__(self):
+        self.legacy_classifier_transforms = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+        ])
+        self.binary_classifier_transforms = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+        self.flood_classifier = None
+        self.flood_classifier_kind = "legacy"
+
+        binary_candidates = []
+        binary_env = os.getenv("FLOOD_BINARY_MODEL_PATH")
+        if binary_env:
+            binary_candidates.append(binary_env)
+        binary_candidates.extend([
+            str(Path(__file__).resolve().parent / "lightweight_flood_classifier_improved.pt"),
+            str(Path.cwd() / "lightweight_flood_classifier_improved.pt"),
+            str(Path(__file__).resolve().parent / "severity_model.pth"),
+            "severity_model.pth",
+        ])
+
+        for ckpt_path in binary_candidates:
+            if not os.path.exists(ckpt_path):
+                continue
+            try:
+                model = models.mobilenet_v3_small(weights=None)
+                model.classifier = nn.Sequential(
+                    nn.Linear(576, 256),
+                    nn.BatchNorm1d(256),
+                    nn.Hardswish(inplace=True),
+                    nn.Dropout(0.2),
+                    nn.Linear(256, 128),
+                    nn.BatchNorm1d(128),
+                    nn.Hardswish(inplace=True),
+                    nn.Dropout(0.2),
+                    nn.Linear(128, 2),
+                )
+                state_dict = torch.load(ckpt_path, map_location="cpu")
+                model.load_state_dict(state_dict, strict=False)
+                model.eval()
+                self.flood_classifier = model
+                self.flood_classifier_kind = "binary"
+                break
+            except Exception:
+                self.flood_classifier = None
+
+        if self.flood_classifier is None:
+            self.flood_classifier = models.resnet18(weights=None)
+            self.flood_classifier.fc = nn.Linear(self.flood_classifier.fc.in_features, 5)
+
+            checkpoint_candidates = [
+                os.path.join(os.path.dirname(__file__), "severity_model.pth"),
+                "severity_model.pth",
+            ]
+            for ckpt_path in checkpoint_candidates:
+                if os.path.exists(ckpt_path):
+                    try:
+                        state_dict = torch.load(ckpt_path, map_location="cpu")
+                        self.flood_classifier.load_state_dict(state_dict, strict=False)
+                        break
+                    except Exception:
+                        pass
+
+            self.flood_classifier.eval()
+
     def get_water_mask(self, image_matrix):
         """
         PHASE 3 PLACEHOLDER: Semantic Segmentation Engine.
@@ -77,10 +159,15 @@ class TripleEnginePipeline:
     def predict_flood_probability(self, cv2_image_matrix):
         rgb = cv2.cvtColor(cv2_image_matrix, cv2.COLOR_BGR2RGB)
         pil = Image.fromarray(rgb)
-        tensor = self.classifier_transforms(pil).unsqueeze(0)
+        if self.flood_classifier_kind == "binary":
+            tensor = self.binary_classifier_transforms(pil).unsqueeze(0)
+        else:
+            tensor = self.legacy_classifier_transforms(pil).unsqueeze(0)
         with torch.no_grad():
-            out = self.custom_classifier(tensor)
+            out = self.flood_classifier(tensor)
             prob = torch.nn.functional.softmax(out, dim=1)
+        if prob.shape[1] == 1:
+            return float(prob[0][0])
         return float(prob[0][1])
 
 

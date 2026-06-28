@@ -1,7 +1,6 @@
 # flood_api/migrations/0002_enhanced_temporal_tracking.py
 from django.db import migrations, models
 import django.db.models.deletion
-from django.contrib.postgres.fields import ArrayField
 
 
 class Migration(migrations.Migration):
@@ -37,7 +36,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='floodinundationtelemetry',
             name='detected_reference_objects',
-            field=ArrayField(base_field=models.CharField(max_length=50), blank=True, default=list),
+            field=models.JSONField(blank=True, default=list),
         ),
         migrations.AddField(
             model_name='floodinundationtelemetry',
@@ -72,7 +71,7 @@ class Migration(migrations.Migration):
                 ('max_depth_cm', models.FloatField(blank=True, null=True)),
                 ('min_depth_cm', models.FloatField(blank=True, null=True)),
                 ('water_detected_in_images', models.IntegerField(default=0)),
-                ('detected_anchor_types', ArrayField(base_field=models.CharField(max_length=50), blank=True, default=list)),
+                ('detected_anchor_types', models.JSONField(blank=True, default=list)),
                 ('consensus_water_present', models.BooleanField(default=False)),
                 ('confidence_score', models.FloatField(default=0.0)),
                 ('camera', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='flood_api.cameralocation')),
