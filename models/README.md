@@ -1,58 +1,162 @@
 # Flood Depth Model Storage
 
-This directory is reserved for trained model checkpoints.
+Pre-trained model is now included in the repository via **Git LFS** for easy team access.
 
-## Model File Storage Strategy
+## Quick Start
 
-### For Development (Local)
-Models are NOT committed to GitHub to keep repository size small.
+### Model Available in Repository
+- **File:** `models/best_flood_model.pth`
+- **Size:** 42.72 MB (stored via Git LFS)
+- **Architecture:** EfficientNet-B0
+- **Input:** 224x224 RGB image
+- **Output:** Severity classification + depth in cm (0-100)
+- **Framework:** PyTorch
 
-When training locally:
+### Using the Pre-trained Model
+
+```python
+from src.train import build_model
+import torch
+
+# Load pre-trained model
+model = build_model()
+model.load_state_dict(torch.load('models/best_flood_model.pth'))
+model.eval()
+
+# Inference
+from PIL import Image
+image = Image.open('flood_image.jpg')
+# ... preprocess and predict
+```
+
+### Running the Inference Server
+
+```bash
+# Start LitServe inference server
+python serve.py
+
+# Server runs on http://localhost:8000
+# Automatically loads models/best_flood_model.pth
+```
+
+## For Development (Local Training)
+
+When training locally, new models save to:
 ```bash
 python src/train.py --config config/config.yaml --output models
+# Creates: models/best_flood_model.pth (overwrites if exists)
 ```
-- Saves best model to: `models/best_flood_model.pth` (not in git)
 
-### For Production (AWS S3)
-Models are stored in S3 for:
-- Version control
-- Easy sharing across team
-- Automatic download on deployment
-
-To upload trained model to S3:
+To preserve trained model:
 ```bash
-aws s3 cp best_flood_model.pth s3://your-flood-bucket/models/
+cp models/best_flood_model.pth models/best_flood_model_v2.pth
 ```
 
-### For GitHub Codespace
-Model downloads automatically on first run:
-```python
-from src.train import build_model, load_model_from_s3
-model = load_model_from_s3("best_flood_model.pth")  # Downloads if not found
+## Git LFS Details
+
+This repository uses **Git Large File Storage (Git LFS)** to handle large model files efficiently.
+
+### What is Git LFS?
+- Stores large files separately from Git history
+- Repository stores lightweight **pointer files** instead of full model
+- Full model downloads only on first `git clone`
+- Saves bandwidth and storage space
+
+### Git LFS Tracking
+```bash
+# View tracked files
+git lfs ls-files
+
+# Track new .pth files
+git lfs track "*.pth"
+git add .gitattributes
 ```
+
+### Clone Repository with Model
+
+```bash
+# Clone includes Git LFS setup
+git clone https://github.com/Mishra-Kaumod/flood-depth-estimator.git
+
+# Model is automatically downloaded
+cd flood-depth-estimator
+python serve.py  # Model ready to use!
+```
+
+## GitHub Cost Notes
+
+### Git LFS Bandwidth
+- GitHub provides **1 GB/month free** LFS bandwidth
+- Model size: 42.72 MB
+- ~23 clones/month covered by free tier
+- Paid tier: $5/month for 50 GB additional bandwidth
+
+### For High-Volume Teams
+If team exceeds free tier:
+1. Use AWS S3 for primary model storage
+2. Reference S3 download in initialization
+3. Keep LFS for backup/version control
 
 ## Model Specifications
-- Architecture: EfficientNet-B0
-- Input: 224x224 RGB image
-- Output: Depth in cm (0-100)
-- Size: ~20 MB
-- Framework: PyTorch
+
+| Property | Value |
+|----------|-------|
+| Architecture | EfficientNet-B0 |
+| Parameters | 4.37 million |
+| Input Size | 224x224 RGB |
+| Output | Depth (0-100 cm) |
+| Framework | PyTorch |
+| Training Loss | MSE |
+| Optimizer | AdamW |
+| Trained On | Flood Depth Dataset |
+
+## Distribution Methods
+
+### Method 1: Clone from GitHub (CURRENT - Recommended for teams <20 people)
+```bash
+git clone https://github.com/Mishra-Kaumod/flood-depth-estimator.git
+# Model included via Git LFS
+```
+
+### Method 2: Direct Download Link
+```bash
+wget https://github.com/Mishra-Kaumod/flood-depth-estimator/releases/download/v1.0/best_flood_model.pth
+# Or download via GitHub Releases page
+```
+
+### Method 3: AWS S3 (Production)
+```bash
+aws s3 cp s3://flood-depth-models/v1/best_flood_model.pth models/
+```
 
 ## Best Practices
-1. ✅ Never commit large model files to GitHub
-2. ✅ Use Git LFS only if model must be version-controlled
-3. ✅ Store production models in S3/cloud storage
-4. ✅ Version models with timestamps or git tags
-5. ✅ Keep .pth files in .gitignore
 
-## AWS S3 Setup
+1. ✅ Always use Git LFS for >10 MB files
+2. ✅ Commit `.gitattributes` with LFS configuration
+3. ✅ Keep production model updated with latest version
+4. ✅ Version models: `best_flood_model_v1.pth`, `v2.pth`, etc.
+5. ✅ Document model training date and dataset version
+6. ✅ Monitor Git LFS bandwidth usage (GitHub dashboard)
+
+## Troubleshooting
+
+### Model Not Downloaded After Clone
 ```bash
-# Create S3 bucket for models
-aws s3 mb s3://flood-depth-models
-
-# Upload model
-aws s3 cp models/best_flood_model.pth s3://flood-depth-models/v1/
-
-# List models
-aws s3 ls s3://flood-depth-models/
+git lfs pull  # Manually pull LFS objects
+git lfs fsck  # Verify integrity
 ```
+
+### File Shows as Pointer Instead of Model
+```bash
+git lfs install  # Reinstall Git LFS
+git lfs pull     # Pull actual file
+```
+
+### Upload Large Model
+```bash
+git lfs track models/best_flood_model.pth
+git add models/best_flood_model.pth .gitattributes
+git commit -m "Update: pre-trained model"
+git push origin main
+```
+
