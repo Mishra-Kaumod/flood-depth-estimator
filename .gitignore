@@ -28,9 +28,10 @@ __pycache__/
 datasets/
 *.zip
 
-# Models (kept in .gitignore for GitHub Codespace - download from S3 in production)
-models/*.pth
-models/*.pt
+# Models
+# Pre-trained model IS committed (via Git LFS for team use)
+!models/best_flood_model.pth
+# Other .pth files are ignored
 *.pth
 *.pt
 
