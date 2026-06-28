@@ -6,3 +6,8 @@ torch==2.2.1
 torchvision==0.17.1
 transformers==4.40.0
 numpy==1.26.4
+APScheduler==3.10.4
+redis==5.0.0
+dj-database-url==2.1.0
+python-dotenv==1.0.0
+celery==5.3.4

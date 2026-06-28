@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Random Image Upload - Flood Detection</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 30px 20px;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: white;
+            border-radius: 15px 15px 0 0;
+            padding: 40px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .header h1 {
+            color: #667eea;
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #999;
+            font-size: 14px;
+        }
+        
+        .upload-area {
+            background: white;
+            padding: 40px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .upload-zone {
+            border: 3px dashed #667eea;
+            border-radius: 10px;
+            padding: 50px;
+            text-align: center;
+            background: #f8f9ff;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 20px;
+        }
+        
+        .upload-zone:hover {
+            border-color: #764ba2;
+            background: #f0f2ff;
+        }
+        
+        .upload-zone.dragover {
+            border-color: #764ba2;
+            background: #e8ebff;
+            transform: scale(1.02);
+        }
+        
+        .upload-zone input {
+            display: none;
+        }
+        
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+        
+        .upload-text {
+            font-size: 16px;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .upload-hint {
+            font-size: 13px;
+            color: #999;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-label {
+            display: block;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .form-input,
+        .form-textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #e0e0e0;
+            border-radius: 5px;
+            font-family: inherit;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+        
+        .form-input:focus,
+        .form-textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .form-textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        
+        .file-list {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+        
+        .file-name {
+            flex: 1;
+            color: #333;
+            word-break: break-all;
+        }
+        
+        .file-size {
+            color: #999;
+            margin-left: 10px;
+            font-size: 12px;
+        }
+        
+        .remove-file {
+            background: #ff6b6b;
+            color: white;
+            border: none;
+            padding: 4px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+        
+        .remove-file:hover {
+            background: #ff5252;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 25px;
+        }
+        
+        .btn {
+            flex: 1;
+            padding: 14px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+        
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-secondary {
+            background: #e0e0e0;
+            color: #333;
+        }
+        
+        .btn-secondary:hover {
+            background: #d0d0d0;
+        }
+        
+        .footer {
+            background: white;
+            border-radius: 0 0 15px 15px;
+            padding: 20px 40px;
+            text-align: center;
+            font-size: 12px;
+            color: #999;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: none;
+        }
+        
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+            display: block;
+        }
+        
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+            display: block;
+        }
+        
+        .recent-uploads {
+            margin-top: 40px;
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .recent-uploads h3 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 16px;
+        }
+        
+        .upload-list {
+            list-style: none;
+        }
+        
+        .upload-item {
+            padding: 12px;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 13px;
+        }
+        
+        .upload-item:last-child {
+            border-bottom: none;
+        }
+        
+        .upload-info {
+            flex: 1;
+        }
+        
+        .upload-scenario {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .upload-meta {
+            color: #999;
+            font-size: 12px;
+            margin-top: 4px;
+        }
+        
+        .upload-actions {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .action-link {
+            padding: 6px 12px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 3px;
+            font-size: 12px;
+            cursor: pointer;
+            border: none;
+        }
+        
+        .action-link:hover {
+            background: #764ba2;
+        }
+        
+        @media (max-width: 600px) {
+            .header h1 {
+                font-size: 24px;
+            }
+            
+            .upload-zone {
+                padding: 30px;
+            }
+            
+            .button-group {
+                flex-direction: column;
+            }
+            
+            .action-link {
+                display: block;
+                text-align: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🌊 Upload Images for Analysis</h1>
+            <p>Upload random images and get an 11-page detailed report</p>
+        </div>
+        
+        <!-- Upload Area -->
+        <div class="upload-area">
+            <!-- Alerts -->
+            <div id="alertBox"></div>
+            
+            <!-- Upload Form -->
+            <form id="uploadForm" enctype="multipart/form-data">
+                {% csrf_token %}
+                
+                <!-- Upload Zone -->
+                <div class="upload-zone" id="uploadZone">
+                    <input type="file" id="fileInput" multiple accept="image/*">
+                    <div class="upload-icon">📸</div>
+                    <div class="upload-text">Drag and drop images here</div>
+                    <div class="upload-hint">or click to select (up to 10 images)</div>
+                </div>
+                
+                <!-- File List -->
+                <div id="fileList" class="file-list" style="display: none;"></div>
+                
+                <!-- Form Fields -->
+                <div class="form-group">
+                    <label class="form-label">Scenario Name</label>
+                    <input type="text" name="scenario_name" class="form-input" 
+                           value="Bengaluru Flood Test" required>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Location (Optional)</label>
+                    <input type="text" name="location" class="form-input"
+                           value="Bengaluru, India" placeholder="e.g., Indiranagar">
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Description (Optional)</label>
+                    <textarea name="description" class="form-textarea"
+                              placeholder="Describe your test scenario..."></textarea>
+                </div>
+                
+                <!-- Loading State -->
+                <div class="loading" id="loadingState">
+                    <div class="spinner"></div>
+                    <div>Processing images and generating report...</div>
+                </div>
+                
+                <!-- Buttons -->
+                <div class="button-group">
+                    <button type="submit" class="btn btn-primary" id="submitBtn">
+                        📤 Upload & Generate Report
+                    </button>
+                    <button type="button" class="btn btn-secondary" id="clearBtn">
+                        Clear
+                    </button>
+                </div>
+            </form>
+        </div>
+        
+        <!-- Recent Uploads -->
+        <div class="recent-uploads">
+            <h3>Recent Uploads</h3>
+            <ul class="upload-list" id="recentList">
+                <li class="upload-item">
+                    <div class="upload-info">
+                        <div style="color: #999;">Loading...</div>
+                    </div>
+                </li>
+            </ul>
+        </div>
+        
+        <!-- Footer -->
+        <div class="footer">
+            <p>Bengaluru Flood Detection System | Report Generated with Advanced ML Analysis</p>
+        </div>
+    </div>
+    
+    <script>
+        const uploadZone = document.getElementById('uploadZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const uploadForm = document.getElementById('uploadForm');
+        const loadingState = document.getElementById('loadingState');
+        const submitBtn = document.getElementById('submitBtn');
+        const alertBox = document.getElementById('alertBox');
+        
+        let selectedFiles = [];
+        
+        // Drag and drop
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('dragover');
+        });
+        
+        uploadZone.addEventListener('dragleave', () => {
+            uploadZone.classList.remove('dragover');
+        });
+        
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('dragover');
+            handleFiles(e.dataTransfer.files);
+        });
+        
+        uploadZone.addEventListener('click', () => fileInput.click());
+        
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(e.target.files);
+        });
+        
+        function handleFiles(files) {
+            const newFiles = Array.from(files);
+            
+            if (selectedFiles.length + newFiles.length > 10) {
+                showAlert('Maximum 10 images allowed', 'error');
+                return;
+            }
+            
+            selectedFiles = [...selectedFiles, ...newFiles];
+            updateFileList();
+        }
+        
+        function updateFileList() {
+            if (selectedFiles.length === 0) {
+                fileList.style.display = 'none';
+                return;
+            }
+            
+            fileList.style.display = 'block';
+            fileList.innerHTML = '';
+            
+            selectedFiles.forEach((file, index) => {
+                const size = (file.size / 1024 / 1024).toFixed(2);
+                const item = document.createElement('div');
+                item.className = 'file-item';
+                item.innerHTML = `
+                    <span class="file-name">${index + 1}. ${file.name}</span>
+                    <span class="file-size">${size} MB</span>
+                    <button type="button" class="remove-file" onclick="removeFile(${index})">Remove</button>
+                `;
+                fileList.appendChild(item);
+            });
+        }
+        
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updateFileList();
+        }
+        
+        function showAlert(message, type) {
+            alertBox.innerHTML = `<div class="alert alert-${type}">${message}</div>`;
+            setTimeout(() => {
+                alertBox.innerHTML = '';
+            }, 5000);
+        }
+        
+        uploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            if (selectedFiles.length === 0) {
+                showAlert('Please select at least one image', 'error');
+                return;
+            }
+            
+            const formData = new FormData();
+            selectedFiles.forEach(file => {
+                formData.append('images', file);
+            });
+            formData.append('scenario_name', document.querySelector('input[name="scenario_name"]').value);
+            formData.append('location', document.querySelector('input[name="location"]').value);
+            formData.append('description', document.querySelector('textarea[name="description"]').value);
+            
+            // Add CSRF token
+            formData.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
+            
+            loadingState.style.display = 'block';
+            submitBtn.disabled = true;
+            
+            try {
+                const response = await fetch(window.location.href, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showAlert(`✅ ${data.message}. Opening report...`, 'success');
+                    setTimeout(() => {
+                        window.location.href = `/report/${data.batch_id}/`;
+                    }, 2000);
+                } else {
+                    showAlert(`❌ Error: ${data.error || 'Unknown error'}`, 'error');
+                }
+            } catch (error) {
+                showAlert(`❌ Upload failed: ${error.message}`, 'error');
+            } finally {
+                loadingState.style.display = 'none';
+                submitBtn.disabled = false;
+            }
+        });
+        
+        document.getElementById('clearBtn').addEventListener('click', () => {
+            selectedFiles = [];
+            fileInput.value = '';
+            updateFileList();
+        });
+        
+        // Load recent uploads
+        async function loadRecentUploads() {
+            try {
+                const response = await fetch('/api/v1/floods/random-uploads/');
+                const data = await response.json();
+                
+                const recentList = document.getElementById('recentList');
+                if (data.results.length === 0) {
+                    recentList.innerHTML = '<li class="upload-item"><div class="upload-info"><div style="color: #999;">No uploads yet</div></div></li>';
+                    return;
+                }
+                
+                recentList.innerHTML = data.results.map(upload => `
+                    <li class="upload-item">
+                        <div class="upload-info">
+                            <div class="upload-scenario">${upload.scenario_name}</div>
+                            <div class="upload-meta">
+                                ${upload.total_images} images • 
+                                ${upload.flooded_count} flooded • 
+                                ${upload.avg_confidence}% confidence • 
+                                ${upload.created_at}
+                            </div>
+                        </div>
+                        <div class="upload-actions">
+                            <a href="/report/${upload.batch_id}/" class="action-link">View</a>
+                            <a href="/download-report/${upload.batch_id}/" class="action-link">Download</a>
+                        </div>
+                    </li>
+                `).join('');
+            } catch (error) {
+                console.error('Error loading uploads:', error);
+            }
+        }
+        
+        // Load on page load
+        loadRecentUploads();
+    </script>
+</body>
+</html>

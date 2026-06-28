@@ -1,0 +1,47 @@
+﻿ARCHIVED FILES MANIFEST
+=======================
+Timestamp: 2026-06-28 14:44:47
+
+The following legacy files have been archived to preserve institutional knowledge.
+New production code is in:
+  - config/config.yaml (Layer 1)
+  - src/dataset.py (Layer 2)
+  - src/train.py (Layer 3)
+  - serve.py (Layer 4)
+
+LEGACY FILES:
+- retrain_flood_classifier.py
+- app/predict_image_v2.py
+- app/predict_image.py
+- core_logic.py
+- water_detection.py
+- final_water_detection_system.py
+- improved_water_detector.py
+- evaluate_model_readiness.py
+- label_images_with_ai_assist.py
+
+
+REASON FOR ARCHIVAL:
+- Monolithic design (training + inference coupled)
+- Hardcoded hyperparameters throughout codebase
+- No S3 integration
+- No production-grade error handling
+- Not AWS-native
+
+NEW ARCHITECTURE BENEFITS:
+✅ Modular design (4 independent layers)
+✅ Centralized configuration (YAML)
+✅ AWS S3 data pipeline
+✅ Production-grade observability
+✅ Scalable inference (ECS/Lambda)
+✅ Automated early stopping
+✅ Checkpoint management
+
+RESTORATION:
+To restore archived files:
+  git checkout HEAD -- archive/*
+
+REFERENCES:
+- PRODUCTION_ARCHITECTURE.md (complete design)
+- QUICKSTART.md (execution guide)
+- config/config.yaml (parameter definitions)

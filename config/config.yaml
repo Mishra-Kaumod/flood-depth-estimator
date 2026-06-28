@@ -1,0 +1,200 @@
+# BENGALURU FLOOD DEPTH ESTIMATOR - PRODUCTION CONFIG
+# Centralized configuration for training, inference, and deployment
+# Designed for AWS EC2, S3, ECR/ECS, and Lambda environments
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TRAINING CONFIGURATION (EC2 / AWS Trainium)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+training:
+  model_type: "efficientnet_b0"
+  backbone_weights: "imagenet"
+  
+  # Image preprocessing
+  image_size: [224, 224]
+  normalization:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+  
+  # Data augmentation (training phase only)
+  augmentation:
+    horizontal_flip_prob: 0.5
+    rotation_degrees: 15
+    color_jitter:
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+  
+  # Optimizer & Loss
+  optimizer:
+    name: "AdamW"
+    learning_rate: 0.001
+    weight_decay: 0.0001
+  
+  loss_function: "MSELoss"
+  
+  # Training hyperparameters
+  batch_size: 32
+  epochs: 20
+  num_workers: 4
+  pin_memory: true
+  
+  # Learning rate scheduler
+  lr_scheduler:
+    name: "ReduceLROnPlateau"
+    mode: "min"
+    factor: 0.5
+    patience: 3
+    min_lr: 0.00001
+  
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 5
+    min_delta: 0.001
+    metric: "val_loss"
+  
+  # Model checkpointing
+  checkpoint_dir: "models"
+  best_model_path: "models/best_flood_model.pth"
+  save_frequency: 1  # save after every N epochs
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# DATA INGESTION CONFIGURATION (S3 / Local)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+data:
+  # Local dataset paths (fallback for development)
+  train_dir: "flood_dataset/train"
+  val_dir: "flood_dataset/val"
+  test_dir: "flood_dataset/test"
+  
+  # AWS S3 paths (production)
+  s3_bucket: "bengaluru-flood-datasets"
+  s3_train_prefix: "train/"
+  s3_val_prefix: "val/"
+  s3_test_prefix: "test/"
+  
+  # Data format
+  supported_formats: [".jpg", ".jpeg", ".png", ".gif", ".bmp"]
+  
+  # Filtering
+  min_image_size: [100, 100]
+  max_image_size: [4000, 4000]
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# INFERENCE & SERVING CONFIGURATION (ECS/Fargate, Lambda)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+inference:
+  model_path: "models/best_flood_model.pth"
+  device: "cpu"  # "cpu" or "cuda"
+  precision: "float32"  # "float32" or "float16" for quantization
+  
+  # LitServe Configuration
+  litserve:
+    host: "0.0.0.0"
+    port: 8000
+    
+    # Batching
+    max_batch_size: 8
+    batch_timeout: 0.05  # milliseconds
+    
+    # Workers & concurrency
+    workers: 4
+    accelerator: "cpu"  # "cpu" or "gpu"
+    
+    # Request handling
+    max_request_size: 52428800  # 50MB
+    request_timeout: 30  # seconds
+  
+  # Output configuration
+  output_format: "json"
+  confidence_threshold: 0.5
+  
+  # Health check
+  health_check_interval: 30  # seconds
+  ready_timeout: 60  # seconds on startup
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# AWS DEPLOYMENT CONFIGURATION
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+aws:
+  region: "ap-south-1"
+  
+  # EC2 Training Instance
+  ec2_instance_type: "p3.2xlarge"  # GPU-enabled for training
+  ec2_ami: "ami-0c55b159cbfafe1f0"  # Ubuntu 20.04 LTS
+  ec2_security_group: "flood-ml-sg"
+  
+  # S3 Artifact Storage
+  s3_artifacts_bucket: "bengaluru-flood-models"
+  s3_model_prefix: "production/best_flood_model.pth"
+  s3_logs_prefix: "training-logs/"
+  
+  # ECR Docker Registry
+  ecr_repository: "bengaluru-flood-inference"
+  ecr_tag: "latest"
+  
+  # ECS on Fargate (Inference)
+  ecs_cluster: "flood-inference-cluster"
+  ecs_service: "flood-depth-predictor"
+  ecs_task_definition: "flood-inference-task"
+  ecs_cpu: "2048"  # 2 vCPU
+  ecs_memory: "4096"  # 4GB RAM
+  ecs_container_port: 8000
+  ecs_desired_count: 2
+  
+  # Lambda (Batch Inference)
+  lambda_function_name: "flood-depth-batch-processor"
+  lambda_memory: 3008  # MB
+  lambda_timeout: 900  # 15 minutes
+  lambda_concurrent_executions: 10
+  
+  # CloudWatch Logging
+  cloudwatch_log_group: "/aws/flood-depth-estimator"
+  cloudwatch_log_retention: 30  # days
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# MONITORING & LOGGING
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+monitoring:
+  log_level: "INFO"
+  log_dir: "logs"
+  
+  # Metrics
+  track_training_loss: true
+  track_validation_loss: true
+  track_inference_latency: true
+  track_batch_accuracy: true
+  
+  # Visualization
+  tensorboard_enabled: true
+  tensorboard_log_dir: "runs"
+  
+  # Alerts
+  alert_on_val_loss_plateau: true
+  alert_on_inference_latency_spike: true
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ENVIRONMENT-SPECIFIC OVERRIDES
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+environments:
+  development:
+    batch_size: 8
+    epochs: 2
+    early_stopping.patience: 2
+    data.use_local: true
+    litserve.workers: 1
+  
+  staging:
+    batch_size: 16
+    epochs: 10
+    early_stopping.patience: 3
+    data.use_s3: false
+    litserve.workers: 2
+  
+  production:
+    batch_size: 32
+    epochs: 20
+    early_stopping.patience: 5
+    data.use_s3: true
+    litserve.workers: 4
+    aws.ecs_desired_count: 3

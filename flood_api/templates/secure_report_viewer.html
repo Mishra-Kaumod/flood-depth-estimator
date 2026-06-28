@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🌊 Flood Detection Report - {{ batch.batch_id }}</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        /* HEADER */
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 20px;
+            align-items: start;
+        }
+
+        @media (max-width: 768px) {
+            .header {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 14px;
+            opacity: 0.95;
+            margin: 5px 0;
+        }
+
+        .header .badge {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            display: inline-block;
+            margin-top: 10px;
+        }
+
+        .toolbar {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        /* CONTENT */
+        .content {
+            padding: 30px;
+        }
+
+        /* SUMMARY CARDS */
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .summary-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .summary-card .value {
+            font-size: 32px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+
+        .summary-card .label {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+
+        /* MAP SECTION */
+        .section {
+            margin-bottom: 30px;
+        }
+
+        .section h2 {
+            color: #333;
+            font-size: 20px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        #map {
+            width: 100%;
+            height: 300px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+
+        .map-info {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            font-size: 13px;
+        }
+
+        .map-info strong {
+            color: #667eea;
+        }
+
+        /* RESULTS TABLE */
+        .table-container {
+            overflow-x: auto;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+        }
+
+        thead {
+            background: #f5f5f5;
+            border-bottom: 2px solid #ddd;
+        }
+
+        th {
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #333;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #eee;
+            font-size: 13px;
+        }
+
+        tr:hover {
+            background: #f9f9f9;
+        }
+
+        /* INTENSITY BADGES */
+        .intensity-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 12px;
+            color: white;
+            text-align: center;
+            min-width: 100px;
+        }
+
+        .intensity-SAFE {
+            background: #228B22;
+        }
+
+        .intensity-MEDIUM {
+            background: #FFD700;
+            color: #333;
+        }
+
+        .intensity-HIGH {
+            background: #FF4500;
+        }
+
+        .intensity-CRITICAL {
+            background: #8B0000;
+        }
+
+        /* STATUS BADGE */
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-flood {
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        .status-dry {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        /* CONFIDENCE BAR */
+        .confidence-bar {
+            width: 100%;
+            height: 6px;
+            background: #e0e0e0;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: var(--width, 0%);
+        }
+
+        /* FOOTER */
+        .footer {
+            background: #f5f5f5;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #999;
+            border-top: 1px solid #ddd;
+        }
+
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        /* PRINT STYLES */
+        @media print {
+            body {
+                background: white;
+                padding: 0;
+            }
+
+            .toolbar,
+            .footer {
+                display: none;
+            }
+
+            .container {
+                box-shadow: none;
+            }
+
+            .summary-grid {
+                page-break-inside: avoid;
+            }
+
+            table {
+                page-break-inside: avoid;
+            }
+        }
+
+        /* RESPONSIVE */
+        @media (max-width: 768px) {
+            .content {
+                padding: 15px;
+            }
+
+            th, td {
+                padding: 8px;
+                font-size: 12px;
+            }
+
+            .summary-card .value {
+                font-size: 24px;
+            }
+
+            #map {
+                height: 250px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- HEADER WITH TOOLBAR -->
+        <div class="header">
+            <div>
+                <h1>🌊 Flood Detection Analysis Report</h1>
+                <p><strong>Batch ID:</strong> {{ batch.batch_id }}</p>
+                <p><strong>Location:</strong> {{ batch.location }} ({{ batch.latitude|floatformat:4 }}°N, {{ batch.longitude|floatformat:4 }}°E)</p>
+                <p><strong>Camera:</strong> {{ batch.camera_id }}</p>
+                <p><strong>Generated:</strong> {{ batch.created_at|date:"Y-m-d H:i:s" }}</p>
+                <span class="badge">🔒 Secure | ✅ Verified</span>
+            </div>
+            <div class="toolbar">
+                <button class="btn" onclick="window.print()">
+                    🖨️ Print (Ctrl+P)
+                </button>
+                <a href="download_report_secure/{{ batch.batch_id }}/" class="btn">
+                    📥 Download
+                </a>
+                <a href="/random-upload/" class="btn">
+                    ➕ New Upload
+                </a>
+            </div>
+        </div>
+
+        <div class="content">
+            <!-- SUMMARY STATISTICS -->
+            <div class="section">
+                <h2>📊 Summary Statistics</h2>
+                <div class="summary-grid">
+                    <div class="summary-card">
+                        <div class="label">Total Images</div>
+                        <div class="value">{{ batch.total_images }}</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="label">Flooded</div>
+                        <div class="value">{{ batch.flooded_count }}</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="label">Avg Confidence</div>
+                        <div class="value">{{ batch.avg_confidence|floatformat:1 }}%</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="label">Avg Depth</div>
+                        <div class="value">{{ batch.avg_depth_cm|floatformat:1 }} cm</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- MAP SECTION -->
+            <div class="section">
+                <h2>📍 Location Map</h2>
+                <div id="map"></div>
+                <div class="map-info">
+                    <strong>📌 Location:</strong> {{ batch.location }}<br>
+                    <strong>🧭 Coordinates:</strong> {{ batch.latitude|floatformat:6 }}°N, {{ batch.longitude|floatformat:6 }}°E<br>
+                    <strong>📷 Camera ID:</strong> {{ batch.camera_id }}<br>
+                    <strong>⏰ Timestamp:</strong> {{ batch.created_at|date:"Y-m-d H:i:s" }}
+                </div>
+            </div>
+
+            <!-- RESULTS TABLE -->
+            <div class="section">
+                <h2>📋 Image Analysis Results</h2>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Filename</th>
+                                <th>Status</th>
+                                <th>Confidence</th>
+                                <th>Intensity</th>
+                                <th>Depth (cm)</th>
+                                <th>Brightness</th>
+                                <th>Contrast</th>
+                                <th>Water %</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for result in results %}
+                                {% if result.status == "success" %}
+                                <tr>
+                                    <td>{{ result.image_num }}</td>
+                                    <td>{{ result.filename }}</td>
+                                    <td>
+                                        {% if result.analysis.is_flood %}
+                                            <span class="status-badge status-flood">🌊 FLOOD</span>
+                                        {% else %}
+                                            <span class="status-badge status-dry">✅ DRY</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {{ result.analysis.confidence|floatformat:1 }}%
+                                        <div class="confidence-bar">
+                                            <div class="confidence-fill" style="--width: {{ result.analysis.confidence }}%"></div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="intensity-badge intensity-{{ result.analysis.intensity }}">
+                                            {{ result.analysis.intensity }}
+                                        </span>
+                                    </td>
+                                    <td>{{ result.analysis.depth_cm }}</td>
+                                    <td>{{ result.analysis.brightness|floatformat:1 }}</td>
+                                    <td>{{ result.analysis.contrast|floatformat:1 }}</td>
+                                    <td>{{ result.analysis.water_pixels|floatformat:1 }}%</td>
+                                </tr>
+                                {% endif %}
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- INTENSITY LEGEND -->
+            <div class="section">
+                <h2>🎨 Intensity Scale</h2>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px;">
+                    <div style="padding: 15px; background: #e8f5e9; border-radius: 8px;">
+                        <span class="intensity-badge intensity-SAFE" style="display: block; margin-bottom: 10px;">🟢 SAFE</span>
+                        <p style="font-size: 12px; color: #666;">No flood detected. Low water pixels.</p>
+                    </div>
+                    <div style="padding: 15px; background: #fff8e1; border-radius: 8px;">
+                        <span class="intensity-badge intensity-MEDIUM" style="display: block; margin-bottom: 10px;">🟡 MEDIUM</span>
+                        <p style="font-size: 12px; color: #666;">Uncertain conditions. Requires verification.</p>
+                    </div>
+                    <div style="padding: 15px; background: #ffe0b2; border-radius: 8px;">
+                        <span class="intensity-badge intensity-HIGH" style="display: block; margin-bottom: 10px;">🟠 HIGH</span>
+                        <p style="font-size: 12px; color: #666;">Significant flooding detected. 80-90% confidence.</p>
+                    </div>
+                    <div style="padding: 15px; background: #ffebee; border-radius: 8px;">
+                        <span class="intensity-badge intensity-CRITICAL" style="display: block; margin-bottom: 10px;">🔴 CRITICAL</span>
+                        <p style="font-size: 12px; color: #666;">Severe flooding. >90% confidence. Immediate action needed.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>🌊 Bengaluru Flood Detection System | Report ID: {{ batch.batch_id }}</p>
+            <p style="margin-top: 10px; color: #bbb;">This report is secure and contains sensitive geospatial information. Do not share publicly without authorization.</p>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // Initialize map
+        const map = L.map('map').setView([{{ batch.latitude }}, {{ batch.longitude }}], 13);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19
+        }).addTo(map);
+
+        // Add marker
+        L.marker([{{ batch.latitude }}, {{ batch.longitude }}], {
+            title: '{{ batch.location }}'
+        }).addTo(map)
+            .bindPopup(`
+                <strong>{{ batch.location }}</strong><br>
+                Camera: {{ batch.camera_id }}<br>
+                Flooded: {{ batch.flooded_count }}/{{ batch.total_images }}
+            `)
+            .openPopup();
+
+        // Print functionality
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'p') {
+                e.preventDefault();
+                window.print();
+            }
+        });
+    </script>
+</body>
+</html>

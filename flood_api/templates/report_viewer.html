@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ scenario_name }} - Report</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            line-height: 1.6;
+        }
+        
+        .report-container {
+            width: 100%;
+            max-width: 100%;
+            margin: 0 auto;
+        }
+        
+        .report-toolbar {
+            background: white;
+            padding: 15px 25px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        
+        .toolbar-left {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+        
+        .toolbar-right {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        .report-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .report-status {
+            font-size: 13px;
+            color: #999;
+        }
+        
+        .toolbar-btn {
+            padding: 8px 16px;
+            border: 1px solid #e0e0e0;
+            background: white;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        .toolbar-btn:hover {
+            background: #f5f5f5;
+            border-color: #667eea;
+            color: #667eea;
+        }
+        
+        .toolbar-btn-primary {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        
+        .toolbar-btn-primary:hover {
+            background: #764ba2;
+            border-color: #764ba2;
+        }
+        
+        .report-content {
+            padding: 20px;
+            background: white;
+            margin: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .report-iframe {
+            width: 100%;
+            height: 100vh;
+            border: none;
+            border-radius: 8px;
+        }
+        
+        .page {
+            page-break-after: always;
+            break-after: page;
+        }
+        
+        .page-indicator {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #333;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 5px;
+            font-size: 12px;
+            z-index: 999;
+        }
+        
+        @media print {
+            .report-toolbar {
+                position: static;
+                box-shadow: none;
+                display: none;
+            }
+            
+            .report-content {
+                margin: 0;
+                padding: 0;
+                box-shadow: none;
+                background: transparent;
+            }
+            
+            .page-indicator {
+                display: none;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .report-toolbar {
+                flex-direction: column;
+                gap: 10px;
+            }
+            
+            .toolbar-left,
+            .toolbar-right {
+                width: 100%;
+                justify-content: space-between;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Toolbar -->
+    <div class="report-toolbar">
+        <div class="toolbar-left">
+            <div>
+                <div class="report-title">{{ scenario_name }}</div>
+                <div class="report-status">Report ID: {{ batch_id }}</div>
+            </div>
+        </div>
+        <div class="toolbar-right">
+            <button class="toolbar-btn" onclick="window.print()">🖨️ Print</button>
+            <a href="/download-report/{{ batch_id }}/" class="toolbar-btn toolbar-btn-primary">⬇️ Download</a>
+            <a href="/random-upload/" class="toolbar-btn">← Back</a>
+        </div>
+    </div>
+    
+    <!-- Report Content -->
+    <div class="report-content">
+        {{ html_content | safe }}
+    </div>
+    
+    <!-- Page Indicator -->
+    <div class="page-indicator">
+        <span id="pageNum">Page 1</span> / <span id="pageTotal">11</span>
+    </div>
+    
+    <script>
+        // Update page counter
+        function updatePageIndicator() {
+            const pages = document.querySelectorAll('.page').length || 11;
+            document.getElementById('pageTotal').textContent = pages;
+        }
+        
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'p' && e.ctrlKey) {
+                e.preventDefault();
+                window.print();
+            }
+            if (e.key === 'd' && e.ctrlKey) {
+                e.preventDefault();
+                window.location.href = '/download-report/{{ batch_id }}/';
+            }
+        });
+        
+        // Initialize
+        updatePageIndicator();
+    </script>
+</body>
+</html>
