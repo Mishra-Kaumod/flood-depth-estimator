@@ -111,7 +111,10 @@ class FloodDataset(Dataset):
         train_cfg = config.get("training", {})
         
         self.image_size = tuple(train_cfg.get("image_size", [224, 224]))
-        self.normalization = train_cfg.get("normalization", {
+        
+        # Try to load dataset-specific normalization first (from compute_stats.py)
+        # Fall back to ImageNet defaults if not found
+        self.normalization = data_cfg.get("normalization") or train_cfg.get("normalization", {
             "mean": [0.485, 0.456, 0.406],
             "std": [0.229, 0.224, 0.225]
         })
@@ -145,12 +148,33 @@ class FloodDataset(Dataset):
         if self.dataset_type == "train":
             aug_cfg = train_cfg.get("augmentation", {})
             augmentations = [
+                # Geometric augmentations
                 transforms.RandomHorizontalFlip(aug_cfg.get("horizontal_flip_prob", 0.5)),
                 transforms.RandomRotation(aug_cfg.get("rotation_degrees", 15)),
+                transforms.RandomPerspective(
+                    distortion_scale=aug_cfg.get("perspective_distortion", 0.3),
+                    p=0.5
+                ),
+                
+                # Color augmentations
                 transforms.ColorJitter(
                     brightness=aug_cfg.get("color_jitter", {}).get("brightness", 0.2),
                     contrast=aug_cfg.get("color_jitter", {}).get("contrast", 0.2),
                     saturation=aug_cfg.get("color_jitter", {}).get("saturation", 0.2),
+                    hue=aug_cfg.get("color_jitter", {}).get("hue", 0.1)
+                ),
+                
+                # Blur augmentation
+                transforms.GaussianBlur(
+                    kernel_size=aug_cfg.get("gaussian_blur_kernel", 3),
+                    sigma=aug_cfg.get("gaussian_blur_sigma", (0.1, 2.0))
+                ),
+                
+                # Noise-like augmentation: random erasing
+                transforms.RandomAffine(
+                    degrees=0,
+                    translate=(0.1, 0.1),
+                    scale=(0.9, 1.1)
                 )
             ]
             # Insert augmentations before tensor conversion
@@ -159,6 +183,12 @@ class FloodDataset(Dataset):
                 [
                     transforms.Resize(self.image_size),
                     transforms.ToTensor(),
+                    # RandomErasing after tensor conversion
+                    transforms.RandomErasing(
+                        p=0.2,
+                        scale=(0.02, 0.1),
+                        ratio=(0.3, 3.0)
+                    ),
                     transforms.Normalize(
                         mean=self.normalization["mean"],
                         std=self.normalization["std"]

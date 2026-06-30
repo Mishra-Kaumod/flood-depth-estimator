@@ -13,7 +13,7 @@ from datetime import datetime
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau, OneCycleLR
 from torchvision import models
 from tqdm import tqdm
 import numpy as np
@@ -144,11 +144,16 @@ class Trainer:
             weight_decay=opt_cfg.get("weight_decay", 0.0001)
         )
         
-        # Loss function
-        self.criterion = nn.MSELoss()
+        # Loss function: HuberLoss for robustness against outliers
+        # MSELoss penalizes large errors too heavily; HuberLoss is more balanced
+        # delta=5.0: threshold where loss transitions from quadratic to linear
+        self.criterion = nn.HuberLoss(delta=5.0)
         
         # Learning rate scheduler
         scheduler_cfg = train_cfg.get("lr_scheduler", {})
+        self.scheduler_name = scheduler_cfg.get("name", "ReduceLROnPlateau")
+        
+        # Initialize ReduceLROnPlateau (will be used with validation)
         self.scheduler = ReduceLROnPlateau(
             self.optimizer,
             mode=scheduler_cfg.get("mode", "min"),
@@ -157,6 +162,11 @@ class Trainer:
             min_lr=scheduler_cfg.get("min_lr", 0.00001),
             verbose=True
         )
+        
+        # OneCycleLR will be initialized later when we know epochs and steps
+        self.onecycle_scheduler = None
+        self.max_lr = opt_cfg.get("learning_rate", 0.001)
+
         
         # Early stopping
         es_cfg = train_cfg.get("early_stopping", {})
@@ -193,6 +203,10 @@ class Trainer:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
+            
+            # OneCycleLR scheduler step (per batch)
+            if self.onecycle_scheduler is not None:
+                self.onecycle_scheduler.step()
             
             total_loss += loss.item()
             pbar.set_postfix({"loss": loss.item()})
@@ -243,6 +257,21 @@ class Trainer:
         """Run full training loop."""
         logger.info(f"Starting training for {epochs} epochs")
         
+        # Initialize OneCycleLR if selected
+        if self.scheduler_name == "OneCycleLR":
+            steps_per_epoch = len(train_loader)
+            total_steps = steps_per_epoch * epochs
+            logger.info(f"Using OneCycleLR: {total_steps} total steps ({steps_per_epoch} per epoch)")
+            
+            self.onecycle_scheduler = OneCycleLR(
+                self.optimizer,
+                max_lr=self.max_lr,
+                total_steps=total_steps,
+                pct_start=0.3,  # First 30% is warm-up
+                anneal_strategy='cos',
+                cycle_momentum=True
+            )
+        
         for epoch in range(1, epochs + 1):
             logger.info(f"\n{'='*60}")
             logger.info(f"EPOCH {epoch}/{epochs}")
@@ -273,8 +302,9 @@ class Trainer:
             # Save checkpoint
             self.save_checkpoint(epoch, is_best=is_best)
             
-            # LR scheduler step
-            self.scheduler.step(val_loss)
+            # LR scheduler step (only for ReduceLROnPlateau)
+            if self.scheduler_name != "OneCycleLR":
+                self.scheduler.step(val_loss)
             
             # Early stopping check
             if self.early_stopping(val_loss, epoch):
