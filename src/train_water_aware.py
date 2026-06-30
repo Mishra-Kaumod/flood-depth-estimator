@@ -13,6 +13,7 @@ from datetime import datetime
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau, OneCycleLR
@@ -179,26 +180,42 @@ class WaterAwareTrainer:
         Returns:
             Masked loss value
         """
-        # Count valid water pixels
+        # This project currently trains a scalar depth regressor (B, 1),
+        # not a per-pixel depth map. In that case, use water coverage to
+        # weight each sample's scalar loss instead of spatial masking.
+        if outputs.dim() <= 2:
+            # Shape: (B,)
+            sample_weights = masks.float().mean(dim=(1, 2, 3))
+
+            # Compute per-sample Huber loss from scalar predictions.
+            per_sample_loss = F.huber_loss(
+                outputs.view(-1),
+                targets.view(-1),
+                reduction="none",
+                delta=5.0,
+            )
+
+            # If all images appear dry, fall back to plain mean loss.
+            if torch.all(sample_weights <= 1e-6):
+                return per_sample_loss.mean()
+
+            weighted_loss = (per_sample_loss * sample_weights).sum() / sample_weights.sum().clamp(min=1e-6)
+            return weighted_loss
+
+        # Per-pixel path (for segmentation-style outputs).
         valid_pixels = masks.sum()
-        
         if valid_pixels < 10:
-            # Too few water pixels, skip this image
             return torch.tensor(0.0, device=self.device, requires_grad=True)
-        
-        # Apply mask
+
+        # Match spatial resolution before masking.
+        if outputs.shape[2:] != masks.shape[2:]:
+            masks = F.interpolate(masks.float(), size=outputs.shape[2:], mode="nearest")
+
         masked_outputs = outputs * masks
         masked_targets = targets * masks
-        
-        # Calculate loss
         masked_loss = self.criterion(masked_outputs, masked_targets)
-        
-        # Normalize by number of valid pixels
-        # Ensures consistent loss scale across different water coverages
         total_pixels = outputs.numel()
-        normalized_loss = masked_loss * (total_pixels / valid_pixels.clamp(min=1))
-        
-        return normalized_loss
+        return masked_loss * (total_pixels / valid_pixels.clamp(min=1))
     
     def train_epoch(self, train_loader) -> tuple:
         """
