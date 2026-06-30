@@ -214,9 +214,25 @@ class FloodDataset(Dataset):
         """Load image paths and depth labels from local filesystem."""
         supported_formats = self.config.get("data", {}).get("supported_formats", [".jpg", ".png"])
         image_paths = []
-        
+
         dataset_path = Path(dataset_dir)
-        if not dataset_path.exists():
+        candidate_dirs = [dataset_path]
+
+        # Colab notebook uploads to data/train/images and data/val/images.
+        # Keep those working even if the config still points at flood_dataset/*.
+        if dataset_path.parts and dataset_path.parts[0] == "flood_dataset":
+            split_name = dataset_path.name
+            candidate_dirs = [
+                Path("data") / split_name / "images",
+                Path("data") / split_name,
+                dataset_path,
+            ]
+
+        for candidate in candidate_dirs:
+            if candidate.exists():
+                dataset_path = candidate
+                break
+        else:
             logger.warning(f"Dataset directory not found: {dataset_dir}")
             return []
         
