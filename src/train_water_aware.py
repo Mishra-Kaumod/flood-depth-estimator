@@ -7,6 +7,7 @@ import os
 import yaml
 import logging
 import argparse
+import sys
 from pathlib import Path
 from datetime import datetime
 
@@ -18,6 +19,10 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau, OneCycleLR
 from torchvision import models
 from tqdm import tqdm
 import numpy as np
+
+# Ensure the repo root is importable when running this file directly.
+if __package__ is None or __package__ == "":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Local imports
 from src.dataset import load_config, create_dataloaders
