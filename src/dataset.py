@@ -10,9 +10,16 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 from PIL import Image
-import boto3
-from botocore.exceptions import ClientError
 import logging
+
+try:
+    import boto3
+    from botocore.exceptions import ClientError
+    BOTO3_AVAILABLE = True
+except ImportError:
+    boto3 = None
+    ClientError = Exception
+    BOTO3_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +47,11 @@ class S3DataHandler:
     """Interface for reading images from AWS S3."""
     
     def __init__(self, bucket: str, region: str = "ap-south-1"):
+        if not BOTO3_AVAILABLE:
+            raise ImportError(
+                "boto3 is required for use_s3=True. Install boto3 and botocore "
+                "or run with local filesystem data."
+            )
         self.bucket = bucket
         self.region = region
         self.s3_client = boto3.client("s3", region_name=region)
