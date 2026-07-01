@@ -1,0 +1,8 @@
+# Minimal requirements to run the local Flask test server
+# Install with: pip install -r requirements-local.txt
+
+flask>=2.3.0
+torch>=2.0.0
+torchvision>=0.15.0
+pillow>=9.5.0
+pyyaml>=6.0

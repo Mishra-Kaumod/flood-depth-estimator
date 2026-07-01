@@ -29,8 +29,9 @@ datasets/
 *.zip
 
 # Models
-# Pre-trained model IS committed (via Git LFS for team use)
+# Committed models via Git LFS for team use
 !models/best_flood_model.pth
+!models/best_flood_model_water_aware.pth
 # Other .pth files are ignored
 *.pth
 *.pt
