@@ -103,7 +103,6 @@ class WaterAwareTrainer:
             factor=scheduler_cfg.get("factor", 0.5),
             patience=scheduler_cfg.get("patience", 3),
             min_lr=scheduler_cfg.get("min_lr", 0.00001),
-            verbose=True
         )
         
         self.onecycle_scheduler = None
