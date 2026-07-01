@@ -72,6 +72,16 @@ def load_model() -> nn.Module:
         epoch = checkpoint.get("epoch", "?")
         val_loss = checkpoint.get("val_loss", checkpoint.get("best_val_loss", "?"))
         logger.info(f"✅ Loaded water-aware model — epoch {epoch}, val_loss {val_loss}")
+        # Detect label collapse: val_loss near zero = model always predicted 0
+        if isinstance(val_loss, (int, float)) and val_loss < 1e-5:
+            logger.error(
+                "=" * 65 + "\n"
+                "  ⚠️  LABEL COLLAPSE DETECTED\n"
+                f"  val_loss={val_loss:.2e} ≈ 0  →  model was trained on all-zero labels\n"
+                "  All predictions will be ~0 cm. Retrain with labeled data.\n"
+                "  See Flood_Depth_Google_Colab.ipynb Step 7 for how to create labels.csv\n"
+                + "=" * 65
+            )
     return model
 
 def depth_to_severity(depth_cm: float) -> dict:
@@ -270,10 +280,21 @@ let nextId = 1;
 // ─── Model Status ─────────────────────────────────────────
 fetch('/health').then(r=>r.json()).then(d=>{
   const ok = d.status === 'ok' && d.model_loaded;
-  document.getElementById('mdot').style.background = ok ? '#4ade80' : '#f87171';
-  document.getElementById('mstat').textContent = ok
-    ? `✅ ${d.model} · ${d.device}`
-    : '⚠️ Model not loaded';
+  if (d.warning === 'label_collapse') {
+    document.getElementById('mdot').style.background = '#f87171';
+    document.getElementById('mstat').textContent = '⚠️ Model needs retraining — trained on unlabeled data (outputs 0cm)';
+    // Show a banner
+    const banner = document.createElement('div');
+    banner.style.cssText = 'background:#fef2f2;border:1.5px solid #fca5a5;color:#991b1b;padding:8px 16px;font-size:.82rem;text-align:center;flex-shrink:0';
+    banner.innerHTML = '⚠️ <b>Label Collapse:</b> Current model was trained with all-zero labels and always predicts 0 cm. ' +
+      'Retrain using the <b>Flood_Depth_Google_Colab.ipynb</b> — complete <b>Step 7</b> to create <code>labels.csv</code> before training.';
+    document.querySelector('.hdr').insertAdjacentElement('afterend', banner);
+  } else {
+    document.getElementById('mdot').style.background = ok ? '#4ade80' : '#f87171';
+    document.getElementById('mstat').textContent = ok
+      ? `✅ ${d.model} · ${d.device}`
+      : '⚠️ Model not loaded';
+  }
 }).catch(()=>{ document.getElementById('mstat').textContent = '❌ Server error'; });
 
 // ─── Upload Map init ──────────────────────────────────────
@@ -635,8 +656,24 @@ def predict():
 
 @app.get("/health")
 def health():
-    return jsonify({"status": "ok", "model": str(MODEL_PATH.name),
-                    "model_loaded": MODEL_PATH.exists(), "device": str(DEVICE)})
+    ckpt_ok = MODEL_PATH.exists()
+    warning = None
+    if ckpt_ok:
+        try:
+            import torch as _t
+            ck = _t.load(MODEL_PATH, map_location="cpu", weights_only=False)
+            vl = ck.get("best_val_loss", ck.get("val_loss", 1.0)) if isinstance(ck, dict) else 1.0
+            if isinstance(vl, float) and vl < 1e-5:
+                warning = "label_collapse"
+        except Exception:
+            pass
+    return jsonify({
+        "status": "ok",
+        "model": str(MODEL_PATH.name),
+        "model_loaded": ckpt_ok,
+        "device": str(DEVICE),
+        "warning": warning,
+    })
 
 
 if __name__ == "__main__":

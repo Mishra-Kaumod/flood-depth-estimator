@@ -211,7 +211,14 @@ class FloodDataset(Dataset):
         return transforms.Compose(base_transforms)
     
     def _load_local_images(self, dataset_dir: str) -> List[Tuple[str, int]]:
-        """Load image paths and depth labels from local filesystem."""
+        """Load image paths and depth labels from local filesystem.
+
+        Label priority (highest first):
+        1. labels.csv  in the dataset folder  → filename,depth_cm
+        2. depth(\d+)cm pattern in filename   → image_depth25cm.jpg
+        3. Default 0 cm (emits a loud warning)
+        """
+        import re, csv
         supported_formats = self.config.get("data", {}).get("supported_formats", [".jpg", ".png"])
         image_paths = []
 
@@ -219,7 +226,6 @@ class FloodDataset(Dataset):
         candidate_dirs = [dataset_path]
 
         # Colab notebook uploads to data/train/images and data/val/images.
-        # Keep those working even if the config still points at flood_dataset/*.
         if dataset_path.parts and dataset_path.parts[0] == "flood_dataset":
             split_name = dataset_path.name
             candidate_dirs = [
@@ -235,14 +241,58 @@ class FloodDataset(Dataset):
         else:
             logger.warning(f"Dataset directory not found: {dataset_dir}")
             return []
-        
-        # Assume depth labels are in parent directory filenames or metadata
-        for img_file in dataset_path.rglob("*"):
-            if img_file.suffix.lower() in supported_formats:
-                # Extract depth from filename or use default
+
+        # ── 1. Try to load labels.csv ──────────────────────────────────────
+        csv_labels: dict = {}
+        for csv_name in ["labels.csv", "depths.csv", "annotations.csv"]:
+            csv_path = dataset_path / csv_name
+            if csv_path.exists():
+                with open(csv_path, newline="", encoding="utf-8") as f:
+                    reader = csv.reader(f)
+                    for row in reader:
+                        if len(row) < 2:
+                            continue
+                        fname, raw_depth = row[0].strip(), row[1].strip()
+                        if fname.lower() in ("filename", "file", "name", "image"):
+                            continue  # header row
+                        try:
+                            csv_labels[fname] = int(float(raw_depth))
+                        except ValueError:
+                            pass
+                logger.info(f"Loaded {len(csv_labels)} labels from {csv_path}")
+                break
+
+        # ── 2. Scan images ─────────────────────────────────────────────────
+        zero_label_count = 0
+        for img_file in sorted(dataset_path.rglob("*")):
+            if img_file.suffix.lower() not in supported_formats:
+                continue
+            if img_file.name in csv_labels:
+                depth_cm = csv_labels[img_file.name]
+            else:
                 depth_cm = self._extract_depth_from_filename(img_file.name)
-                image_paths.append((str(img_file), depth_cm))
-        
+            if depth_cm == 0:
+                zero_label_count += 1
+            image_paths.append((str(img_file), depth_cm))
+
+        # ── 3. Label-collapse guard ────────────────────────────────────────
+        total = len(image_paths)
+        if total > 0:
+            pct_zero = zero_label_count / total * 100
+            if pct_zero > 80:
+                logger.error(
+                    "=" * 70 + "\n"
+                    f"  ⚠️  LABEL COLLAPSE WARNING: {zero_label_count}/{total} images "
+                    f"({pct_zero:.0f}%) have depth_cm = 0!\n"
+                    "  Training on this data will produce a model that always predicts 0.\n"
+                    "  Fix: create a labels.csv in your dataset folder with columns:\n"
+                    "       filename,depth_cm\n"
+                    "       flood_road.jpg,30\n"
+                    "       flooded_street.jpg,55\n"
+                    "  OR rename images: flood_photo_depth30cm.jpg\n"
+                    + "=" * 70
+                )
+
         return image_paths
     
     def _load_s3_images(self, prefix: str) -> List[Tuple[str, int]]:
