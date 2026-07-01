@@ -205,7 +205,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
       <small id="img-counter">0 / 10 images</small>
     </div>
 
-    <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-in').click()">
+    <label for="file-in" class="drop-zone" id="drop-zone">
       <div class="dz-inner">
         <svg width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
@@ -213,8 +213,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
         <p>Drag &amp; drop flood images</p>
         <span>Up to 10 images · JPG, PNG, WebP</span>
       </div>
-    </div>
-    <input type="file" id="file-in" accept="image/*" multiple style="display:none">
+    </label>
+    <input type="file" id="file-in" accept="image/*" multiple style="position:fixed;top:-200px;left:-200px;width:1px;height:1px;opacity:0">
 
     <div id="img-grid"></div>
 
@@ -251,7 +251,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
 <script>
 // ─── State ───────────────────────────────────────────────
-const AREAS = {{ areas }};
+const AREAS = {{ areas | safe }};
 const STAGES = [
   {level:'SAFE',    color:'#16a34a', label:'No significant flooding', min:0,  max:5  },
   {level:'LOW',     color:'#ca8a04', label:'Minor flooding',           min:5,  max:20 },
@@ -293,10 +293,15 @@ window.addEventListener('load', () => {
 
 // ─── Drop zone ────────────────────────────────────────────
 const dz = document.getElementById('drop-zone');
-dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
-dz.addEventListener('dragleave', () => dz.classList.remove('over'));
-dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('over'); addFiles(e.dataTransfer.files); });
-document.getElementById('file-in').addEventListener('change', e => addFiles(e.target.files));
+dz.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); dz.classList.add('over'); });
+dz.addEventListener('dragleave', e => { e.stopPropagation(); dz.classList.remove('over'); });
+dz.addEventListener('drop', e => {
+  e.preventDefault(); e.stopPropagation();
+  dz.classList.remove('over');
+  addFiles(e.dataTransfer.files);
+});
+const fileIn = document.getElementById('file-in');
+fileIn.addEventListener('change', e => { if (e.target.files.length) addFiles(e.target.files); fileIn.value = ''; });
 
 function addFiles(files) {
   for (const file of files) {
