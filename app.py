@@ -8,11 +8,14 @@ import json
 import logging
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
 from PIL import Image
 from flask import Flask, request, jsonify, render_template_string
+
+from src.reference_depth_estimator import ReferenceDepthEstimator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -97,6 +100,22 @@ def depth_to_severity(depth_cm: float) -> dict:
         return {"level": "CRITICAL", "label": "Severe / dangerous flooding",    "color": "#7f1d1d", "stage": 5}
 
 _MODEL = load_model()
+_REFERENCE_ESTIMATOR = ReferenceDepthEstimator()
+
+# Detect label collapse once at startup
+def _is_collapsed() -> bool:
+    if not MODEL_PATH.exists():
+        return False
+    try:
+        ck = torch.load(MODEL_PATH, map_location="cpu", weights_only=False)
+        vl = ck.get("best_val_loss", ck.get("val_loss", 1.0)) if isinstance(ck, dict) else 1.0
+        return isinstance(vl, float) and vl < 1e-5
+    except Exception:
+        return False
+
+_MODEL_COLLAPSED = _is_collapsed()
+if _MODEL_COLLAPSED:
+    logger.warning("🔀 ML model is collapsed → predictions will use reference_object_cv fallback")
 logger.info(f"Model ready on {DEVICE}")
 
 # ─────────────────────────────────────────────────────────
@@ -512,10 +531,16 @@ function showResults(results) {
       <div class="r-card-name">${r.name}</div>
       <div style="font-size:.8rem;color:#ef4444">Error: ${r.error}</div></div>`;
     const s = r.severity;
+    const methodBadge = r.method === 'reference_object_cv'
+      ? `<span style="background:#f59e0b;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">CV FALLBACK</span>`
+      : (r.method === 'ml_blend' ? `<span style="background:#3b82f6;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">ML+CV</span>` : '');
+    const cueHtml = (r.visual_cues && r.visual_cues.length)
+      ? `<div style="font-size:.67rem;color:#64748b;margin-top:3px">🔍 ${r.visual_cues.slice(0,2).join(' · ')}</div>` : '';
     return `<div class="r-card" id="rc-${i}" style="border-left-color:${s.color}" onclick="flyTo(${r.lat},${r.lng},${i})">
-      <div class="r-card-name">${r.name}</div>
+      <div class="r-card-name">${r.name} ${methodBadge}</div>
       <div class="r-card-depth" style="color:${s.color}">${r.depth_cm} cm</div>
       <div class="r-card-level" style="color:${s.color}">${s.level} — ${s.label}</div>
+      ${cueHtml}
       <div class="r-card-loc">📍 ${r.lat.toFixed(4)}, ${r.lng.toFixed(4)}</div>
     </div>`;
   }).join('');
@@ -546,6 +571,7 @@ function showResults(results) {
       <div style="font-size:1.4rem;font-weight:800;color:${s.color}">${r.depth_cm} cm</div>
       <div style="color:${s.color};font-size:.8rem;font-weight:600">${s.level} — ${s.label}</div>
       <div style="font-size:.75rem;color:#64748b;margin-top:4px">Confidence: ${(r.confidence*100).toFixed(1)}%</div>
+      ${r.visual_cues && r.visual_cues.length ? `<div style="font-size:.7rem;color:#64748b;margin-top:2px">🔍 ${r.visual_cues.slice(0,2).join('<br>')}</div>` : ''}
       <div style="font-size:.72rem;color:#94a3b8">${r.lat.toFixed(5)}, ${r.lng.toFixed(5)}</div>
     </div>`;
     circle.bindPopup(popup);
@@ -597,6 +623,47 @@ def index():
     return render_template_string(HTML, areas=json.dumps(BENGALURU_AREAS))
 
 
+def _predict_single(image: Image.Image) -> dict:
+    """
+    Run depth prediction on a PIL Image.
+    Uses the reference CV estimator when the ML model is collapsed.
+    When the ML model is healthy, blends ML output (70%) with reference CV (30%)
+    to incorporate physical reference-object cues alongside learned features.
+    """
+    img_arr = np.array(image)
+    ref_result = _REFERENCE_ESTIMATOR.estimate(img_arr)
+
+    if _MODEL_COLLAPSED:
+        depth_cm = ref_result["depth_cm"]
+        confidence = ref_result["confidence"]
+        method = "reference_object_cv"
+        visual_cues = ref_result.get("visual_cues", [])
+        label_guide = ref_result.get("label_guide", "")
+    else:
+        with torch.no_grad():
+            tensor = TRANSFORM(image).unsqueeze(0).to(DEVICE)
+            depth_norm = _MODEL(tensor).squeeze().item()
+        ml_depth = depth_norm * 100.0
+        # Blend: 70% ML + 30% reference CV
+        depth_cm = 0.70 * ml_depth + 0.30 * ref_result["depth_cm"]
+        confidence = round(min(depth_norm * 1.25, 0.85) * 0.7 + ref_result["confidence"] * 0.3, 4)
+        method = "ml_blend"
+        visual_cues = ref_result.get("visual_cues", [])
+        label_guide = ref_result.get("label_guide", "")
+
+    depth_cm = round(depth_cm, 2)
+    return {
+        "depth_cm": depth_cm,
+        "confidence": round(confidence, 4),
+        "severity": depth_to_severity(depth_cm),
+        "method": method,
+        "visual_cues": visual_cues,
+        "label_guide": label_guide,
+        "waterline_pct": ref_result.get("waterline_pct", 0),
+        "water_coverage": ref_result.get("water_coverage", 0),
+    }
+
+
 @app.post("/predict-batch")
 def predict_batch():
     files = request.files.getlist("images")
@@ -612,25 +679,12 @@ def predict_batch():
 
         try:
             image = Image.open(io.BytesIO(file.read())).convert("RGB")
-            with torch.no_grad():
-                tensor = TRANSFORM(image).unsqueeze(0).to(DEVICE)
-                output = _MODEL(tensor)
-                depth_norm = output.squeeze().item()
-            depth_cm = round(depth_norm * 100.0, 2)
-            confidence = round(min(depth_norm * 1.25, 1.0), 4)
-            severity = depth_to_severity(depth_cm)
-            logger.info(f"  [{i+1}] {name}: {depth_cm} cm ({severity['level']})")
-            results.append({
-                "name": name, "lat": lat, "lng": lng,
-                "depth_cm": depth_cm, "confidence": confidence,
-                "severity": severity, "status": "ok",
-            })
+            pred = _predict_single(image)
+            logger.info(f"  [{i+1}] {name}: {pred['depth_cm']} cm ({pred['severity']['level']}) [{pred['method']}]")
+            results.append({"name": name, "lat": lat, "lng": lng, "status": "ok", **pred})
         except Exception as e:
             logger.error(f"  [{i+1}] {name}: error — {e}")
-            results.append({
-                "name": name, "lat": lat, "lng": lng,
-                "error": str(e), "status": "error",
-            })
+            results.append({"name": name, "lat": lat, "lng": lng, "error": str(e), "status": "error"})
 
     return jsonify({"results": results, "count": len(results)})
 
@@ -645,34 +699,23 @@ def predict():
         image = Image.open(io.BytesIO(file.read())).convert("RGB")
     except Exception as e:
         return jsonify({"error": str(e)}), 400
-    with torch.no_grad():
-        tensor = TRANSFORM(image).unsqueeze(0).to(DEVICE)
-        depth_norm = _MODEL(tensor).squeeze().item()
-    depth_cm = round(depth_norm * 100.0, 2)
-    severity = depth_to_severity(depth_cm)
-    return jsonify({"depth_cm": depth_cm, "confidence": round(min(depth_norm * 1.25, 1.0), 4),
-                    "severity": severity, "device": str(DEVICE)})
+    pred = _predict_single(image)
+    return jsonify({**pred, "device": str(DEVICE)})
 
 
 @app.get("/health")
 def health():
     ckpt_ok = MODEL_PATH.exists()
-    warning = None
-    if ckpt_ok:
-        try:
-            import torch as _t
-            ck = _t.load(MODEL_PATH, map_location="cpu", weights_only=False)
-            vl = ck.get("best_val_loss", ck.get("val_loss", 1.0)) if isinstance(ck, dict) else 1.0
-            if isinstance(vl, float) and vl < 1e-5:
-                warning = "label_collapse"
-        except Exception:
-            pass
+    warning = "label_collapse" if _MODEL_COLLAPSED else None
+    active_method = "reference_object_cv" if _MODEL_COLLAPSED else "ml_blend"
     return jsonify({
         "status": "ok",
         "model": str(MODEL_PATH.name),
         "model_loaded": ckpt_ok,
         "device": str(DEVICE),
         "warning": warning,
+        "active_method": active_method,
+        "reference_cv_available": True,
     })
 
 
