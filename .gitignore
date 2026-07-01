@@ -29,11 +29,10 @@ datasets/
 *.zip
 
 # Models
-# Committed models via Git LFS for team use
+# Ignore all .pth files by default, then whitelist specific tracked models (via Git LFS)
+*.pth
 !models/best_flood_model.pth
 !models/best_flood_model_water_aware.pth
-# Other .pth files are ignored
-*.pth
 *.pt
 
 # Results
