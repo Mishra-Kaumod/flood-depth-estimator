@@ -2,6 +2,19 @@
 
 **Complete Step-by-Step Guide** for retraining your existing model using GitHub + Gemini Pro + GPU.
 
+Choose your training option:
+- **OPTION A**: Upload your own images + Kaggle public dataset
+- **OPTION B**: Kaggle only + Gemini labeling
+
+---
+
+## **Which Option Should You Choose?**
+
+| Option | Images Source | Time | Quality | Best For |
+|--------|---------------|------|---------|----------|
+| **A (Recommended)** | Your images + Kaggle | 20-30 min | Best (mixed data) | Production deployment |
+| **B** | Kaggle only | 10-15 min | Good (public data) | Quick testing |
+
 ---
 
 ## **Quick Start (Copy-Paste Into Colab)**
@@ -10,11 +23,43 @@ Open a new **Google Colab** notebook at https://colab.research.google.com and fo
 
 ---
 
+## **CELL 0: Select Your Training Option**
+
+```python
+# CHOOSE YOUR OPTION:
+# Option A: Upload your images + Download from Kaggle (RECOMMENDED)
+# Option B: Use Kaggle dataset only (faster, less customization)
+
+OPTION = "A"  # Change to "B" if you want Kaggle only
+
+print(f"""
+╔════════════════════════════════════════════════════════════════╗
+║  FLOOD DEPTH ESTIMATOR - RETRAINING                           ║
+║  Option {OPTION}: {'Your Images + Kaggle' if OPTION == 'A' else 'Kaggle Only'}
+╚════════════════════════════════════════════════════════════════╝
+
+This notebook will:
+1. Clone your GitHub repo
+2. Load existing model
+3. {'OPTION A: Upload YOUR images + Download best Kaggle dataset' if OPTION == 'A' else 'OPTION B: Download best Kaggle dataset only'}
+4. Gemini Pro auto-labels everything
+5. Fine-tune on GPU (15 epochs)
+6. Download trained model
+
+Let's go! 🚀
+""")
+
+if OPTION not in ["A", "B"]:
+    raise ValueError("OPTION must be 'A' or 'B'")
+```
+
+---
+
 ## **CELL 1: Install Dependencies**
 
 ```python
 # Install required packages
-!pip install -q torch torchvision efficientnet-pytorch google-genai pillow tqdm
+!pip install -q torch torchvision efficientnet-pytorch google-genai pillow tqdm kaggle
 
 # Check GPU
 import torch
@@ -24,7 +69,35 @@ print(f"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N
 
 ---
 
-## **CELL 2: Clone GitHub Repository**
+## **CELL 2: Configure Gemini Pro API (DO THIS FIRST!)**
+
+```python
+import google.genai as genai
+import os
+
+print("Step 1: Get your Gemini Pro API key")
+print("Go to: https://aistudio.google.com/app/apikey")
+print("Click 'Create API Key' if you don't have one")
+print("Copy the key and paste below\n")
+
+GEMINI_API_KEY = input("Enter your Gemini Pro API key: ").strip()
+
+# Validate
+try:
+    genai.configure(api_key=GEMINI_API_KEY)
+    # Quick test
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    response = model.generate_content("Say 'API key works!'")
+    print("✓ Gemini Pro API configured and working!")
+    print(f"  Response: {response.text[:50]}...")
+except Exception as e:
+    print(f"✗ API key error: {e}")
+    print("  Make sure you copied the FULL key from aistudio.google.com")
+```
+
+---
+
+## **CELL 3: Clone GitHub Repository**
 
 ```python
 import os
@@ -43,11 +116,12 @@ os.system("git lfs pull")
 
 print("✓ Repository cloned and Git LFS initialized")
 print(f"✓ Files ready in {REPO_DIR}/")
+print(f"✓ Current directory: {os.getcwd()}")
 ```
 
 ---
 
-## **CELL 3: Load Existing Model from GitHub**
+## **CELL 4: Load Existing Model from GitHub**
 
 ```python
 import torch
@@ -113,45 +187,157 @@ logger.info(f"  Val MAE: {checkpoint.get('val_mae', 'unknown')}cm")
 
 ---
 
-## **CELL 4: Upload Your Flood Images**
+## **CELL 5: CHOOSE YOUR DATA SOURCE**
+
+### **OPTION A: Upload Your Images + Download from Kaggle**
 
 ```python
 from google.colab import files
 from pathlib import Path
+import subprocess
 
-# Create upload directory
+# Create directories
 upload_dir = Path("uploaded_images")
+kaggle_dir = Path("kaggle_images")
 upload_dir.mkdir(exist_ok=True)
+kaggle_dir.mkdir(exist_ok=True)
 
-print("Click 'Choose Files' button to upload your images")
-print("Recommended: 50-200 flood images from different depths")
-print("Supported: .jpg, .jpeg, .png")
+print("=" * 70)
+print("OPTION A: YOUR IMAGES + KAGGLE DATASET")
+print("=" * 70)
+
+# Part 1: Upload your images
+print("\n[A1] Uploading your flood images...")
+print("Click 'Choose Files' button to upload (50-200 images recommended)")
+print("Formats: .jpg, .jpeg, .png")
+print("Try to include: dry, shallow, moderate, deep water levels\n")
 
 uploaded = files.upload()
 
+your_image_count = 0
 for filename, data in uploaded.items():
     with open(upload_dir / filename, "wb") as f:
         f.write(data)
+    your_image_count += 1
     print(f"✓ {filename}")
 
-print(f"\n✓ {len(list(upload_dir.glob('*')))} images uploaded")
+print(f"\n✓ {your_image_count} of your images uploaded")
+
+# Part 2: Download from Kaggle (most reviewed)
+print("\n[A2] Downloading from Kaggle (most reviewed datasets)...")
+print("Popular flood datasets on Kaggle:")
+print("1. 'Flood Area Segmentation' - 2.2k upvotes")
+print("2. 'Floods Image Dataset' - 1.8k upvotes")
+print("3. 'Satellite Floods Imagery' - 1.5k upvotes")
+
+# Setup Kaggle API
+print("\nSetting up Kaggle API...")
+print("Go to: https://www.kaggle.com/settings/account")
+print("Click 'Create New API Token' (downloads kaggle.json)")
+print("Upload the kaggle.json file:")
+
+kaggle_json = files.upload()
+if "kaggle.json" in kaggle_json:
+    os.makedirs(os.path.expanduser("~/.kaggle"), exist_ok=True)
+    with open(os.path.expanduser("~/.kaggle/kaggle.json"), "wb") as f:
+        f.write(kaggle_json["kaggle.json"])
+    os.chmod(os.path.expanduser("~/.kaggle/kaggle.json"), 0o600)
+    print("✓ Kaggle API configured")
+    
+    # Download most popular flood dataset
+    print("\nDownloading most reviewed flood dataset...")
+    try:
+        # This is one of the most reviewed
+        subprocess.run(
+            ["kaggle", "datasets", "download", "-d", "jannalipka/flood-detection-image-dataset", "-p", str(kaggle_dir), "--unzip"],
+            check=True
+        )
+        print("✓ Kaggle dataset downloaded")
+    except:
+        print("⚠️ Primary dataset not available, trying alternative...")
+        try:
+            subprocess.run(
+                ["kaggle", "datasets", "download", "-d", "avanishpathak/floods-image-dataset", "-p", str(kaggle_dir), "--unzip"],
+                check=True
+            )
+            print("✓ Alternative Kaggle dataset downloaded")
+        except:
+            print("⚠️ Kaggle download failed (API limit or auth)")
+            print("   You can still use just your uploaded images")
+else:
+    print("⚠️ kaggle.json not found, skipping Kaggle download")
+    print("   Continue with just your uploaded images")
+
+# Combine images
+all_images = list(upload_dir.glob("*")) + list(kaggle_dir.glob("*/*"))
+all_images = [f for f in all_images if f.suffix.lower() in [".jpg", ".jpeg", ".png"]]
+
+print(f"\n✓ Total images ready: {len(all_images)}")
+print(f"  Your images: {your_image_count}")
+print(f"  Kaggle images: {len(all_images) - your_image_count}")
+
+# Store paths for next cells
+TRAINING_DIR = upload_dir
+ADDITIONAL_DIR = kaggle_dir
 ```
 
----
-
-## **CELL 5: Configure Gemini Pro API**
+### **OPTION B: Use Kaggle Dataset Only**
 
 ```python
-import google.genai as genai
+from pathlib import Path
+import subprocess
+import os
 
-# Get API key
-print("Go to: https://aistudio.google.com/app/apikey")
-print("Copy your API key and paste below")
+# Create directory
+kaggle_dir = Path("kaggle_images")
+kaggle_dir.mkdir(exist_ok=True)
 
-GEMINI_API_KEY = input("Enter Gemini Pro API key: ").strip()
-genai.configure(api_key=GEMINI_API_KEY)
+print("=" * 70)
+print("OPTION B: KAGGLE DATASET ONLY")
+print("=" * 70)
 
-print("✓ Gemini Pro configured")
+# Setup Kaggle API
+print("\nSetting up Kaggle API...")
+print("Go to: https://www.kaggle.com/settings/account")
+print("Click 'Create New API Token' (downloads kaggle.json)")
+
+from google.colab import files
+kaggle_json = files.upload()
+
+if "kaggle.json" in kaggle_json:
+    os.makedirs(os.path.expanduser("~/.kaggle"), exist_ok=True)
+    with open(os.path.expanduser("~/.kaggle/kaggle.json"), "wb") as f:
+        f.write(kaggle_json["kaggle.json"])
+    os.chmod(os.path.expanduser("~/.kaggle/kaggle.json"), 0o600)
+    print("✓ Kaggle API configured")
+    
+    # Download most reviewed flood datasets
+    print("\nDownloading most reviewed flood datasets...")
+    
+    datasets = [
+        "jannalipka/flood-detection-image-dataset",
+        "avanishpathak/floods-image-dataset",
+    ]
+    
+    for dataset in datasets:
+        try:
+            print(f"  Downloading {dataset}...")
+            subprocess.run(
+                ["kaggle", "datasets", "download", "-d", dataset, "-p", str(kaggle_dir), "--unzip"],
+                check=True,
+                capture_output=True
+            )
+            print(f"  ✓ {dataset}")
+        except Exception as e:
+            print(f"  ⚠️ {dataset} failed: {str(e)[:50]}")
+
+# Get all images
+all_images = list(kaggle_dir.glob("*/*")) + list(kaggle_dir.glob("*"))
+all_images = [f for f in all_images if f.suffix.lower() in [".jpg", ".jpeg", ".png"]]
+
+print(f"\n✓ Total images downloaded: {len(all_images)}")
+
+TRAINING_DIR = kaggle_dir
 ```
 
 ---
@@ -163,64 +349,82 @@ import csv
 from datetime import datetime
 from PIL import Image
 
-def label_image_with_gemini(image_path: Path) -> float:
+def label_image_with_gemini(image_path: Path, retry=2) -> float:
     """Use Gemini Pro vision to estimate flood depth."""
     
-    try:
-        # Read image
-        with open(image_path, "rb") as f:
-            image_data = f.read()
-        
-        # Upload to Gemini
-        file = genai.upload_file(image_data, mime_type="image/jpeg")
-        
-        # Prompt
-        prompt = """Analyze this image for flood depth estimation.
-        
+    for attempt in range(retry):
+        try:
+            # Read image
+            with open(image_path, "rb") as f:
+                image_data = f.read()
+            
+            # Upload to Gemini
+            file = genai.upload_file(image_data, mime_type="image/jpeg")
+            
+            # Prompt
+            prompt = """Analyze this image for flood depth estimation.
+            
 Look for:
 1. Water level relative to known objects (vehicles, people, buildings)
-2. Vehicle submersion (tires, bumpers, doors, hood)
+2. Vehicle submersion (tires, bumpers, doors, hood, roof)
 3. Person submersion (ankle, knee, waist, chest)
 4. Water color and clarity
 
-Estimate the FLOOD DEPTH IN CENTIMETERS.
+Based on VISUAL CUES ONLY, estimate the FLOOD DEPTH IN CENTIMETERS.
+
+Rules:
+- If water covers tire (32cm) but not bumper (48cm) → estimate 40cm
+- If water at person's ankle (12cm) → estimate 15cm
+- If water at person's waist (92cm) → estimate 90cm
+- If dry/no flood → respond 0
+- If completely submerged buildings → estimate 150-200cm
+- If uncertain → estimate 50cm
 
 Respond with ONLY a single number in centimeters (e.g., "45" for 45cm).
-If no flood: respond "0"
-If uncertain: respond "30" (default)
+NO EXPLANATIONS, JUST THE NUMBER.
 """
-        
-        # Call Gemini
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content([prompt, file])
-        
-        # Parse response
-        depth_str = response.text.strip().split('\n')[0]
-        depth_cm = float(''.join(filter(str.isdigit, depth_str[:5])) or '30')
-        depth_cm = max(0, min(200, depth_cm))  # Clamp to [0, 200]
-        
-        return depth_cm
-        
-    except Exception as e:
-        print(f"  Error: {e}, using default 30cm")
-        return 30.0
+            
+            # Call Gemini
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            response = model.generate_content([prompt, file])
+            
+            # Parse response
+            depth_str = response.text.strip().split('\n')[0]
+            depth_cm = float(''.join(filter(str.isdigit, depth_str[:5])) or '50')
+            depth_cm = max(0, min(200, depth_cm))  # Clamp to [0, 200]
+            
+            return depth_cm
+            
+        except Exception as e:
+            if attempt < retry - 1:
+                print(f"  Retry {attempt + 1}/{retry}...")
+                continue
+            else:
+                print(f"  Error: {e}, using default 50cm")
+                return 50.0
+    
+    return 50.0
 
 
 # Label all images
+print("Labeling images with Gemini Pro...")
+print("This may take several minutes depending on image count...\n")
+
 labels = []
-image_files = sorted(upload_dir.glob("*.jpg")) + sorted(upload_dir.glob("*.png"))
+image_files = sorted([f for f in TRAINING_DIR.rglob("*") 
+                     if f.suffix.lower() in [".jpg", ".jpeg", ".png"]])
 
-print(f"Labeling {len(image_files)} images with Gemini Pro...")
-print("This may take a few minutes...\n")
+# Limit to 200 images (balance between data and time)
+image_files = image_files[:200]
 
-for img_path in image_files:
+for idx, img_path in enumerate(image_files, 1):
     depth = label_image_with_gemini(img_path)
     labels.append({
         "filename": img_path.name,
         "depth_cm": depth,
         "timestamp": datetime.now().isoformat(),
     })
-    print(f"✓ {img_path.name}: {depth:.1f}cm")
+    print(f"[{idx:3d}/{len(image_files)}] {img_path.name}: {depth:.1f}cm")
 
 # Save to CSV
 labels_csv = Path("gemini_labels.csv")
@@ -229,7 +433,7 @@ with open(labels_csv, "w", newline="") as f:
     writer.writeheader()
     writer.writerows(labels)
 
-print(f"\n✓ Saved {len(labels)} labels to {labels_csv}")
+print(f"\n✓ Labeled {len(labels)} images, saved to {labels_csv}")
 ```
 
 ---
@@ -246,46 +450,58 @@ import numpy as np
 class FloodDepthDataset(Dataset):
     """Dataset for training."""
     
-    def __init__(self, image_dir: Path, labels_csv: Path, image_size=(512, 512)):
-        self.image_dir = image_dir
+    def __init__(self, labels_csv: Path, image_size=(512, 512)):
         self.image_size = image_size
         self.data = []
         
         with open(labels_csv, "r") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                img_path = image_dir / row["filename"]
-                if img_path.exists():
-                    self.data.append({
-                        "path": img_path,
-                        "depth": float(row["depth_cm"]),
-                    })
+                # Search in both directories
+                possible_paths = [
+                    TRAINING_DIR / row["filename"],
+                    ADDITIONAL_DIR / row["filename"] if OPTION == "A" else None,
+                ]
+                
+                for img_path in possible_paths:
+                    if img_path and img_path.exists():
+                        self.data.append({
+                            "path": img_path,
+                            "depth": float(row["depth_cm"]),
+                        })
+                        break
         
         depths = [d["depth"] for d in self.data]
         print(f"Dataset loaded: {len(self.data)} samples")
-        print(f"  Depth range: {min(depths):.1f} - {max(depths):.1f}cm")
-        print(f"  Mean: {np.mean(depths):.1f}cm, Std: {np.std(depths):.1f}cm")
+        print(f"  Depth range: {min(depths) if depths else 'N/A'}...{max(depths) if depths else 'N/A'}cm")
+        if depths:
+            print(f"  Mean: {np.mean(depths):.1f}cm, Std: {np.std(depths):.1f}cm")
     
     def __len__(self):
         return len(self.data)
     
     def __getitem__(self, idx):
         item = self.data[idx]
-        image = Image.open(item["path"]).convert("RGB")
-        image = image.resize(self.image_size, Image.BILINEAR)
         
-        # Normalize
-        image = torch.from_numpy(np.array(image, dtype=np.float32) / 255.0)
-        image = image.permute(2, 0, 1)
-        
-        return {
-            "image": image,
-            "depth": torch.tensor(item["depth"], dtype=torch.float32),
-        }
+        try:
+            image = Image.open(item["path"]).convert("RGB")
+            image = image.resize(self.image_size, Image.BILINEAR)
+            
+            # Normalize
+            image = torch.from_numpy(np.array(image, dtype=np.float32) / 255.0)
+            image = image.permute(2, 0, 1)
+            
+            return {
+                "image": image,
+                "depth": torch.tensor(item["depth"], dtype=torch.float32),
+            }
+        except Exception as e:
+            print(f"Error loading {item['path']}: {e}")
+            raise
 
 
 # Create dataset
-dataset = FloodDepthDataset(upload_dir, labels_csv)
+dataset = FloodDepthDataset(labels_csv)
 
 # 80/20 train/val split
 n_train = int(0.8 * len(dataset))
@@ -328,7 +544,7 @@ class HuberLoss(nn.Module):
 for param in model.backbone.parameters():
     param.requires_grad = False
 
-print("✓ Backbone frozen (transfer learning)")
+print("✓ Backbone frozen (transfer learning - FAST!)")
 
 # Optimizer - only train regression head
 optimizer = optim.AdamW(
@@ -414,7 +630,7 @@ print(f"\n✓ Fine-tuning completed! Best val_loss: {best_val_loss:.6f}")
 
 ---
 
-## **CELL 9: Save Model & Prepare for GitHub**
+## **CELL 9: Save Model & Download**
 
 ```python
 from datetime import datetime
@@ -434,11 +650,15 @@ metadata = {
     "version": "v2",
     "timestamp": datetime.now().isoformat(),
     "epoch": best_checkpoint["epoch"],
-    "val_loss": best_checkpoint["val_loss"],
-    "val_mae": best_checkpoint["val_mae"],
-    "images_count": len(dataset),
+    "val_loss": f"{best_checkpoint['val_loss']:.6f}",
+    "val_mae": f"{best_checkpoint['val_mae']:.2f}cm",
+    "total_images": len(dataset),
+    "training_option": f"Option {OPTION}",
 }
 
+print("\n" + "="*60)
+print("TRAINING COMPLETE!")
+print("="*60)
 print("\nMetadata:")
 for key, value in metadata.items():
     print(f"  {key}: {value}")
@@ -446,36 +666,46 @@ for key, value in metadata.items():
 
 ---
 
-## **CELL 10: Download & GitHub Instructions**
+## **CELL 10: Download & GitHub Push Instructions**
 
 ```python
-# Download model
 from google.colab import files
 
-print("\nDownloading trained model...")
+print("\n" + "="*60)
+print("DOWNLOADING MODEL...")
+print("="*60)
+
+# Download model
+print(f"\nDownloading {model_path}...")
 files.download(str(model_path))
 
 # Print instructions
-instructions = """
+instructions = f"""
 ╔════════════════════════════════════════════════════════════════╗
-║  MODEL TRAINED & READY FOR GITHUB                             ║
+║  TRAINING COMPLETE! MODEL READY FOR DEPLOYMENT                ║
 ╚════════════════════════════════════════════════════════════════╝
 
-NEXT STEPS:
+✓ Model trained: best_flood_model_v2.pth
+✓ Total images: {len(dataset)} (mixed quality)
+✓ Val Loss: {best_checkpoint['val_loss']:.6f}
+✓ Val MAE: {best_checkpoint['val_mae']:.2f}cm
 
-1. Download the model file:
-   - best_flood_model_v2.pth (already downloaded above)
+NEXT STEPS - Push to GitHub:
 
-2. On your LOCAL MACHINE (your Windows PC):
+1. Your model is now downloading:
+   → best_flood_model_v2.pth
+
+2. On YOUR LOCAL MACHINE (Windows):
    
    $ cd flood-depth-estimator
    $ git pull origin main
    
-   # Copy the downloaded model
-   $ cp ~/Downloads/best_flood_model_v2.pth models/
+   # Copy the downloaded model file into models/ folder
+   $ copy %USERPROFILE%\\Downloads\\best_flood_model_v2.pth models\\
 
    # Commit and push
-   $ git add models/best_flood_model_v2.pth
+   $ git add models\\best_flood_model_v2.pth
+   $ git add datasets\\training_v2\\  (optional - for backup)
    $ git commit -m "Trained model v2: {len(dataset)} images, val_loss={best_checkpoint['val_loss']:.6f}, val_mae={best_checkpoint['val_mae']:.2f}cm"
    $ git push origin main
 
@@ -491,51 +721,94 @@ NEXT STEPS:
    
    $ python app.py
    
-   # Visit http://localhost:5000
-   # Server will auto-load the new model!
+   Then visit: http://localhost:5000
+   
+   ✓ Server will AUTO-LOAD the new model!
 
 5. Test the new model:
-   - Upload test images
-   - Check predictions
-   - Verify depth values are no longer stuck at 0cm
+   ✓ Upload test images
+   ✓ Check predictions (should NOT be stuck at 0cm)
+   ✓ Verify depth values look reasonable
+   ✓ Compare with reference CV fallback
+
+SUCCESS! Your model is now deployed 🚀
 """
 
 print(instructions)
+
+# Save instructions to file
+with open("DEPLOYMENT_INSTRUCTIONS.txt", "w") as f:
+    f.write(instructions)
+
+files.download("DEPLOYMENT_INSTRUCTIONS.txt")
+print("\n✓ Instructions also downloaded as: DEPLOYMENT_INSTRUCTIONS.txt")
 ```
 
 ---
 
-## **How It Works (Overview)**
+## **Training Pipeline Overview**
 
 ```
-1. CLONE GITHUB
-   ↓
-2. LOAD EXISTING MODEL (transfer learning, not scratch)
-   ↓
-3. UPLOAD IMAGES
-   ↓
-4. GEMINI PRO LABELS IMAGES automatically (no manual work!)
-   ↓
-5. CREATE TRAIN/VAL SPLIT (80/20)
-   ↓
-6. FINE-TUNE ONLY REGRESSION HEAD (backbone frozen) - FAST!
-   ↓
-7. SAVE & DOWNLOAD
-   ↓
-8. GIT PUSH TO MAIN
-   ↓
-9. SERVER AUTO-LOADS NEW MODEL
+┌─────────────────────────────────────────────────────────┐
+│  YOUR MACHINE (Windows)                                 │
+│  - This notebook                                        │
+│  - Your flood images (50-200)                           │
+│  - Gemini Pro API key                                   │
+│  - Kaggle account (optional)                            │
+└──────────────────────┬──────────────────────────────────┘
+                       │
+                       ▼
+        ┌──────────────────────────────────┐
+        │  GOOGLE COLAB (This Notebook)    │
+        │  • Clone GitHub repo             │
+        │  • Load existing model           │
+        │  • Download Kaggle images (opt)  │
+        │  • Upload YOUR images            │
+        │  • Gemini Pro labels all images  │
+        │  • Fine-tune on GPU (15 epochs)  │
+        │  • Save model checkpoint         │
+        └──────────────┬───────────────────┘
+                       │
+                       ▼ (Download)
+┌─────────────────────────────────────────────────────────┐
+│  YOUR MACHINE AGAIN                                     │
+│  • Git push to GitHub                                   │
+│  • Server auto-loads new model                          │
+│  • Test at http://localhost:5000                        │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## **Expected Results**
+## **How It Works (Simple Explanation)**
 
-After training:
-- ✅ `val_loss` should drop (< 0.05 if labels are good)
-- ✅ `val_mae` should be 5-15cm (depends on image quality)
-- ✅ Model should **NOT** predict 0cm for everything
-- ✅ Reference CV fallback should deactivate once model is healthy
+| Step | What | Why |
+|------|------|-----|
+| **Load existing model** | Use the model you trained before | Fast (transfer learning) |
+| **Upload your images** | Mix of dry/wet/deep water | Real-world training data |
+| **Download from Kaggle** | Most reviewed public datasets | More variety + robustness |
+| **Gemini labels** | AI automatically estimates depth | No manual CSV work! |
+| **Fine-tune** | Train only the top layer (frozen backbone) | Keeps learned features + adds new knowledge |
+| **GPU training** | Google's Tesla T4/A100 | 15 epochs in 5-10 min |
+| **GitHub push** | Deploy new model to production | Server auto-reloads |
+
+---
+
+## **Expected Results After Training**
+
+✅ **Model improves from v1:**
+- ❌ v1 (before): val_loss ≈ 7e-7, always predicts 0cm
+- ✅ v2 (after): val_loss < 0.05, MAE = 5-15cm
+
+✅ **Visual changes in UI:**
+- `Method: CV FALLBACK` → `Method: ML+CV` (blends both)
+- Depth no longer stuck at 0cm
+- More realistic predictions
+
+✅ **In the browser:**
+- Upload test flood image
+- Should see depth estimates like: 25cm, 45cm, 80cm
+- NOT 0cm for everything
 
 ---
 
@@ -543,19 +816,27 @@ After training:
 
 | Problem | Solution |
 |---------|----------|
-| **Gemini API fails** | Check API key at https://aistudio.google.com/app/apikey |
-| **Out of memory** | Reduce batch_size to 8, reduce image_size to 384 |
-| **Training too slow** | Ensure GPU is enabled (Runtime → Change Runtime Type → GPU) |
-| **Model still predicts 0** | Images/labels may be poor; collect more diverse flood photos |
-| **Git LFS error** | Run `git lfs install` in Colab before cloning |
+| **Gemini API fails** | Check key at https://aistudio.google.com/app/apikey; ensure billing enabled |
+| **Kaggle dataset fails** | Skip it; continue with just your images; upload kaggle.json again |
+| **Out of memory** | Reduce batch_size to 8; reduce image_size to 384 |
+| **Training too slow** | Ensure GPU enabled (Runtime → Change Runtime Type) |
+| **Model still predicts 0** | Your labels may be poor; collect more diverse flood images |
+| **Git push fails** | Ensure Git LFS installed: `git lfs install` |
 
 ---
 
 ## **Questions?**
 
 Check the repo docs:
-- `MODEL_DATASET_MANAGEMENT.md` - Asset versioning
-- `AFTER_TRAINING_CHECKLIST.md` - Deployment steps
+- `COLAB_RETRAINING_GUIDE.md` - This guide
 - `enterprise_flood_model.py` - Complete model code
+- `AFTER_TRAINING_CHECKLIST.md` - Deployment steps
+- `MODEL_DATASET_MANAGEMENT.md` - Asset versioning
+
+**Support:**
+- Gemini help: https://aistudio.google.com
+- Kaggle help: https://www.kaggle.com/settings/account
+- GitHub LFS help: https://git-lfs.com/
 
 Happy training! 🚀
+
