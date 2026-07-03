@@ -1,0 +1,131 @@
+name: Deploy Flood Inference to ECS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+  ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+  ECS_TASK_DEFINITION: ${{ vars.ECS_TASK_DEFINITION }}
+  ECS_CONTAINER_NAME: ${{ vars.ECS_CONTAINER_NAME || 'flood-inference' }}
+
+jobs:
+  deploy:
+    name: Build, Push, Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Validate required CI/CD variables
+        run: |
+          test -n "${ECR_REPOSITORY}" || (echo "Missing repo variable: ECR_REPOSITORY" && exit 1)
+          test -n "${ECS_CLUSTER}" || (echo "Missing repo variable: ECS_CLUSTER" && exit 1)
+          test -n "${ECS_SERVICE}" || (echo "Missing repo variable: ECS_SERVICE" && exit 1)
+          test -n "${ECS_TASK_DEFINITION}" || (echo "Missing repo variable: ECS_TASK_DEFINITION" && exit 1)
+          test -n "${{ secrets.AWS_ROLE_TO_ASSUME }}" || (echo "Missing secret: AWS_ROLE_TO_ASSUME" && exit 1)
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: github-actions-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Generate inference requirements
+        run: |
+          cat > requirements.inference.txt <<'EOF'
+          torch>=2.0.0
+          torchvision>=0.15.0
+          pillow>=9.5.0
+          numpy>=1.23.0
+          pyyaml>=6.0
+          litserve>=0.1.0
+          EOF
+
+      - name: Generate deployment Dockerfile
+        run: |
+          cat > Dockerfile.deploy <<'EOF'
+          FROM python:3.11-slim
+
+          ENV PYTHONDONTWRITEBYTECODE=1 \
+              PYTHONUNBUFFERED=1
+
+          WORKDIR /app
+
+          COPY requirements.inference.txt /app/requirements.inference.txt
+          RUN pip install --no-cache-dir -r /app/requirements.inference.txt
+
+          COPY serve.py /app/serve.py
+          COPY config /app/config
+          COPY models /app/models
+
+          EXPOSE 8000
+          CMD ["python", "serve.py"]
+          EOF
+
+      - name: Build and push image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          IMAGE_URI_LATEST="${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
+          docker build -f Dockerfile.deploy -t "${IMAGE_URI}" -t "${IMAGE_URI_LATEST}" .
+          docker push "${IMAGE_URI}"
+          docker push "${IMAGE_URI_LATEST}"
+          echo "image=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "${ECS_TASK_DEFINITION}" \
+            --query taskDefinition > task-definition.json
+
+          jq 'del(
+              .taskDefinitionArn,
+              .revision,
+              .status,
+              .requiresAttributes,
+              .compatibilities,
+              .registeredAt,
+              .registeredBy,
+              .deregisteredAt
+            )' task-definition.json > task-definition-clean.json
+
+      - name: Render new ECS task definition
+        id: render-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition-clean.json
+          container-name: ${{ env.ECS_CONTAINER_NAME }}
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: Deploy to ECS service (Fargate)
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
