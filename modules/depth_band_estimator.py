@@ -23,7 +23,9 @@ def estimate_depth(severity):
     Returns:
         dict: Contains 'depth_band' and 'depth_cm'
     """
-    band, depth_cm = DEPTH_BANDS.get(severity, ("Unknown", 0))
+    # Ensure severity is a standard Python int for dictionary key lookup
+    severity_key = int(severity)
+    band, depth_cm = DEPTH_BANDS.get(severity_key, ("Unknown", 0))
     
     return {
         "depth_band": band,

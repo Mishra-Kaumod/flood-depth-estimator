@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+	<meta charset="utf-8">
+	<title>Analysis Result</title>
+	<style>body{font-family: Arial, sans-serif; margin:20px;} pre{background:#f4f4f4;padding:10px}</style>
+  </head>
+  <body>
+	<h1>Analysis Result</h1>
+	<p>S3: {{ s3_bucket }} / {{ s3_key }}</p>
+
+	{% if annotated_url %}
+	  <div>
+		<h3>Annotated Image</h3>
+		<img src="{{ annotated_url }}" alt="Annotated" style="max-width:800px;border:1px solid #ccc">
+	  </div>
+	{% endif %}
+
+	<h3>Result JSON</h3>
+	<pre>{{ result | tojson(indent=2) }}</pre>
+
+	<p><a href="/">Back</a></p>
+  </body>
+</html>
+
+

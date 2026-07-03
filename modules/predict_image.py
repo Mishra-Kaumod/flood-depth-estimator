@@ -110,18 +110,18 @@ class SeverityPredictor:
             confidence = float(torch.max(probs).item())
         
         # Get depth info
-        depth_band, depth_cm = self.depth_map[pred]
+        depth_band, depth_cm = self.depth_map.get(pred, ("Unknown", 0))
         
         return {
             "image_path": str(image_path),
             "severity_class": pred,
-            "severity_name": self.severity_names[pred],
+            "severity_name": self.severity_names.get(pred, "Unknown"),
             "confidence": round(confidence, 4),
             "depth_band": depth_band,
             "depth_cm": depth_cm,
             "all_probabilities": {
-                self.severity_names[i]: float(probs[0][i].item())
-                for i in range(5)
+                self.severity_names.get(i, "Unknown"): float(probs[0][i].item())
+                for i in range(len(probs[0]))
             }
         }
 

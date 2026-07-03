@@ -95,7 +95,15 @@ class WaterDetectionAnalyzer:
         horizontal_lines = 0
         if lines is not None:
             for line in lines:
-                x1, y1, x2, y2 = line[0]
+                # Defensive check for line format to prevent unpacking errors
+                if line is None or len(line) == 0:
+                    continue
+
+                points = line[0]
+                if not hasattr(points, '__iter__') or len(points) != 4:
+                    continue
+
+                x1, y1, x2, y2 = points
                 if abs(y2 - y1) < 20:
                     horizontal_lines += 1
         

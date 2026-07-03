@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+	<meta charset="utf-8">
+	<title>Flood Analysis - Select Image</title>
+	<style>
+	  body { font-family: Arial, sans-serif; margin: 30px; }
+	  .img-list { max-width: 800px; }
+	  .img-item { margin: 8px 0; }
+	  .btn { padding: 6px 12px; margin-left:8px; }
+	</style>
+  </head>
+  <body>
+	<h1>Flood Analysis - Select Image (S3)</h1>
+	<p>S3 Bucket: <strong>{{ bucket }}</strong></p>
+
+	{% with messages = get_flashed_messages() %}
+	  {% if messages %}
+		<ul>
+		{% for m in messages %}
+		  <li style="color:red">{{ m }}</li>
+		{% endfor %}
+		</ul>
+	  {% endif %}
+	{% endwith %}
+
+	<form action="/analyze" method="post">
+	  <div class="img-list">
+		<h3>S3 Images</h3>
+		{% if images %}
+		  {% for key in images %}
+			<div class="img-item">
+			  <input type="radio" name="s3_key" value="{{ key }}" id="s3img{{ loop.index }}">
+			  <label for="s3img{{ loop.index }}">s3:{{ key }}</label>
+			</div>
+		  {% endfor %}
+		{% else %}
+		  <p>No images found under the configured S3 prefix.</p>
+		{% endif %}
+
+		<h3>Local Images</h3>
+		{% if local_images %}
+		  {% for rel in local_images %}
+			<div class="img-item">
+			  <input type="radio" name="s3_key" value="local:{{ rel }}" id="localimg{{ loop.index }}">
+			  <label for="localimg{{ loop.index }}">{{ rel }}</label>
+			</div>
+		  {% endfor %}
+		{% else %}
+		  <p>No local images found in <code>test_images/</code>.</p>
+		{% endif %}
+	  </div>
+
+	  <div style="margin-top:16px">
+		<label>Mode:</label>
+		<select name="mode">
+		  <option value="image">Image (Flood + Depth)</option>
+		  <option value="object">Object Detection (YOLO)</option>
+		</select>
+		<button type="submit" class="btn">Analyze</button>
+	  </div>
+	</form>
+
+	<hr>
+	<p>Tip: Set environment variables <code>S3_BUCKET</code> and AWS credentials for S3 access.</p>
+  </body>
+</html>
+
+
