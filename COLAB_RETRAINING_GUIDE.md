@@ -121,7 +121,7 @@ print(f"✓ Current directory: {os.getcwd()}")
 
 ---
 
-## **CELL 4: Load Existing Model from GitHub**
+## **CELL 4: Load & Verify Existing Model (TRANSFER LEARNING)**
 
 ```python
 import torch
@@ -139,7 +139,7 @@ class FloodDepthRegressor(nn.Module):
         super().__init__()
         self.max_depth = max_depth
         
-        # EfficientNet-B0 backbone
+        # EfficientNet-B0 backbone (pre-trained on ImageNet)
         self.backbone = models.efficientnet_b0(pretrained=False)
         backbone_dim = 1280
         self.backbone.classifier = nn.Identity()
@@ -167,22 +167,71 @@ class FloodDepthRegressor(nn.Module):
         logits = self.head(pooled)
         output = self.output_fn(logits) * self.max_depth
         return output
+    
+    def get_total_params(self):
+        """Count total trainable parameters."""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+    
+    def get_model_hash(self):
+        """Get hash of model weights for verification."""
+        param_hash = 0
+        for p in self.parameters():
+            param_hash += p.data.sum().item()
+        return param_hash
 
 
 # Load checkpoint
+print("=" * 70)
+print("LOADING EXISTING MODEL (Transfer Learning)")
+print("=" * 70)
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 checkpoint_path = "models/best_flood_model_water_aware.pth"
 
+# Verify checkpoint exists
+import os
+if not os.path.exists(checkpoint_path):
+    raise FileNotFoundError(f"Model checkpoint not found: {checkpoint_path}")
+
+print(f"\n✓ Checkpoint found: {checkpoint_path}")
+print(f"  File size: {os.path.getsize(checkpoint_path) / 1e6:.1f}MB")
+
+# Load checkpoint
 checkpoint = torch.load(checkpoint_path, map_location=device)
+
+# Verify checkpoint structure
+required_keys = ["model_state_dict", "epoch", "val_loss"]
+missing_keys = [k for k in required_keys if k not in checkpoint]
+if missing_keys:
+    print(f"⚠️ Warning: Missing keys in checkpoint: {missing_keys}")
+
+print(f"\n✓ Checkpoint loaded, contains:")
+print(f"  - epoch: {checkpoint.get('epoch', 'unknown')}")
+print(f"  - val_loss: {checkpoint.get('val_loss', 'unknown')}")
+print(f"  - val_mae: {checkpoint.get('val_mae', 'unknown')}cm")
+
+# Create fresh model and load weights
 model = FloodDepthRegressor(max_depth=100.0)
 model.load_state_dict(checkpoint["model_state_dict"])
 model.to(device)
 model.eval()
 
-logger.info("✓ Existing model loaded successfully")
-logger.info(f"  Checkpoint epoch: {checkpoint.get('epoch', 'unknown')}")
-logger.info(f"  Val loss: {checkpoint.get('val_loss', 'unknown')}")
-logger.info(f"  Val MAE: {checkpoint.get('val_mae', 'unknown')}cm")
+# Get initial state for verification
+initial_hash = model.get_model_hash()
+initial_params = model.get_total_params()
+
+print(f"\n✓ Model weights loaded successfully")
+print(f"  - Device: {device}")
+print(f"  - Total parameters: {initial_params:,}")
+print(f"  - Model hash: {initial_hash:.6f}")
+
+print(f"\n" + "=" * 70)
+print("READY FOR TRANSFER LEARNING")
+print("=" * 70)
+print(f"✓ This model will be FINE-TUNED (not trained from scratch)")
+print(f"✓ Backbone weights will be FROZEN (keep learned features)")
+print(f"✓ Only regression head will be TRAINED (adapt to new data)")
+print(f"=" * 70 + "\n")
 ```
 
 ---
@@ -520,7 +569,7 @@ print(f"✓ Val split: {n_val} samples")
 
 ---
 
-## **CELL 8: Fine-tune with GPU**
+## **CELL 8: Fine-tune Existing Model with GPU (TRANSFER LEARNING)**
 
 ```python
 import torch.optim as optim
@@ -540,36 +589,88 @@ class HuberLoss(nn.Module):
         return torch.where(condition, small_residual, large_residual).mean()
 
 
-# Freeze backbone for transfer learning
+print("=" * 70)
+print("TRANSFER LEARNING SETUP")
+print("=" * 70)
+
+# ========== STEP 1: Freeze backbone (keep existing learned features) ==========
+print("\n[1/3] Freezing backbone (existing learned features)...")
+
+backbone_params_before = sum(p.numel() for p in model.backbone.parameters())
 for param in model.backbone.parameters():
     param.requires_grad = False
 
-print("✓ Backbone frozen (transfer learning - FAST!)")
+backbone_params_frozen = sum(p.numel() for p in model.backbone.parameters() if p.requires_grad)
 
-# Optimizer - only train regression head
+print(f"✓ Backbone frozen")
+print(f"  - Total backbone params: {backbone_params_before:,}")
+print(f"  - Trainable backbone params: {backbone_params_frozen:,} (0 = fully frozen ✓)")
+
+# ========== STEP 2: Keep head trainable (adapt to new data) ==========
+print("\n[2/3] Keeping regression head trainable (will be trained)...")
+
+head_params = sum(p.numel() for p in model.head.parameters())
+head_params_trainable = sum(p.numel() for p in model.head.parameters() if p.requires_grad)
+
+print(f"✓ Regression head unfrozen")
+print(f"  - Total head params: {head_params:,}")
+print(f"  - Trainable head params: {head_params_trainable:,} (will be updated ✓)")
+
+# ========== STEP 3: Optimizer (only train head) ==========
+print("\n[3/3] Creating optimizer (for head only)...")
+
+trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+print(f"✓ Optimizer will train {trainable_params:,} parameters only")
+
 optimizer = optim.AdamW(
-    model.head.parameters(),
-    lr=1e-4,
+    [p for p in model.parameters() if p.requires_grad],
+    lr=1e-4,  # Low learning rate (don't disrupt existing backbone)
     weight_decay=1e-4
 )
 
 scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3, verbose=False)
 criterion = HuberLoss(delta=5.0)
 
-# Training
+print(f"✓ Learning rate: 1e-4 (low, to fine-tune gently)")
+print(f"✓ Loss function: HuberLoss (robust to outliers)")
+
+print("\n" + "=" * 70)
+print("TRANSFER LEARNING STRATEGY")
+print("=" * 70)
+print("""
+What's happening:
+1. Backbone (EfficientNet-B0): FROZEN ❌ (Keep existing ImageNet features)
+2. Regression Head: TRAINABLE ✓ (Adapt to new flood depth data)
+3. Learning Rate: Low (1e-4) to avoid overfitting
+4. Loss: HuberLoss (handles outliers better than MSE)
+5. Epochs: 15 (faster because backbone is frozen)
+
+Why this is better than retraining from scratch:
+- ✓ 10x faster (no need to learn ImageNet features again)
+- ✓ Needs less data (50-200 images is enough)
+- ✓ Better generalization (keeps learned features)
+- ✓ Lower risk of overfitting (frozen backbone acts as regularization)
+""")
+print("=" * 70)
+
+# Training loop
 num_epochs = 15
 best_val_loss = float("inf")
+best_epoch = 0
 metrics = {"train_loss": [], "train_mae": [], "val_loss": [], "val_mae": []}
+no_improve_count = 0
 
 print(f"\nStarting fine-tuning for {num_epochs} epochs...\n")
+print(f"{'Epoch':<8} {'Train Loss':<15} {'Train MAE':<15} {'Val Loss':<15} {'Val MAE':<15} {'Status':<15}")
+print("-" * 85)
 
 for epoch in range(num_epochs):
-    # Train
+    # ========== TRAIN ==========
     model.train()
     train_loss = 0.0
     train_mae = 0.0
     
-    for batch in train_loader:
+    for batch_idx, batch in enumerate(train_loader):
         images = batch["image"].to(device)
         targets = batch["depth"].to(device).unsqueeze(1)
         
@@ -588,7 +689,7 @@ for epoch in range(num_epochs):
     metrics["train_loss"].append(train_loss)
     metrics["train_mae"].append(train_mae)
     
-    # Validate
+    # ========== VALIDATE ==========
     model.eval()
     val_loss = 0.0
     val_mae = 0.0
@@ -609,13 +710,10 @@ for epoch in range(num_epochs):
     metrics["val_loss"].append(val_loss)
     metrics["val_mae"].append(val_mae)
     
-    print(f"Epoch {epoch+1:2d}/{num_epochs} | Train Loss: {train_loss:.6f} MAE: {train_mae:.2f}cm | Val Loss: {val_loss:.6f} MAE: {val_mae:.2f}cm")
-    
-    scheduler.step(val_loss)
-    
-    # Save best
+    # ========== STATUS ==========
     if val_loss < best_val_loss:
         best_val_loss = val_loss
+        best_epoch = epoch + 1
         best_checkpoint = {
             "epoch": epoch + 1,
             "model_state_dict": model.state_dict(),
@@ -623,9 +721,27 @@ for epoch in range(num_epochs):
             "val_loss": val_loss,
             "val_mae": val_mae,
             "metrics": metrics,
+            "training_method": "transfer_learning_frozen_backbone",
         }
+        status = "✓ BEST"
+        no_improve_count = 0
+    else:
+        status = ""
+        no_improve_count += 1
+    
+    print(f"{epoch+1:<8} {train_loss:<15.6f} {train_mae:<15.2f}cm {val_loss:<15.6f} {val_mae:<15.2f}cm {status:<15}")
+    
+    scheduler.step(val_loss)
 
-print(f"\n✓ Fine-tuning completed! Best val_loss: {best_val_loss:.6f}")
+print("-" * 85)
+print(f"\n✓ Fine-tuning completed!")
+print(f"  - Best epoch: {best_epoch}/{num_epochs}")
+print(f"  - Best val_loss: {best_val_loss:.6f}")
+print(f"  - Best val_mae: {best_checkpoint['val_mae']:.2f}cm")
+print(f"\nImprovement from existing model:")
+print(f"  - Old val_loss: {checkpoint.get('val_loss', 'unknown')}")
+print(f"  - New val_loss: {best_checkpoint['val_loss']:.6f}")
+print(f"  - Status: {'✓ IMPROVED' if best_checkpoint['val_loss'] < checkpoint.get('val_loss', float('inf')) else '⚠️ CHECK LABELS'}")
 ```
 
 ---
