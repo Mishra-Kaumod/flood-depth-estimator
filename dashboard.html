@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flood Depth Estimator - Enterprise Program Dashboard</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --line: #d7e1ef;
+      --text: #16263d;
+      --muted: #5e7392;
+      --primary: #1f5fd6;
+      --primary-soft: #eaf1ff;
+      --green: #22c55e;
+      --yellow: #facc15;
+      --orange: #f97316;
+      --red: #ef4444;
+      --violet: #7c3aed;
+      --shadow: 0 10px 24px rgba(20, 38, 62, 0.08);
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Inter, Arial, sans-serif;
+      color: var(--text);
+      background: linear-gradient(180deg, #edf4ff 0%, var(--bg) 280px);
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      backdrop-filter: blur(8px);
+      background: rgba(244, 247, 251, 0.92);
+      border-bottom: 1px solid var(--line);
+    }
+    .head-wrap {
+      max-width: 1300px;
+      margin: 0 auto;
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .title h1 {
+      margin: 0;
+      font-size: 1.1rem;
+      font-weight: 700;
+    }
+    .title p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 0.87rem;
+    }
+
+    .tabs {
+      display: inline-flex;
+      gap: 5px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      flex-wrap: wrap;
+    }
+    .tab-btn {
+      border: 0;
+      border-radius: 999px;
+      padding: 9px 14px;
+      font-size: 0.83rem;
+      font-weight: 700;
+      cursor: pointer;
+      color: var(--muted);
+      background: transparent;
+      transition: all .18s ease;
+    }
+    .tab-btn.active {
+      background: var(--primary);
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(31, 95, 214, .25);
+    }
+
+    main {
+      max-width: 1300px;
+      margin: 16px auto 28px;
+      padding: 0 18px;
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 15px;
+      margin-bottom: 14px;
+    }
+    .h2 {
+      margin: 0 0 8px;
+      font-size: 1rem;
+      font-weight: 700;
+    }
+    .sub {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }
+    .mini {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 11px;
+      background: #fff;
+    }
+    .mini h4 {
+      margin: 0 0 5px;
+      font-size: 0.9rem;
+    }
+    .mini p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.82rem;
+      line-height: 1.38;
+    }
+
+    .approach-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(140px, 1fr));
+      gap: 10px;
+    }
+    .pill {
+      border: 1px dashed #b9ccee;
+      border-radius: 10px;
+      background: var(--primary-soft);
+      padding: 10px;
+    }
+    .pill b {
+      display: block;
+      font-size: .86rem;
+      margin-bottom: 4px;
+    }
+    .pill span {
+      color: #35547d;
+      font-size: .79rem;
+      line-height: 1.35;
+    }
+
+    .timeline {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(150px, 1fr));
+      gap: 10px;
+    }
+    .step {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      padding: 11px;
+    }
+    .num {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: .78rem;
+      font-weight: 700;
+      background: var(--primary);
+      margin-bottom: 7px;
+    }
+    .step h4 {
+      margin: 0 0 5px;
+      font-size: .9rem;
+    }
+    .step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: .8rem;
+      line-height: 1.35;
+    }
+
+    .sim {
+      display: grid;
+      grid-template-columns: 1.1fr 1fr;
+      gap: 12px;
+    }
+    .sim label {
+      display: block;
+      font-weight: 700;
+      font-size: .88rem;
+      margin-bottom: 8px;
+    }
+    .depth {
+      margin-top: 8px;
+      font-size: 1rem;
+      font-weight: 700;
+    }
+    .severity-pill {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 6px 10px;
+      color: #fff;
+      font-size: .81rem;
+      font-weight: 700;
+      margin-top: 8px;
+      background: var(--green);
+    }
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--primary);
+    }
+    .result-box {
+      border-radius: 10px;
+      color: #fff;
+      font-weight: 700;
+      padding: 12px;
+      background: var(--green);
+      margin-bottom: 8px;
+    }
+    .result-box small {
+      display: block;
+      font-weight: 500;
+      margin-top: 4px;
+      opacity: .95;
+    }
+
+    .lineage-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(170px, 1fr));
+      gap: 10px;
+    }
+    .node {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      padding: 11px;
+    }
+    .node h4 {
+      margin: 0 0 5px;
+      font-size: .9rem;
+    }
+    .node p {
+      margin: 0;
+      color: var(--muted);
+      font-size: .8rem;
+      line-height: 1.36;
+    }
+    .arrow {
+      text-align: center;
+      margin: -4px 0 6px;
+      color: var(--primary);
+      font-weight: 700;
+      font-size: .88rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .86rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      background: #fff;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f7faff;
+      font-size: .79rem;
+      letter-spacing: .02em;
+      text-transform: uppercase;
+      color: #2f4a70;
+    }
+    tr:last-child td { border-bottom: 0; }
+
+    .tracker-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    .tracker {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+      gap: 10px;
+    }
+    .phase-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      padding: 11px;
+    }
+    .phase-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .phase-head h4 {
+      margin: 0;
+      font-size: .92rem;
+    }
+    .score-badge {
+      border-radius: 999px;
+      color: #fff;
+      padding: 4px 8px;
+      font-size: .78rem;
+      font-weight: 700;
+      background: #16a34a;
+    }
+    .score-bar-wrap {
+      margin: 8px 0;
+      height: 9px;
+      border-radius: 999px;
+      background: #edf3fc;
+      overflow: hidden;
+    }
+    .score-bar {
+      height: 100%;
+      width: 60%;
+      background: #16a34a;
+    }
+    .phase-card p {
+      margin: 5px 0;
+      font-size: .82rem;
+      color: var(--muted);
+    }
+    .phase-card ul {
+      margin: 6px 0 0 18px;
+      font-size: .82rem;
+      color: #304c73;
+      padding: 0;
+    }
+
+    /* Visio-like */
+    .swim {
+      display: grid;
+      grid-template-columns: 190px 1fr;
+      gap: 8px;
+      margin-bottom: 8px;
+      align-items: stretch;
+    }
+    .lane-title {
+      border: 1px solid #c6d6f0;
+      background: #eff4ff;
+      border-radius: 10px;
+      padding: 9px;
+      font-size: .83rem;
+      font-weight: 700;
+      color: #264b7a;
+      display: flex;
+      align-items: center;
+    }
+    .lane-track {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      padding: 9px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(150px, 1fr));
+      gap: 8px;
+      align-items: center;
+    }
+    .vbox {
+      border: 1px solid #cfdcf0;
+      border-radius: 10px;
+      padding: 8px;
+      background: #f9fbff;
+      font-size: .78rem;
+      line-height: 1.3;
+      position: relative;
+    }
+    .vbox b {
+      font-size: .8rem;
+      display: block;
+      margin-bottom: 3px;
+      color: #1d3f67;
+    }
+    .vbox .file {
+      display: inline-block;
+      margin-top: 4px;
+      font-size: .75rem;
+      color: #355b89;
+      background: #e9f0ff;
+      border: 1px solid #cad9f4;
+      border-radius: 999px;
+      padding: 2px 7px;
+    }
+    .vbox::after {
+      content: "→";
+      position: absolute;
+      right: -11px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #6f88ab;
+      font-weight: 700;
+    }
+    .lane-track .vbox:last-child::after { content: ""; }
+
+    .legend {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: .78rem;
+      color: var(--muted);
+      background: #fff;
+    }
+    .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    @media (max-width: 1100px) {
+      .timeline { grid-template-columns: repeat(2, minmax(170px, 1fr)); }
+      .sim { grid-template-columns: 1fr; }
+      .lineage-grid { grid-template-columns: 1fr; }
+      .approach-strip { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
+      .swim { grid-template-columns: 1fr; }
+      .lane-track { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
+      .vbox::after { content: ""; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="head-wrap">
+      <div class="title">
+        <h1>Bengaluru Flood Depth Estimator - Enterprise Documentation Console</h1>
+        <p>Self-contained explainability and architecture dashboard for objective, execution, audit, and full file-sequence flow.</p>
+      </div>
+      <nav class="tabs" aria-label="Dashboard Tabs">
+        <button class="tab-btn active" data-tab="objective">1. Objective & Approach</button>
+        <button class="tab-btn" data-tab="business">2. Executive Business Flow</button>
+        <button class="tab-btn" data-tab="technical">3. Deep Technical Blueprint</button>
+        <button class="tab-btn" data-tab="sequence">4. Process Sequence (Visio Style)</button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section id="tab-objective" class="tab-panel active">
+      <article class="card">
+        <h2 class="h2">Program Objective</h2>
+        <p class="sub">Deliver a Bengaluru-grade flood intelligence system that transforms raw camera images into reliable depth estimates, 5-level alert signals, and municipal action triggers with traceable cloud operations.</p>
+        <div class="grid-4">
+          <div class="mini">
+            <h4>City Safety Objective</h4>
+            <p>Reduce urban flood response time through automated depth estimation and clear emergency action recommendations.</p>
+          </div>
+          <div class="mini">
+            <h4>Engineering Objective</h4>
+            <p>Use one standard event contract and one deterministic execution path across API, queue workers, and serving adapters.</p>
+          </div>
+          <div class="mini">
+            <h4>Data Objective</h4>
+            <p>Enforce strict payload validation, manifest-based labeling, and corruption quarantine to protect model quality.</p>
+          </div>
+          <div class="mini">
+            <h4>Ops Objective</h4>
+            <p>Add retry, observability, and dead-letter routing so failures are durable, traceable, and recoverable.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2 class="h2">Approach Taken</h2>
+        <p class="sub">Implementation strategy used in this workspace to move from PoC fragments toward enterprise-ready, modular architecture.</p>
+        <div class="approach-strip">
+          <div class="pill">
+            <b>A. Contract First</b>
+            <span>`src/event_contract.py` defines canonical `FloodEvent`, `FloodResultEvent`, and failure envelope.</span>
+          </div>
+          <div class="pill">
+            <b>B. Single Pipeline</b>
+            <span>`src/pipeline.py` is the shared core: decode → water gate → infer → aggregate → color/action map.</span>
+          </div>
+          <div class="pill">
+            <b>C. Shared Middleware</b>
+            <span>`src/middleware/retry.py` + `src/middleware/observability.py` apply common reliability and trace logging.</span>
+          </div>
+          <div class="pill">
+            <b>D. Durable Failures</b>
+            <span>`src/dlq.py` publishes permanent failures to Redis DLQ (or JSONL fallback) with standard error envelope.</span>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section id="tab-business" class="tab-panel">
+      <article class="card">
+        <h2 class="h2">Executive Operational Timeline</h2>
+        <p class="sub">Real-world flow from camera ingestion to city action decision.</p>
+        <div class="timeline">
+          <div class="step"><div class="num">1</div><h4>Image Ingestion</h4><p>Camera sends geo-tagged frame (`camera_id`, lat/lon, image).</p></div>
+          <div class="step"><div class="num">2</div><h4>AI Filtering</h4><p>Water gate removes non-flood noise before deep inference.</p></div>
+          <div class="step"><div class="num">3</div><h4>10-Min Burst Window</h4><p>5+ frames per camera in 10 minutes trigger rolling depth logic.</p></div>
+          <div class="step"><div class="num">4</div><h4>5-Color Severity</h4><p>Depth converted to map-ready intensity and municipal alert level.</p></div>
+          <div class="step"><div class="num">5</div><h4>Automated Action</h4><p>System issues monitor/pump/diversion/emergency recommendation.</p></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2 class="h2">Interactive Business Simulator</h2>
+        <p class="sub">Adjust detected water depth and watch color + action update instantly.</p>
+        <div class="sim">
+          <div>
+            <label for="depthSlider">Detected Water Depth (metres)</label>
+            <input id="depthSlider" type="range" min="0" max="2.5" step="0.01" value="0.35" />
+            <div class="depth"><span id="depthValue">0.35</span> m</div>
+            <div id="severityPill" class="severity-pill">SEVERITY 1 - NORMAL</div>
+            <div class="legend">
+              <span><i class="dot" style="background:#22c55e"></i>Normal</span>
+              <span><i class="dot" style="background:#facc15"></i>Advisory</span>
+              <span><i class="dot" style="background:#f97316"></i>Warning</span>
+              <span><i class="dot" style="background:#ef4444"></i>Alert</span>
+              <span><i class="dot" style="background:#7c3aed"></i>Critical</span>
+            </div>
+          </div>
+          <div>
+            <div id="resultBox" class="result-box">
+              MONITOR
+              <small>Water level is low. Continue standard ward surveillance.</small>
+            </div>
+            <p><b>Signal:</b> <span id="simSignal">Normal drainage condition in Bengaluru zone.</span></p>
+            <p><b>Action Trigger:</b> <span id="simTrigger">No field intervention required.</span></p>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section id="tab-technical" class="tab-panel">
+      <article class="card">
+        <h2 class="h2">Data Lineage and File Responsibility</h2>
+        <p class="sub">Core module ownership in current architecture.</p>
+        <div class="lineage-grid">
+          <div class="node"><h4>config/config.yaml</h4><p>Runtime knobs for training, inference, aggregator, retry, DLQ, and environment overlays.</p></div>
+          <div class="node"><h4>src/settings.py</h4><p>Typed config validation, environment override merge, and secret placeholder resolution.</p></div>
+          <div class="node"><h4>src/event_contract.py</h4><p>Canonical event and failure envelope shared across API, queue, and serving adapter.</p></div>
+        </div>
+        <div class="arrow">configuration -> contract -> runtime adapters</div>
+        <div class="lineage-grid">
+          <div class="node"><h4>src/pipeline.py</h4><p>Single execution path: water gate, model inference, aggregation, severity mapping, result event.</p></div>
+          <div class="node"><h4>src/aggregator.py</h4><p>Event-time 10-minute / 5-frame per-camera burst aggregation with Redis or memory backend.</p></div>
+          <div class="node"><h4>src/geospatial_classifier.py</h4><p>1-5 severity mapping and color/action output compatible with GeoJSON/Folium/AWS Location.</p></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2 class="h2">Canonical Payload Contracts</h2>
+        <table>
+          <thead>
+            <tr><th>Contract</th><th>Field</th><th>Type</th><th>Rule</th><th>Purpose</th></tr>
+          </thead>
+          <tbody>
+            <tr><td rowspan="4"><b>Input (FloodEvent)</b></td><td>camera_id</td><td>string</td><td>1-128 chars, no slash</td><td>Per-camera window key</td></tr>
+            <tr><td>latitude</td><td>float</td><td>-90 to 90</td><td>Geo placement</td></tr>
+            <tr><td>longitude</td><td>float</td><td>-180 to 180</td><td>Geo placement</td></tr>
+            <tr><td>image_b64</td><td>string</td><td>valid base64, &gt;=100 bytes</td><td>Inference frame</td></tr>
+            <tr><td rowspan="4"><b>Output (FloodResultEvent)</b></td><td>estimated_depth_meters</td><td>float</td><td>&gt;=0</td><td>Depth KPI</td></tr>
+            <tr><td>confidence_score</td><td>float</td><td>0..1</td><td>Trust score</td></tr>
+            <tr><td>color_code</td><td>string</td><td>5-band palette</td><td>Map rendering</td></tr>
+            <tr><td>action_trigger</td><td>string</td><td>action enum</td><td>Municipal response</td></tr>
+          </tbody>
+        </table>
+      </article>
+
+      <article class="card">
+        <div class="tracker-toolbar">
+          <div>
+            <h2 class="h2" style="margin-bottom:2px;">Enterprise Confidence Tracker (1-5)</h2>
+            <p class="sub" style="margin:0;">Scorecards with deficiencies and next upgrade actions.</p>
+          </div>
+          <label style="font-size:.84rem;color:var(--muted);">
+            Show only modules below 4/5
+            <input id="riskOnly" type="checkbox" checked />
+          </label>
+        </div>
+        <div id="tracker" class="tracker"></div>
+      </article>
+    </section>
+
+    <section id="tab-sequence" class="tab-panel">
+      <article class="card">
+        <h2 class="h2">End-to-End Process Sequence (Visio-Style)</h2>
+        <p class="sub">Detailed stage-by-stage flow showing exact file usage in sequence.</p>
+
+        <div class="swim">
+          <div class="lane-title">Client / Sensor Layer</div>
+          <div class="lane-track">
+            <div class="vbox"><b>Camera capture</b>Road image and coordinates emitted.<span class="file">external sensor feed</span></div>
+            <div class="vbox"><b>Payload send</b>JSON sent to API or queue.<span class="file">HTTP / broker</span></div>
+            <div class="vbox"><b>Trace header</b>X-Trace-Id optionally propagated.<span class="file">API header</span></div>
+            <div class="vbox"><b>Schema target</b>Must match FloodEvent shape.<span class="file">src/event_contract.py</span></div>
+          </div>
+        </div>
+
+        <div class="swim">
+          <div class="lane-title">API + Queue Adapter Layer</div>
+          <div class="lane-track">
+            <div class="vbox"><b>Ingress endpoint</b>`/ingest` builds canonical event.<span class="file">app.py</span></div>
+            <div class="vbox"><b>Queue dispatch</b>Same event payload to Celery.<span class="file">tasks.py</span></div>
+            <div class="vbox"><b>Contract validation</b>Pydantic model validation.<span class="file">src/event_contract.py</span></div>
+            <div class="vbox"><b>Failure envelope</b>Validation failures to DLQ.<span class="file">src/dlq.py</span></div>
+          </div>
+        </div>
+
+        <div class="swim">
+          <div class="lane-title">Unified Processing Core</div>
+          <div class="lane-track">
+            <div class="vbox"><b>Retry wrapper</b>Exponential retry with jitter.<span class="file">src/middleware/retry.py</span></div>
+            <div class="vbox"><b>Observability</b>Structured logs + metrics.<span class="file">src/middleware/observability.py</span></div>
+            <div class="vbox"><b>Single execution path</b>decode -> gate -> infer -> aggregate.<span class="file">src/pipeline.py</span></div>
+            <div class="vbox"><b>Model forward pass</b>Depth + confidence generated.<span class="file">src/pipeline.py</span></div>
+          </div>
+        </div>
+
+        <div class="swim">
+          <div class="lane-title">Decision + Geo Intelligence</div>
+          <div class="lane-track">
+            <div class="vbox"><b>Windowing logic</b>5 images / 10 min by camera_id.<span class="file">src/aggregator.py</span></div>
+            <div class="vbox"><b>Severity mapping</b>Depth to 1..5 + color + action.<span class="file">src/geospatial_classifier.py</span></div>
+            <div class="vbox"><b>Result envelope</b>FloodResultEvent emitted.<span class="file">src/event_contract.py</span></div>
+            <div class="vbox"><b>GeoJSON export path</b>Map-ready output generation.<span class="file">app.py + src/geospatial_classifier.py</span></div>
+          </div>
+        </div>
+
+        <div class="swim">
+          <div class="lane-title">Failure + Recovery Path</div>
+          <div class="lane-track">
+            <div class="vbox"><b>Retry exhausted</b>Permanent failure determined.<span class="file">src/middleware/retry.py</span></div>
+            <div class="vbox"><b>Standard error event</b>FloodFailureEvent created.<span class="file">src/event_contract.py</span></div>
+            <div class="vbox"><b>DLQ publish</b>Redis list or JSONL fallback.<span class="file">src/dlq.py</span></div>
+            <div class="vbox"><b>Operator review</b>Replay tooling (next phase).<span class="file">planned workflow</span></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2 class="h2">Detailed Process-File Matrix</h2>
+        <table>
+          <thead>
+            <tr><th>#</th><th>Process Stage</th><th>Primary Files</th><th>Input</th><th>Output</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>Config boot + typed validation</td><td>`config/config.yaml`, `src/settings.py`</td><td>YAML + env vars</td><td>Validated runtime config</td></tr>
+            <tr><td>2</td><td>Canonical contract build</td><td>`src/event_contract.py`, `app.py`, `tasks.py`, `serve.py`</td><td>Raw request or queue payload</td><td>`FloodEvent` object</td></tr>
+            <tr><td>3</td><td>Shared retry/observability wrappers</td><td>`src/middleware/retry.py`, `src/middleware/observability.py`</td><td>FloodEvent + operation closure</td><td>Traced + retry-safe execution</td></tr>
+            <tr><td>4</td><td>Unified model pipeline</td><td>`src/pipeline.py`</td><td>FloodEvent image payload</td><td>Raw depth/confidence</td></tr>
+            <tr><td>5</td><td>Temporal aggregation</td><td>`src/aggregator.py`</td><td>Per-camera event stream</td><td>Burst-averaged depth + action</td></tr>
+            <tr><td>6</td><td>Geospatial severity conversion</td><td>`src/geospatial_classifier.py`</td><td>Depth (cm/m)</td><td>Severity, color code, action policy</td></tr>
+            <tr><td>7</td><td>Result envelope + API response</td><td>`src/event_contract.py`, `app.py`, `serve.py`</td><td>Pipeline output</td><td>`FloodResultEvent` JSON</td></tr>
+            <tr><td>8</td><td>Permanent failure handling</td><td>`src/event_contract.py`, `src/dlq.py`, `tasks.py`, `serve.py`, `app.py`</td><td>Unhandled/retry-exhausted exception</td><td>DLQ persisted `FloodFailureEvent`</td></tr>
+          </tbody>
+        </table>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    const tabs = document.querySelectorAll(".tab-btn");
+    const panels = {
+      objective: document.getElementById("tab-objective"),
+      business: document.getElementById("tab-business"),
+      technical: document.getElementById("tab-technical"),
+      sequence: document.getElementById("tab-sequence")
+    };
+
+    tabs.forEach(btn => {
+      btn.addEventListener("click", () => {
+        tabs.forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        const key = btn.dataset.tab;
+        Object.entries(panels).forEach(([k, panel]) => panel.classList.toggle("active", k === key));
+      });
+    });
+
+    const severityScale = [
+      { max: 0.5, severity: 1, label: "NORMAL", color: "#22c55e", action: "MONITOR", detail: "Water level is low. Continue standard ward surveillance.", signal: "Normal drainage condition in Bengaluru zone.", trigger: "No field intervention required." },
+      { max: 1.0, severity: 2, label: "ADVISORY", color: "#facc15", action: "ADVISORY_INCREASE_MONITORING", detail: "Monitor low-lying stretches and issue precaution bulletin.", signal: "Localized pooling risk increasing.", trigger: "Increase camera polling and ward control-room watch." },
+      { max: 1.5, severity: 3, label: "WARNING", color: "#f97316", action: "WARNING_PUMP_ACTIVATION", detail: "Activate pumping and controlled traffic diversions.", signal: "Road water accumulation approaching disruption threshold.", trigger: "Dispatch mobile pumps and traffic marshals." },
+      { max: 2.0, severity: 4, label: "ALERT", color: "#ef4444", action: "ALERT_TRAFFIC_MANAGEMENT", detail: "Escalate to zonal command and emergency routing.", signal: "Urban mobility disruption likely within minutes.", trigger: "Close affected roads and open alternate routes." },
+      { max: Number.POSITIVE_INFINITY, severity: 5, label: "CRITICAL", color: "#7c3aed", action: "DEPLOY_EMERGENCY_DIVERSION", detail: "Immediate emergency diversion and evacuation readiness.", signal: "Severe flood risk with life-safety impact.", trigger: "Deploy emergency personnel and warning systems." }
+    ];
+
+    const depthSlider = document.getElementById("depthSlider");
+    const depthValue = document.getElementById("depthValue");
+    const severityPill = document.getElementById("severityPill");
+    const resultBox = document.getElementById("resultBox");
+    const simSignal = document.getElementById("simSignal");
+    const simTrigger = document.getElementById("simTrigger");
+
+    function updateSimulation() {
+      const depth = Number(depthSlider.value);
+      depthValue.textContent = depth.toFixed(2);
+      const band = severityScale.find(b => depth <= b.max);
+      severityPill.textContent = `SEVERITY ${band.severity} - ${band.label}`;
+      severityPill.style.background = band.color;
+      resultBox.style.background = band.color;
+      resultBox.innerHTML = `${band.action}<small>${band.detail}</small>`;
+      simSignal.textContent = band.signal;
+      simTrigger.textContent = band.trigger;
+    }
+    depthSlider.addEventListener("input", updateSimulation);
+    updateSimulation();
+
+    const audit = [
+      {
+        module: "config/config.yaml + src/settings.py",
+        score: 5,
+        dependency: "Feeds all runtime modules with validated typed settings",
+        summary: "Typed configuration validation and environment merge are active.",
+        deficiencies: [
+          "Secret-provider adapter (AWS Secrets Manager/Azure Key Vault) still pending."
+        ],
+        next: "Add managed secret-provider integrations and CI config preflight."
+      },
+      {
+        module: "src/dataset.py",
+        score: 4,
+        dependency: "Supplies robust training tensors and labels to src/train.py",
+        summary: "Manifest-first labeling, checksum checks, and quarantine are implemented.",
+        deficiencies: [
+          "S3-native checksum/manifest parity and central quality metrics need expansion."
+        ],
+        next: "Publish dataset-quality metrics to OTLP/CloudWatch and add S3 parity checks."
+      },
+      {
+        module: "src/train.py",
+        score: 4,
+        dependency: "Consumes dataset loaders and exports production checkpoints",
+        summary: "Config-driven loss + DDP mode + optional model registry hooks are implemented.",
+        deficiencies: [
+          "Accelerate profile and richer model-card lineage metadata still pending."
+        ],
+        next: "Add Accelerate launcher profile and full metadata schema."
+      },
+      {
+        module: "Unified Runtime (app.py + tasks.py + serve.py + src/pipeline.py)",
+        score: 4,
+        dependency: "Single event contract and deterministic processing path",
+        summary: "API, queue, and serve all execute through shared pipeline + shared middleware.",
+        deficiencies: [
+          "Distributed tracing export (OTLP) and canary rollout controls are pending."
+        ],
+        next: "Implement OTLP exporters and progressive rollout policy controls."
+      },
+      {
+        module: "Failure Reliability (src/dlq.py + FloodFailureEvent)",
+        score: 4,
+        dependency: "Captures permanent failures from API/queue/serve",
+        summary: "Standardized failure envelope persists to Redis DLQ or file fallback.",
+        deficiencies: [
+          "DLQ replay worker and approval workflow are not yet implemented."
+        ],
+        next: "Add replay processor with audit trail and operator approval gates."
+      }
+    ];
+
+    function scoreColor(score) {
+      if (score >= 4.5) return "#16a34a";
+      if (score >= 4) return "#1d9a5b";
+      if (score >= 3) return "#f59e0b";
+      if (score >= 2) return "#ef4444";
+      return "#7c3aed";
+    }
+
+    const tracker = document.getElementById("tracker");
+    const riskOnly = document.getElementById("riskOnly");
+
+    function renderTracker() {
+      const rows = riskOnly.checked ? audit.filter(a => a.score < 4) : audit;
+      if (!rows.length) {
+        tracker.innerHTML = `<article class="phase-card"><p><b>Great news:</b> no modules are currently below 4/5 in this scope.</p></article>`;
+        return;
+      }
+
+      tracker.innerHTML = rows.map(a => {
+        const color = scoreColor(a.score);
+        const width = (a.score / 5) * 100;
+        return `
+          <article class="phase-card">
+            <div class="phase-head">
+              <h4>${a.module}</h4>
+              <span class="score-badge" style="background:${color}">${a.score}/5</span>
+            </div>
+            <div class="score-bar-wrap"><div class="score-bar" style="background:${color};width:${width}%"></div></div>
+            <p><b>Dependency:</b> ${a.dependency}</p>
+            <p><b>Assessment:</b> ${a.summary}</p>
+            <p><b>Deficiencies:</b></p>
+            <ul>${a.deficiencies.map(d => `<li>${d}</li>`).join("")}</ul>
+            <p><b>Next action:</b> ${a.next}</p>
+          </article>`;
+      }).join("");
+    }
+
+    riskOnly.addEventListener("change", renderTracker);
+    renderTracker();
+  </script>
+</body>
+</html>

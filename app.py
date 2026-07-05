@@ -774,45 +774,70 @@ def health():
 @app.post("/ingest")
 def ingest():
     """
-    Phase 1+4: Async ingestion endpoint with Pydantic schema validation.
-    Accepts JSON with camera_id, latitude, longitude, image (base64).
-    Dispatches Celery task when Redis/Celery available; falls back to sync.
+    Unified ingestion endpoint using shared event contract.
+    Same payload contract is used for API and queue execution paths.
     """
     from pydantic import ValidationError
-    from schemas import IngestPayload
+    from src.event_contract import FloodEvent
+    from src.middleware.retry import RetryPolicy
+    from src.pipeline import execute_event
 
     raw = request.get_json(force=True, silent=True)
     if not raw:
         return jsonify({"error": "JSON body required"}), 400
 
     try:
-        payload = IngestPayload(**raw)
+        event_payload = {
+            "source": "api",
+            "camera_id": raw.get("camera_id", ""),
+            "latitude": raw.get("latitude"),
+            "longitude": raw.get("longitude"),
+            "image_b64": raw.get("image", ""),
+            "metadata": {"client_ip": request.remote_addr},
+        }
+        if raw.get("timestamp"):
+            event_payload["timestamp"] = raw.get("timestamp")
+        if request.headers.get("X-Trace-Id"):
+            event_payload["trace_id"] = request.headers.get("X-Trace-Id")
+        payload = FloodEvent(**event_payload)
     except ValidationError as exc:
         return jsonify({"error": "Validation failed", "detail": exc.errors()}), 422
 
     try:
         from tasks import infer_flood_depth
-        task = infer_flood_depth.apply_async(
-            args=[payload.camera_id, payload.image, payload.latitude, payload.longitude]
-        )
-        return jsonify({"task_id": task.id, "status": "queued", "camera_id": payload.camera_id}), 202
-    except Exception:
-        # Synchronous fallback when Celery/Redis not running
-        import io as _io
-        img_bytes = base64.b64decode(payload.image)
-        image = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
-        pred = _predict_single(image)
+        task = infer_flood_depth.apply_async(args=[payload.to_task_payload()])
         return jsonify({
+            "task_id": task.id,
+            "status": "queued",
             "camera_id": payload.camera_id,
-            "latitude": payload.latitude,
-            "longitude": payload.longitude,
-            "estimated_depth_meters": round(pred["depth_cm"] / 100.0, 4),
-            "depth_cm": pred["depth_cm"],
-            "model_confidence_score": pred.get("model_confidence_score", pred.get("confidence", 0.5)),
-            "dynamic_next_action_trigger": pred["severity"]["level"],
-            "severity": pred["severity"],
-            "method": pred["method"] + "_sync_fallback",
-        })
+            "event_id": payload.event_id,
+            "trace_id": payload.trace_id,
+            "schema_version": payload.schema_version,
+        }), 202
+    except Exception:
+        from src.dlq import get_dead_letter_router
+        from src.event_contract import FloodFailureEvent
+
+        try:
+            result = execute_event(
+                payload,
+                retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0.5, max_delay_seconds=6.0),
+            )
+            return jsonify(result.to_api_response())
+        except Exception as exc:
+            failure = FloodFailureEvent.from_exception(
+                exc=exc,
+                stage="api.ingest.sync_fallback",
+                attempts=3,
+                max_attempts=3,
+                retry_exhausted=True,
+                event=payload,
+                source="api",
+                metadata={"adapter": "app.ingest"},
+            )
+            dlq_info = get_dead_letter_router().publish(failure)
+            failure.metadata["dlq"] = dlq_info
+            return jsonify(failure.to_api_response()), 500
 
 
 @app.post("/export/geojson")
