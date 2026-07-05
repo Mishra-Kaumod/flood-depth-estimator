@@ -19,6 +19,26 @@ Choose your training option:
 
 ## **Quick Start (Copy-Paste Into Colab)**
 
+### **One-go executable option (single command)**
+
+If you want to run the full pipeline as one executable script in Colab:
+
+```python
+!pip install -q torch torchvision google-genai pillow tqdm kaggle
+!python Retrain_Existing_Model_GitHub.py --version v3 --epochs 20 --max-kaggle-images 600
+```
+
+This one-go script handles:
+- user image upload
+- Kaggle auth via pasted username+key (or `kaggle.json` upload fallback)
+- compact Kaggle flood+non-flood sampling (not huge)
+- object-aware labeling (person/vehicle cues) before Gemini depth estimation
+- Gemini labeling
+- transfer-learning training on GPU
+- downloadable `.pth` model output
+
+---
+
 Open a new **Google Colab** notebook at https://colab.research.google.com and follow these cells:
 
 ---
@@ -955,4 +975,3 @@ Check the repo docs:
 - GitHub LFS help: https://git-lfs.com/
 
 Happy training! 🚀
-

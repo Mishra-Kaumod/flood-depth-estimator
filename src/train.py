@@ -4,14 +4,15 @@ EfficientNet-B0 backbone with transfer learning, AdamW optimizer, MSELoss,
 ReduceLROnPlateau scheduler, and custom early stopping guardrail.
 """
 import os
-import yaml
 import logging
 import argparse
+import json
 from pathlib import Path
 from datetime import datetime
 
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau, OneCycleLR
 from torchvision import models
@@ -20,6 +21,11 @@ import numpy as np
 
 # Local imports
 from src.dataset import load_config, create_dataloaders
+
+try:
+    import boto3
+except Exception:
+    boto3 = None
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -78,6 +84,25 @@ class EarlyStopping:
         else:
             return current_score > (self.best_score + self.min_delta)
 
+
+def setup_distributed(enabled: bool) -> tuple[bool, int, int, int]:
+    """Initialize torch.distributed when launched with torchrun."""
+    if not enabled:
+        return False, 0, 1, 0
+
+    world_size = int(os.getenv("WORLD_SIZE", "1"))
+    rank = int(os.getenv("RANK", "0"))
+    local_rank = int(os.getenv("LOCAL_RANK", "0"))
+
+    if world_size <= 1:
+        return False, rank, world_size, local_rank
+
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    dist.init_process_group(backend=backend, rank=rank, world_size=world_size)
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+    return True, rank, world_size, local_rank
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MODEL BUILDER
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -126,11 +151,13 @@ class Trainer:
         model: nn.Module,
         config: dict,
         device: torch.device,
-        output_dir: str = "models"
+        output_dir: str = "models",
+        is_primary: bool = True,
     ):
         self.model = model
         self.config = config
         self.device = device
+        self.is_primary = is_primary
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -144,10 +171,14 @@ class Trainer:
             weight_decay=opt_cfg.get("weight_decay", 0.0001)
         )
         
-        # Loss function: HuberLoss for robustness against outliers
-        # MSELoss penalizes large errors too heavily; HuberLoss is more balanced
-        # delta=5.0: threshold where loss transitions from quadratic to linear
-        self.criterion = nn.HuberLoss(delta=5.0)
+        loss_name = str(train_cfg.get("loss_function", "HuberLoss"))
+        huber_delta = float(train_cfg.get("huber_delta", 5.0))
+        if loss_name == "MSELoss":
+            self.criterion = nn.MSELoss()
+        elif loss_name == "HuberLoss":
+            self.criterion = nn.HuberLoss(delta=huber_delta)
+        else:
+            raise ValueError(f"Unsupported loss_function: {loss_name}")
         
         # Learning rate scheduler
         scheduler_cfg = train_cfg.get("lr_scheduler", {})
@@ -182,6 +213,7 @@ class Trainer:
             "val_loss": [],
             "learning_rate": []
         }
+        self.registry_cfg = train_cfg.get("model_registry", {})
     
     def train_epoch(self, train_loader) -> float:
         """Train for one epoch."""
@@ -235,9 +267,13 @@ class Trainer:
     
     def save_checkpoint(self, epoch: int, is_best: bool = False):
         """Save model checkpoint."""
+        if not self.is_primary:
+            return
+
+        model_state = self.model.module.state_dict() if hasattr(self.model, "module") else self.model.state_dict()
         checkpoint = {
             "epoch": epoch,
-            "model_state_dict": self.model.state_dict(),
+            "model_state_dict": model_state,
             "optimizer_state_dict": self.optimizer.state_dict(),
             "best_val_loss": self.best_val_loss,
             "training_history": self.training_history
@@ -247,14 +283,48 @@ class Trainer:
             best_path = self.output_dir / "best_flood_model.pth"
             torch.save(checkpoint, best_path)
             logger.info(f"✅ Best model saved to {best_path}")
+            self._register_best_model(best_path, epoch=epoch, val_loss=self.best_val_loss)
         
         # Save periodic checkpoint
         ckpt_path = self.output_dir / f"checkpoint_epoch_{epoch:03d}.pth"
         torch.save(checkpoint, ckpt_path)
+
+    def _register_best_model(self, model_path: Path, epoch: int, val_loss: float) -> None:
+        """Optional model registry publish (S3) for lineage and governance."""
+        if not self.registry_cfg.get("enabled", False):
+            return
+
+        if boto3 is None:
+            logger.warning("Model registry enabled but boto3 is unavailable.")
+            return
+
+        bucket = self.registry_cfg.get("bucket")
+        prefix = self.registry_cfg.get("prefix", "model-registry")
+        if not bucket:
+            logger.warning("Model registry enabled but bucket is not configured.")
+            return
+
+        timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        model_key = f"{prefix}/best_flood_model_{timestamp}.pth"
+        metadata_key = f"{prefix}/best_flood_model_{timestamp}.json"
+        metadata = {
+            "artifact": model_key,
+            "created_at_utc": timestamp,
+            "epoch": epoch,
+            "best_val_loss": float(val_loss),
+            "model_type": self.config.get("training", {}).get("model_type", "efficientnet_b0"),
+            "loss_function": self.config.get("training", {}).get("loss_function", "HuberLoss"),
+        }
+
+        client = boto3.client("s3")
+        client.upload_file(str(model_path), bucket, model_key)
+        client.put_object(Bucket=bucket, Key=metadata_key, Body=json.dumps(metadata, indent=2).encode("utf-8"))
+        logger.info("✅ Registered model artifact to s3://%s/%s", bucket, model_key)
     
     def train(self, train_loader, val_loader, epochs: int):
         """Run full training loop."""
-        logger.info(f"Starting training for {epochs} epochs")
+        if self.is_primary:
+            logger.info(f"Starting training for {epochs} epochs")
         
         # Initialize OneCycleLR if selected
         if self.scheduler_name == "OneCycleLR":
@@ -272,9 +342,13 @@ class Trainer:
             )
         
         for epoch in range(1, epochs + 1):
-            logger.info(f"\n{'='*60}")
-            logger.info(f"EPOCH {epoch}/{epochs}")
-            logger.info(f"{'='*60}")
+            if hasattr(train_loader, "sampler") and hasattr(train_loader.sampler, "set_epoch"):
+                train_loader.sampler.set_epoch(epoch)
+
+            if self.is_primary:
+                logger.info(f"\n{'='*60}")
+                logger.info(f"EPOCH {epoch}/{epochs}")
+                logger.info(f"{'='*60}")
             
             # Train and validate
             train_loss = self.train_epoch(train_loader)
@@ -287,16 +361,18 @@ class Trainer:
                 self.optimizer.param_groups[0]["lr"]
             )
             
-            logger.info(
-                f"Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f} | "
-                f"LR: {self.optimizer.param_groups[0]['lr']:.2e}"
-            )
+            if self.is_primary:
+                logger.info(
+                    f"Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f} | "
+                    f"LR: {self.optimizer.param_groups[0]['lr']:.2e}"
+                )
             
             # Check if best
             is_best = val_loss < self.best_val_loss
             if is_best:
                 self.best_val_loss = val_loss
-                logger.info(f"🎯 New best validation loss: {val_loss:.6f}")
+                if self.is_primary:
+                    logger.info(f"🎯 New best validation loss: {val_loss:.6f}")
             
             # Save checkpoint
             self.save_checkpoint(epoch, is_best=is_best)
@@ -307,12 +383,14 @@ class Trainer:
             
             # Early stopping check
             if self.early_stopping(val_loss, epoch):
-                logger.info(f"Early stopping triggered at epoch {epoch}")
+                if self.is_primary:
+                    logger.info(f"Early stopping triggered at epoch {epoch}")
                 break
         
-        logger.info(f"\n{'='*60}")
-        logger.info(f"Training complete! Best val loss: {self.best_val_loss:.6f}")
-        logger.info(f"{'='*60}\n")
+        if self.is_primary:
+            logger.info(f"\n{'='*60}")
+            logger.info(f"Training complete! Best val loss: {self.best_val_loss:.6f}")
+            logger.info(f"{'='*60}\n")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MAIN EXECUTION
@@ -324,9 +402,14 @@ def main(args):
     # Load configuration
     config = load_config(args.config)
     train_cfg = config.get("training", {})
+
+    distributed, rank, world_size, local_rank = setup_distributed(args.distributed)
     
     # Device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device(f"cuda:{local_rank}" if distributed else "cuda")
+    else:
+        device = torch.device("cpu")
     logger.info(f"Using device: {device}")
     
     # Create dataloaders
@@ -335,21 +418,30 @@ def main(args):
         config,
         use_s3=args.use_s3,
         s3_bucket=args.s3_bucket,
-        s3_region=args.s3_region
+        s3_region=args.s3_region,
+        distributed=distributed,
+        rank=rank,
+        world_size=world_size,
     )
     
     # Build model
     model = build_model(config, device)
+    if distributed:
+        ddp_device_ids = [local_rank] if torch.cuda.is_available() else None
+        model = nn.parallel.DistributedDataParallel(model, device_ids=ddp_device_ids)
     logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     # Initialize trainer
-    trainer = Trainer(model, config, device, output_dir=args.output_dir)
+    trainer = Trainer(model, config, device, output_dir=args.output_dir, is_primary=(rank == 0))
     
     # Train
     epochs = train_cfg.get("epochs", 20)
     trainer.train(train_loader, val_loader, epochs=epochs)
     
-    logger.info(f"✅ Training complete! Best model: {args.output_dir}/best_flood_model.pth")
+    if rank == 0:
+        logger.info(f"✅ Training complete! Best model: {args.output_dir}/best_flood_model.pth")
+    if distributed:
+        dist.destroy_process_group()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train flood depth estimator model")
@@ -358,6 +450,7 @@ if __name__ == "__main__":
     parser.add_argument("--use-s3", action="store_true", help="Use AWS S3 for data")
     parser.add_argument("--s3-bucket", type=str, default="bengaluru-flood-datasets", help="S3 bucket name")
     parser.add_argument("--s3-region", type=str, default="ap-south-1", help="AWS region")
+    parser.add_argument("--distributed", action="store_true", help="Enable DistributedDataParallel (torchrun)")
     
     args = parser.parse_args()
     main(args)

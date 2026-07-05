@@ -4,10 +4,14 @@ Modular data ingestion with support for local filesystem and AWS S3.
 """
 import os
 import yaml
+import csv
+import hashlib
+import shutil
 from pathlib import Path
 from typing import Optional, Tuple, List
 import torch
 from torch.utils.data import Dataset
+from torch.utils.data.distributed import DistributedSampler
 from torchvision import transforms
 from PIL import Image
 import logging
@@ -28,15 +32,12 @@ logger = logging.getLogger(__name__)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def load_config(config_path: str = "config/config.yaml") -> dict:
-    """Load YAML configuration file."""
+    """Load validated configuration with environment overlays."""
     try:
-        with open(config_path, "r") as f:
-            return yaml.safe_load(f)
-    except FileNotFoundError:
-        logger.error(f"Config file not found: {config_path}")
-        raise
-    except yaml.YAMLError as e:
-        logger.error(f"Invalid YAML: {e}")
+        from src.settings import load_settings_dict
+        return load_settings_dict(config_path=config_path)
+    except Exception as e:
+        logger.error(f"Failed to load config: {e}")
         raise
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -121,6 +122,13 @@ class FloodDataset(Dataset):
         # Get configuration
         data_cfg = config.get("data", {})
         train_cfg = config.get("training", {})
+        self.data_cfg = data_cfg
+        self.strict_loading = bool(data_cfg.get("strict_loading", True))
+        self.label_source = str(data_cfg.get("label_source", "manifest")).lower()
+        self.manifest_file = str(data_cfg.get("manifest_file", "labels.csv"))
+        self.checksum_validation = bool(data_cfg.get("checksum_validation", True))
+        self.quarantine_dir = Path(data_cfg.get("quarantine_dir", "data/quarantine"))
+        self.quarantine_dir.mkdir(parents=True, exist_ok=True)
         
         self.image_size = tuple(train_cfg.get("image_size", [224, 224]))
         
@@ -209,74 +217,134 @@ class FloodDataset(Dataset):
             )
         
         return transforms.Compose(base_transforms)
+
+    def _file_sha256(self, path: Path) -> str:
+        digest = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _quarantine_local_file(self, file_path: Path, reason: str) -> None:
+        try:
+            target = self.quarantine_dir / f"{reason}_{file_path.name}"
+            if target.exists():
+                target = self.quarantine_dir / f"{reason}_{file_path.stem}_{os.getpid()}{file_path.suffix}"
+            shutil.move(str(file_path), str(target))
+            logger.warning(f"Quarantined file: {file_path} -> {target}")
+        except Exception as e:
+            logger.error(f"Failed to quarantine {file_path}: {e}")
+
+    def _load_manifest(self, dataset_path: Path) -> dict:
+        manifest_path = dataset_path / self.manifest_file
+        if not manifest_path.exists():
+            if self.label_source == "manifest":
+                raise FileNotFoundError(
+                    f"Manifest required but not found: {manifest_path}. "
+                    f"Set data.label_source=hybrid to allow filename fallback."
+                )
+            return {}
+
+        labels = {}
+        with open(manifest_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            required = {"filename", "depth_cm"}
+            if not required.issubset(set(reader.fieldnames or [])):
+                raise ValueError(
+                    f"Manifest {manifest_path} must include columns: filename,depth_cm "
+                    f"(optional: sha256)"
+                )
+            for row in reader:
+                file_name = (row.get("filename") or "").strip()
+                if not file_name:
+                    continue
+                labels[file_name] = {
+                    "depth_cm": int(float(row["depth_cm"])),
+                    "sha256": (row.get("sha256") or "").strip().lower() or None,
+                }
+        logger.info(f"Loaded {len(labels)} labels from manifest {manifest_path}")
+        return labels
+
+    def _validate_image_integrity(self, path: Path, expected_sha256: Optional[str]) -> bool:
+        try:
+            with Image.open(path) as img:
+                img.verify()
+        except Exception as e:
+            logger.error(f"Corrupt image file: {path} ({e})")
+            self._quarantine_local_file(path, "corrupt")
+            return False
+
+        if self.checksum_validation and expected_sha256:
+            try:
+                actual = self._file_sha256(path)
+                if actual.lower() != expected_sha256.lower():
+                    logger.error(f"Checksum mismatch for {path}")
+                    self._quarantine_local_file(path, "checksum_mismatch")
+                    return False
+            except Exception as e:
+                logger.error(f"Checksum verification failed for {path}: {e}")
+                self._quarantine_local_file(path, "checksum_error")
+                return False
+        return True
     
     def _load_local_images(self, dataset_dir: str) -> List[Tuple[str, int]]:
-        """Load image paths and depth labels from local filesystem.
-
-        Label priority (highest first):
-        1. labels.csv  in the dataset folder  → filename,depth_cm
-        2. depth(\d+)cm pattern in filename   → image_depth25cm.jpg
-        3. Default 0 cm (emits a loud warning)
-        """
-        import re, csv
+        """Load local dataset with manifest labels and corruption quarantine."""
         supported_formats = self.config.get("data", {}).get("supported_formats", [".jpg", ".png"])
-        image_paths = []
+        image_paths: List[Tuple[str, int]] = []
 
         dataset_path = Path(dataset_dir)
         candidate_dirs = [dataset_path]
-
-        # Colab notebook uploads to data/train/images and data/val/images.
         if dataset_path.parts and dataset_path.parts[0] == "flood_dataset":
             split_name = dataset_path.name
-            candidate_dirs = [
-                Path("data") / split_name / "images",
-                Path("data") / split_name,
-                dataset_path,
-            ]
+            candidate_dirs = [Path("data") / split_name / "images", Path("data") / split_name, dataset_path]
 
         for candidate in candidate_dirs:
             if candidate.exists():
                 dataset_path = candidate
                 break
         else:
-            logger.warning(f"Dataset directory not found: {dataset_dir}")
+            message = f"Dataset directory not found: {dataset_dir}"
+            logger.error(message)
+            if self.strict_loading:
+                raise FileNotFoundError(message)
             return []
 
-        # ── 1. Try to load labels.csv ──────────────────────────────────────
-        csv_labels: dict = {}
-        for csv_name in ["labels.csv", "depths.csv", "annotations.csv"]:
-            csv_path = dataset_path / csv_name
-            if csv_path.exists():
-                with open(csv_path, newline="", encoding="utf-8") as f:
-                    reader = csv.reader(f)
-                    for row in reader:
-                        if len(row) < 2:
-                            continue
-                        fname, raw_depth = row[0].strip(), row[1].strip()
-                        if fname.lower() in ("filename", "file", "name", "image"):
-                            continue  # header row
-                        try:
-                            csv_labels[fname] = int(float(raw_depth))
-                        except ValueError:
-                            pass
-                logger.info(f"Loaded {len(csv_labels)} labels from {csv_path}")
-                break
-
-        # ── 2. Scan images ─────────────────────────────────────────────────
+        manifest_labels = self._load_manifest(dataset_path)
         zero_label_count = 0
+
         for img_file in sorted(dataset_path.rglob("*")):
-            if img_file.suffix.lower() not in supported_formats:
+            if not img_file.is_file() or img_file.suffix.lower() not in supported_formats:
                 continue
-            if img_file.name in csv_labels:
-                depth_cm = csv_labels[img_file.name]
-            else:
+            if img_file.name == self.manifest_file:
+                continue
+
+            label_entry = manifest_labels.get(img_file.name)
+            depth_cm: Optional[int] = None
+            expected_sha: Optional[str] = None
+            if label_entry:
+                depth_cm = label_entry["depth_cm"]
+                expected_sha = label_entry.get("sha256")
+            elif self.label_source in ("hybrid", "filename"):
                 depth_cm = self._extract_depth_from_filename(img_file.name)
+            else:
+                self._quarantine_local_file(img_file, "missing_manifest_label")
+                continue
+
+            if depth_cm is None:
+                self._quarantine_local_file(img_file, "missing_depth")
+                continue
+
+            if not self._validate_image_integrity(img_file, expected_sha):
+                continue
+
             if depth_cm == 0:
                 zero_label_count += 1
             image_paths.append((str(img_file), depth_cm))
 
-        # ── 3. Label-collapse guard ────────────────────────────────────────
         total = len(image_paths)
+        if total == 0 and self.strict_loading:
+            raise RuntimeError(f"No valid images loaded from {dataset_path}.")
+
         if total > 0:
             pct_zero = zero_label_count / total * 100
             if pct_zero > 80:
@@ -285,11 +353,7 @@ class FloodDataset(Dataset):
                     f"  ⚠️  LABEL COLLAPSE WARNING: {zero_label_count}/{total} images "
                     f"({pct_zero:.0f}%) have depth_cm = 0!\n"
                     "  Training on this data will produce a model that always predicts 0.\n"
-                    "  Fix: create a labels.csv in your dataset folder with columns:\n"
-                    "       filename,depth_cm\n"
-                    "       flood_road.jpg,30\n"
-                    "       flooded_street.jpg,55\n"
-                    "  OR rename images: flood_photo_depth30cm.jpg\n"
+                    "  Fix: use manifest labels with calibrated depth_cm values.\n"
                     + "=" * 70
                 )
 
@@ -329,8 +393,10 @@ class FloodDataset(Dataset):
                 img = Image.open(image_path).convert("RGB")
             
             if img is None:
-                logger.warning(f"Failed to load image: {image_path}")
-                # Return blank tensor and zero depth on error
+                msg = f"Failed to load image: {image_path}"
+                logger.error(msg)
+                if self.strict_loading:
+                    raise RuntimeError(msg)
                 return torch.zeros((3, *self.image_size)), torch.tensor(0.0)
             
             # Apply transforms
@@ -343,6 +409,12 @@ class FloodDataset(Dataset):
         
         except Exception as e:
             logger.error(f"Error loading {image_path}: {e}")
+            if not self.use_s3 and isinstance(image_path, str):
+                p = Path(image_path)
+                if p.exists():
+                    self._quarantine_local_file(p, "runtime_read_error")
+            if self.strict_loading:
+                raise
             return torch.zeros((3, *self.image_size)), torch.tensor(0.0)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -354,6 +426,9 @@ def create_dataloaders(
     use_s3: bool = False,
     s3_bucket: Optional[str] = None,
     s3_region: str = "ap-south-1",
+    distributed: bool = False,
+    rank: int = 0,
+    world_size: int = 1,
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
     """Factory function to create train and validation dataloaders."""
     
@@ -369,12 +444,19 @@ def create_dataloaders(
     val_dataset = FloodDataset(
         config, dataset_type="val", use_s3=use_s3, s3_bucket=s3_bucket, s3_region=s3_region
     )
+
+    train_sampler = None
+    val_sampler = None
+    if distributed:
+        train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True)
+        val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False)
     
     # Create dataloaders
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=True
@@ -384,6 +466,7 @@ def create_dataloaders(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
+        sampler=val_sampler,
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=False
