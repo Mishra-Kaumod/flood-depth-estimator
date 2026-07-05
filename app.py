@@ -821,13 +821,14 @@ def export_geojson():
     Phase 5: Export prediction list as GeoJSON FeatureCollection.
     Body: {"predictions": [...list of prediction dicts...]}
     """
-    from geojson_export import build_geojson, LEAFLET_LEGEND_HTML
+    from src.geospatial_classifier import FloodIntensityClassifier
     raw = request.get_json(force=True, silent=True) or {}
     predictions = raw.get("predictions", [])
     if not predictions:
         return jsonify({"error": "predictions array required"}), 400
-    fc = build_geojson(predictions)
-    return jsonify({**fc, "leaflet_legend_html": LEAFLET_LEGEND_HTML})
+    clf = FloodIntensityClassifier()
+    fc = clf.to_geojson(predictions)
+    return jsonify(fc)
 
 
 if __name__ == "__main__":
