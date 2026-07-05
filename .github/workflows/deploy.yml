@@ -48,6 +48,19 @@ jobs:
           role-session-name: github-actions-deploy
           aws-region: ${{ env.AWS_REGION }}
 
+
+      - name: Enforce repository hygiene (quarantine non-production files)
+        run: |
+          echo "=== Phase 6: Production file audit ==="
+          for f in app.py tasks.py temporal_aggregator.py mc_dropout.py schemas.py geojson_export.py Dockerfile pyproject.toml; do
+            test -f "$f" || (echo "ERROR: Missing production file: $f" && exit 1)
+          done
+          if ls Retrain_*.py colab_*.py retrain_*.py 2>/dev/null | grep -v archived; then
+            echo "ERROR: Legacy scripts found outside archived/. Move them first."
+            exit 1
+          fi
+          echo "Repository hygiene check passed."
+
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
@@ -63,26 +76,10 @@ jobs:
           litserve>=0.1.0
           EOF
 
-      - name: Generate deployment Dockerfile
+      - name: Use committed Dockerfile (Phase 6)
         run: |
-          cat > Dockerfile.deploy <<'EOF'
-          FROM python:3.11-slim
-
-          ENV PYTHONDONTWRITEBYTECODE=1 \
-              PYTHONUNBUFFERED=1
-
-          WORKDIR /app
-
-          COPY requirements.inference.txt /app/requirements.inference.txt
-          RUN pip install --no-cache-dir -r /app/requirements.inference.txt
-
-          COPY serve.py /app/serve.py
-          COPY config /app/config
-          COPY models /app/models
-
-          EXPOSE 8000
-          CMD ["python", "serve.py"]
-          EOF
+          echo "Using committed Dockerfile"
+          test -f Dockerfile || (echo "ERROR: Dockerfile missing" && exit 1)
 
       - name: Build and push image
         id: build-image
@@ -92,7 +89,7 @@ jobs:
         run: |
           IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
           IMAGE_URI_LATEST="${ECR_REGISTRY}/${ECR_REPOSITORY}:latest"
-          docker build -f Dockerfile.deploy -t "${IMAGE_URI}" -t "${IMAGE_URI_LATEST}" .
+          docker build -f Dockerfile -t "${IMAGE_URI}" -t "${IMAGE_URI_LATEST}" .
           docker push "${IMAGE_URI}"
           docker push "${IMAGE_URI_LATEST}"
           echo "image=${IMAGE_URI}" >> "$GITHUB_OUTPUT"

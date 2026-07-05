@@ -3,6 +3,7 @@ Flood Depth Estimator — Rich Web UI
 3-section interface: image upload grid + live Bengaluru map + intensity results map
 """
 
+import base64
 import io
 import json
 import logging
@@ -20,7 +21,10 @@ from src.reference_depth_estimator import ReferenceDepthEstimator
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-MODEL_PATH = Path(__file__).parent / "models" / "best_flood_model_water_aware.pth"
+DEFAULT_MODEL_PATH = Path(__file__).parent / "models" / "best_flood_model_water_aware.pth"
+EXTERNAL_MODEL_PATH = Path(r"E:\flood_model_v6.1.pth")
+MODEL_PATH = EXTERNAL_MODEL_PATH if EXTERNAL_MODEL_PATH.exists() else DEFAULT_MODEL_PATH
+EXTERNAL_MODEL_ACTIVE = MODEL_PATH == EXTERNAL_MODEL_PATH
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 TRANSFORM = transforms.Compose([
@@ -51,26 +55,39 @@ BENGALURU_AREAS = [
 # Model
 # ─────────────────────────────────────────────────────────
 
-def build_model() -> nn.Module:
+def build_model(head_variant: str = "deep") -> nn.Module:
     m = models.efficientnet_b0(weights=None)
     num_features = m.classifier[1].in_features
-    m.classifier = nn.Sequential(
-        nn.Dropout(0.2), nn.Linear(num_features, 256), nn.ReLU(),
-        nn.Dropout(0.1), nn.Linear(256, 128), nn.ReLU(),
-        nn.Linear(128, 1), nn.Sigmoid(),
-    )
+    if head_variant == "compact":
+        m.classifier = nn.Sequential(
+            nn.Dropout(0.2), nn.Linear(num_features, 256), nn.ReLU(),
+            nn.Dropout(0.1), nn.Linear(256, 1), nn.Sigmoid(),
+        )
+    else:
+        m.classifier = nn.Sequential(
+            nn.Dropout(0.2), nn.Linear(num_features, 256), nn.ReLU(),
+            nn.Dropout(0.1), nn.Linear(256, 128), nn.ReLU(),
+            nn.Linear(128, 1), nn.Sigmoid(),
+        )
     return m.to(DEVICE)
 
 def load_model() -> nn.Module:
-    model = build_model()
     if not MODEL_PATH.exists():
         logger.warning(f"Model file not found at {MODEL_PATH}. Using random weights.")
+        model = build_model()
         model.eval()
         return model
     checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
     state_dict = checkpoint.get("model_state_dict", checkpoint)
-    model.load_state_dict(state_dict, strict=True)
+    model = build_model(head_variant="deep")
+    try:
+        model.load_state_dict(state_dict, strict=True)
+    except RuntimeError as deep_err:
+        logger.warning("Deep head load failed; trying compact head. Error: %s", deep_err)
+        model = build_model(head_variant="compact")
+        model.load_state_dict(state_dict, strict=True)
     model.eval()
+    logger.info(f"✅ Loading model from {MODEL_PATH}")
     if isinstance(checkpoint, dict):
         epoch = checkpoint.get("epoch", "?")
         val_loss = checkpoint.get("val_loss", checkpoint.get("best_val_loss", "?"))
@@ -630,26 +647,60 @@ def _predict_single(image: Image.Image) -> dict:
     When the ML model is healthy, blends ML output (70%) with reference CV (30%)
     to incorporate physical reference-object cues alongside learned features.
     """
-    img_arr = np.array(image)
-    ref_result = _REFERENCE_ESTIMATOR.estimate(img_arr)
-
     if _MODEL_COLLAPSED:
+        img_arr = np.array(image)
+        ref_result = _REFERENCE_ESTIMATOR.estimate(img_arr)
         depth_cm = ref_result["depth_cm"]
         confidence = ref_result["confidence"]
         method = "reference_object_cv"
         visual_cues = ref_result.get("visual_cues", [])
         label_guide = ref_result.get("label_guide", "")
-    else:
+        waterline_pct = ref_result.get("waterline_pct", 0)
+        water_coverage = ref_result.get("water_coverage", 0)
+    elif EXTERNAL_MODEL_ACTIVE:
         with torch.no_grad():
             tensor = TRANSFORM(image).unsqueeze(0).to(DEVICE)
-            depth_norm = _MODEL(tensor).squeeze().item()
+            ml_raw = float(_MODEL(tensor).squeeze().item())
+        # v6.1 may emit normalized depth (0..1) or direct cm; infer by range.
+        ml_depth = ml_raw * 100.0 if ml_raw <= 1.5 else ml_raw
+        depth_cm = float(np.clip(ml_depth, 0.0, 150.0))
+        try:
+            from mc_dropout import mc_dropout_confidence
+            _, confidence = mc_dropout_confidence(_MODEL, tensor)
+        except Exception:
+            confidence = 0.78 if depth_cm > 1 else 0.55
+        method = "ml_only"
+        visual_cues = []
+        label_guide = ""
+        waterline_pct = 0
+        water_coverage = 0
+    else:
+        img_arr = np.array(image)
+        ref_result = _REFERENCE_ESTIMATOR.estimate(img_arr)
+        with torch.no_grad():
+            tensor = TRANSFORM(image).unsqueeze(0).to(DEVICE)
+            depth_norm = float(_MODEL(tensor).squeeze().item())
         ml_depth = depth_norm * 100.0
-        # Blend: 70% ML + 30% reference CV
-        depth_cm = 0.70 * ml_depth + 0.30 * ref_result["depth_cm"]
-        confidence = round(min(depth_norm * 1.25, 0.85) * 0.7 + ref_result["confidence"] * 0.3, 4)
-        method = "ml_blend"
-        visual_cues = ref_result.get("visual_cues", [])
-        label_guide = ref_result.get("label_guide", "")
+        ref_depth = ref_result.get("depth_cm", np.nan)
+        ref_conf = ref_result.get("confidence", 0.0)
+        ref_valid = isinstance(ref_depth, (int, float)) and np.isfinite(ref_depth) and 0 <= ref_depth <= 150
+        if ref_valid:
+            # Blend: 70% ML + 30% reference CV
+            depth_cm = 0.70 * ml_depth + 0.30 * float(ref_depth)
+            confidence = round(min(depth_norm * 1.25, 0.85) * 0.7 + float(ref_conf) * 0.3, 4)
+            method = "ml_blend"
+            visual_cues = ref_result.get("visual_cues", [])
+            label_guide = ref_result.get("label_guide", "")
+            waterline_pct = ref_result.get("waterline_pct", 0)
+            water_coverage = ref_result.get("water_coverage", 0)
+        else:
+            depth_cm = ml_depth
+            confidence = round(min(max(depth_norm, 0.0), 1.0), 4)
+            method = "ml_only"
+            visual_cues = []
+            label_guide = ""
+            waterline_pct = 0
+            water_coverage = 0
 
     depth_cm = round(depth_cm, 2)
     return {
@@ -659,8 +710,8 @@ def _predict_single(image: Image.Image) -> dict:
         "method": method,
         "visual_cues": visual_cues,
         "label_guide": label_guide,
-        "waterline_pct": ref_result.get("waterline_pct", 0),
-        "water_coverage": ref_result.get("water_coverage", 0),
+        "waterline_pct": waterline_pct,
+        "water_coverage": water_coverage,
     }
 
 
@@ -707,7 +758,7 @@ def predict():
 def health():
     ckpt_ok = MODEL_PATH.exists()
     warning = "label_collapse" if _MODEL_COLLAPSED else None
-    active_method = "reference_object_cv" if _MODEL_COLLAPSED else "ml_blend"
+    active_method = "reference_object_cv" if _MODEL_COLLAPSED else ("ml_only" if EXTERNAL_MODEL_ACTIVE else "ml_blend")
     return jsonify({
         "status": "ok",
         "model": str(MODEL_PATH.name),
@@ -717,6 +768,66 @@ def health():
         "active_method": active_method,
         "reference_cv_available": True,
     })
+
+
+
+@app.post("/ingest")
+def ingest():
+    """
+    Phase 1+4: Async ingestion endpoint with Pydantic schema validation.
+    Accepts JSON with camera_id, latitude, longitude, image (base64).
+    Dispatches Celery task when Redis/Celery available; falls back to sync.
+    """
+    from pydantic import ValidationError
+    from schemas import IngestPayload
+
+    raw = request.get_json(force=True, silent=True)
+    if not raw:
+        return jsonify({"error": "JSON body required"}), 400
+
+    try:
+        payload = IngestPayload(**raw)
+    except ValidationError as exc:
+        return jsonify({"error": "Validation failed", "detail": exc.errors()}), 422
+
+    try:
+        from tasks import infer_flood_depth
+        task = infer_flood_depth.apply_async(
+            args=[payload.camera_id, payload.image, payload.latitude, payload.longitude]
+        )
+        return jsonify({"task_id": task.id, "status": "queued", "camera_id": payload.camera_id}), 202
+    except Exception:
+        # Synchronous fallback when Celery/Redis not running
+        import io as _io
+        img_bytes = base64.b64decode(payload.image)
+        image = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
+        pred = _predict_single(image)
+        return jsonify({
+            "camera_id": payload.camera_id,
+            "latitude": payload.latitude,
+            "longitude": payload.longitude,
+            "estimated_depth_meters": round(pred["depth_cm"] / 100.0, 4),
+            "depth_cm": pred["depth_cm"],
+            "model_confidence_score": pred.get("model_confidence_score", pred.get("confidence", 0.5)),
+            "dynamic_next_action_trigger": pred["severity"]["level"],
+            "severity": pred["severity"],
+            "method": pred["method"] + "_sync_fallback",
+        })
+
+
+@app.post("/export/geojson")
+def export_geojson():
+    """
+    Phase 5: Export prediction list as GeoJSON FeatureCollection.
+    Body: {"predictions": [...list of prediction dicts...]}
+    """
+    from geojson_export import build_geojson, LEAFLET_LEGEND_HTML
+    raw = request.get_json(force=True, silent=True) or {}
+    predictions = raw.get("predictions", [])
+    if not predictions:
+        return jsonify({"error": "predictions array required"}), 400
+    fc = build_geojson(predictions)
+    return jsonify({**fc, "leaflet_legend_html": LEAFLET_LEGEND_HTML})
 
 
 if __name__ == "__main__":
