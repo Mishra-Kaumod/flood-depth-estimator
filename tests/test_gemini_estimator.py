@@ -33,13 +33,21 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, response=None, exc=None):
+    def __init__(self, response=None, exc=None, script=None):
+        # script: ordered list of FakeResponse objects or Exceptions, one per call.
+        # Without a script, every call returns `response` (or raises `exc`).
         self.response = response
         self.exc = exc
+        self.script = list(script) if script else None
         self.calls = []
 
     def post(self, url, params=None, json=None, timeout=None):
         self.calls.append({"url": url, "params": params, "json": json, "timeout": timeout})
+        if self.script is not None:
+            step = self.script.pop(0)
+            if isinstance(step, Exception):
+                raise step
+            return step
         if self.exc:
             raise self.exc
         return self.response
@@ -50,11 +58,20 @@ def gemini_text_response(text):
     return {"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": "STOP"}]}
 
 
-def make_estimator(reply_text=None, response=None, exc=None, api_key="test-key"):
+def good_response():
+    return FakeResponse(json_data=gemini_text_response(GOOD_JSON_REPLY))
+
+
+def make_estimator(reply_text=None, response=None, exc=None, script=None, api_key="test-key",
+                   max_retries=0, fallback_models=(), model_name="gemini-pro-latest"):
     if response is None and reply_text is not None:
         response = FakeResponse(json_data=gemini_text_response(reply_text))
-    session = FakeSession(response=response, exc=exc)
-    est = GeminiDepthEstimator(api_key=api_key, session=session)
+    session = FakeSession(response=response, exc=exc, script=script)
+    est = GeminiDepthEstimator(
+        api_key=api_key, model_name=model_name, session=session,
+        max_retries=max_retries, fallback_models=list(fallback_models),
+    )
+    est._sleep = lambda s: None  # never sleep in tests
     return est, session
 
 
@@ -298,6 +315,129 @@ class TestParsing:
         est, _ = make_estimator(reply_text=json.dumps({"depth_cm": "unknown"}))
         with pytest.raises(GeminiResponseError):
             est.estimate(sample_image)
+
+
+# ── retries and model fallback ────────────────────────────────────────
+
+class TestRetriesAndFallback:
+    def test_transient_503_retried_then_succeeds(self, sample_image):
+        est, session = make_estimator(
+            script=[FakeResponse(status_code=503, text="high demand"), good_response()],
+            max_retries=2,
+        )
+        result = est.estimate(sample_image)
+        assert result["depth_cm"] == 42.5
+        assert len(session.calls) == 2
+
+    def test_network_error_retried_then_succeeds(self, sample_image):
+        est, session = make_estimator(
+            script=[ConnectionError("reset"), good_response()],
+            max_retries=1,
+        )
+        assert est.estimate(sample_image)["depth_cm"] == 42.5
+        assert len(session.calls) == 2
+
+    def test_retries_exhausted_raises(self, sample_image):
+        est, session = make_estimator(
+            script=[FakeResponse(status_code=503, text="x")] * 3,
+            max_retries=2,
+        )
+        with pytest.raises(GeminiRequestError, match="503"):
+            est.estimate(sample_image)
+        assert len(session.calls) == 3  # 1 attempt + 2 retries
+
+    def test_non_retryable_400_fails_fast(self, sample_image):
+        est, session = make_estimator(
+            script=[FakeResponse(status_code=400, text="bad request")],
+            max_retries=2,
+        )
+        with pytest.raises(GeminiRequestError, match="400"):
+            est.estimate(sample_image)
+        assert len(session.calls) == 1  # no retries burned on permanent errors
+
+    def test_daily_quota_skips_retries_and_uses_fallback_model(self, sample_image):
+        quota_text = "Quota exceeded for metric: generate_content_free_tier_requests ...PerDay..."
+        est, session = make_estimator(
+            script=[FakeResponse(status_code=429, text=quota_text), good_response()],
+            max_retries=2,
+            fallback_models=["gemini-2.5-flash-lite"],
+        )
+        result = est.estimate(sample_image)
+        assert result["depth_cm"] == 42.5
+        assert result["model_used"] == "gemini-2.5-flash-lite"
+        assert len(session.calls) == 2  # no same-model retries for exhausted daily quota
+        assert "gemini-pro-latest" in session.calls[0]["url"]
+        assert "gemini-2.5-flash-lite" in session.calls[1]["url"]
+
+    def test_throttle_429_without_perday_is_retried_on_same_model(self, sample_image):
+        est, session = make_estimator(
+            script=[FakeResponse(status_code=429, text="rate limit, retry shortly"), good_response()],
+            max_retries=1,
+        )
+        result = est.estimate(sample_image)
+        assert result["model_used"] == "gemini-pro-latest"
+        assert len(session.calls) == 2
+        assert session.calls[0]["url"] == session.calls[1]["url"]
+
+    def test_all_models_fail_raises_last_error(self, sample_image):
+        est, session = make_estimator(
+            script=[FakeResponse(status_code=403, text="forbidden")] * 3,
+            fallback_models=["m2", "m3"],
+        )
+        with pytest.raises(GeminiRequestError, match="403"):
+            est.estimate(sample_image)
+        assert len(session.calls) == 3  # each model tried once
+
+    def test_primary_success_never_touches_fallbacks(self, sample_image):
+        est, session = make_estimator(
+            script=[good_response()],
+            fallback_models=["m2"],
+        )
+        result = est.estimate(sample_image)
+        assert result["model_used"] == "gemini-pro-latest"
+        assert len(session.calls) == 1
+
+    def test_fallback_equal_to_primary_is_deduped(self, sample_image):
+        est, session = make_estimator(
+            script=[FakeResponse(status_code=403, text="forbidden")],
+            fallback_models=["gemini-pro-latest"],
+        )
+        with pytest.raises(GeminiRequestError):
+            est.estimate(sample_image)
+        assert len(session.calls) == 1
+
+    def test_backoff_delays_are_exponential(self, sample_image):
+        est, session = make_estimator(
+            script=[FakeResponse(status_code=503, text="x")] * 3,
+            max_retries=2,
+        )
+        delays = []
+        est._sleep = delays.append
+        with pytest.raises(GeminiRequestError):
+            est.estimate(sample_image)
+        assert delays == [1.5, 3.0]
+
+    def test_from_env_retry_and_fallback_config(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_API_KEY", "k")
+        monkeypatch.setenv("GEMINI_MAX_RETRIES", "5")
+        monkeypatch.setenv("GEMINI_RETRY_BASE_S", "0.5")
+        monkeypatch.setenv("GEMINI_FALLBACK_MODELS", "a-model, b-model")
+        est = GeminiDepthEstimator.from_env()
+        assert est.max_retries == 5
+        assert est.retry_base_s == 0.5
+        assert est.fallback_models == ["a-model", "b-model"]
+
+    def test_from_env_default_fallbacks(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_API_KEY", "k")
+        monkeypatch.delenv("GEMINI_FALLBACK_MODELS", raising=False)
+        est = GeminiDepthEstimator.from_env()
+        assert est.fallback_models == ["gemini-2.5-flash-lite", "gemini-2.0-flash"]
+
+    def test_from_env_empty_fallbacks_disables_chain(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_API_KEY", "k")
+        monkeypatch.setenv("GEMINI_FALLBACK_MODELS", "")
+        est = GeminiDepthEstimator.from_env()
+        assert est.fallback_models == []
 
 
 # ── error handling ────────────────────────────────────────────────────

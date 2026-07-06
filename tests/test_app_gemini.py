@@ -11,11 +11,13 @@ from src.gemini_depth_estimator import GeminiRequestError
 class StubGemini:
     """Stands in for GeminiDepthEstimator in app tests."""
 
-    def __init__(self, result=None, exc=None, available=True, model_name="gemini-2.0-flash"):
+    def __init__(self, result=None, exc=None, available=True, model_name="gemini-2.0-flash",
+                 fallback_models=("gemini-2.5-flash-lite",)):
         self.result = result
         self.exc = exc
         self.available = available
         self.model_name = model_name
+        self.fallback_models = list(fallback_models)
         self.calls = 0
 
     def estimate(self, image):
@@ -207,6 +209,7 @@ class TestHealthAndIndex:
         assert body["active_method"] == "gemini"
         assert body["warning"] is None
         assert body["model"] == "gemini-2.0-flash"
+        assert body["fallback_models"] == ["gemini-2.5-flash-lite"]
         assert body["reference_cv_available"] is True
 
     def test_health_without_gemini(self, client, gemini_unconfigured):
@@ -236,7 +239,7 @@ class TestPredictionContract:
     EXPECTED_KEYS = {
         "depth_cm", "depth_range_cm", "confidence", "severity", "method",
         "visual_cues", "label_guide", "scene_analysis", "waterline_pct", "water_coverage",
-        "reference_objects",
+        "reference_objects", "model_used",
     }
 
     def test_gemini_result_shape(self, client, gemini_ok, sample_image_bytes):
