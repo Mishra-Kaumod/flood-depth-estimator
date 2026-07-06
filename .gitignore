@@ -41,3 +41,5 @@ sample_predictions/
 
 # Cache
 .cache/
+# Secrets
+.env

@@ -9,6 +9,7 @@ description = "Bengaluru flood depth estimation — enterprise production"
 requires-python = ">=3.11"
 dependencies = [
     "flask>=3.0.0",
+    "requests>=2.31.0",
     "torch>=2.2.0",
     "torchvision>=0.17.0",
     "efficientnet_pytorch>=0.7.1",
