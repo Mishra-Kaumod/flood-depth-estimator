@@ -8,6 +8,7 @@ import base64
 import io
 import json
 import logging
+import os
 
 import numpy as np
 from PIL import Image
@@ -16,8 +17,59 @@ from flask import Flask, request, jsonify, render_template_string
 from src.reference_depth_estimator import ReferenceDepthEstimator
 from src.gemini_depth_estimator import GeminiDepthEstimator, GeminiError
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger(__name__)
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - fallback for minimal environments
+    load_dotenv = None
+
+LOG_LEVEL = os.getenv("APP_LOG_LEVEL", "INFO").upper()
+LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
+LOG_FILE = os.path.join(LOG_DIR, "app.log")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+    ],
+    force=True,
+)
+logger = logging.getLogger("flood_depth_app")
+
+
+def _load_environment_file() -> None:
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if not os.path.exists(env_path):
+        logger.info("No .env file found at %s", env_path)
+        return
+
+    if load_dotenv is not None:
+        loaded = load_dotenv(dotenv_path=env_path, override=False)
+        logger.info("Loaded environment file %s via python-dotenv (loaded=%s)", env_path, loaded)
+        return
+
+    loaded = False
+    with open(env_path, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].strip()
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+                loaded = True
+    logger.info("Loaded environment file %s via fallback parser (loaded=%s)", env_path, loaded)
+
+
+_load_environment_file()
 
 BENGALURU_AREAS = [
     {"name": "Koramangala",    "lat": 12.9344, "lng": 77.6269},
@@ -56,11 +108,20 @@ def depth_to_severity(depth_cm: float) -> dict:
 _GEMINI_ESTIMATOR = GeminiDepthEstimator.from_env()
 _REFERENCE_ESTIMATOR = ReferenceDepthEstimator()
 
+api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
+api_key_source = "GEMINI_API_KEY" if os.getenv("GEMINI_API_KEY") else "GOOGLE_API_KEY" if os.getenv("GOOGLE_API_KEY") else "none"
+logger.info(
+    "Gemini env status: key_present=%s key_source=%s model=%s",
+    bool(api_key),
+    api_key_source,
+    os.getenv("GEMINI_MODEL", "gemini-pro-latest"),
+)
+
 if _GEMINI_ESTIMATOR.available:
     logger.info(f"✅ Gemini prediction backend ready — model {_GEMINI_ESTIMATOR.model_name}")
 else:
     logger.warning(
-        "🔀 GEMINI_API_KEY not set → predictions will use reference_object_cv fallback"
+        "🔀 Gemini key was not resolved from the environment → predictions will use reference_object_cv fallback"
     )
 
 # ─────────────────────────────────────────────────────────
@@ -243,22 +304,12 @@ let nextId = 1;
 
 // ─── Model Status ─────────────────────────────────────────
 fetch('/health').then(r=>r.json()).then(d=>{
-  const ok = d.status === 'ok' && d.model_loaded;
-  if (d.warning === 'label_collapse') {
-    document.getElementById('mdot').style.background = '#f87171';
-    document.getElementById('mstat').textContent = '⚠️ Model needs retraining — trained on unlabeled data (outputs 0cm)';
-    // Show a banner
-    const banner = document.createElement('div');
-    banner.style.cssText = 'background:#fef2f2;border:1.5px solid #fca5a5;color:#991b1b;padding:8px 16px;font-size:.82rem;text-align:center;flex-shrink:0';
-    banner.innerHTML = '⚠️ <b>Label Collapse:</b> Current model was trained with all-zero labels and always predicts 0 cm. ' +
-      'Retrain using the <b>Flood_Depth_Google_Colab.ipynb</b> — complete <b>Step 7</b> to create <code>labels.csv</code> before training.';
-    document.querySelector('.hdr').insertAdjacentElement('afterend', banner);
-  } else {
-    document.getElementById('mdot').style.background = ok ? '#4ade80' : '#f87171';
-    document.getElementById('mstat').textContent = ok
-      ? `✅ ${d.model} · ${d.device}`
-      : '⚠️ Model not loaded';
-  }
+  const statusText = d.gemini_available
+    ? `✅ Gemini · ${d.model}`
+    : `🧠 ${d.active_method}`;
+
+  document.getElementById('mdot').style.background = d.status === 'ok' ? '#4ade80' : '#f87171';
+  document.getElementById('mstat').textContent = statusText;
 }).catch(()=>{ document.getElementById('mstat').textContent = '❌ Server error'; });
 
 // ─── Upload Map init ──────────────────────────────────────
@@ -567,6 +618,25 @@ document.head.appendChild(st);
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100 MB for batch
+app.logger.handlers = logger.handlers
+app.logger.setLevel(logger.level)
+
+
+@app.before_request
+def log_request_start():
+    logger.info("REQUEST %s %s from %s", request.method, request.path, request.remote_addr or "unknown")
+
+
+@app.after_request
+def log_request_end(response):
+    logger.info("RESPONSE %s %s -> %s", request.method, request.path, response.status_code)
+    return response
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(exc):
+    logger.exception("Unhandled exception for %s %s", request.method, request.path)
+    return jsonify({"error": "Internal server error"}), 500
 
 
 @app.get("/")
@@ -625,6 +695,7 @@ def predict_batch():
     lngs = request.form.getlist("lngs")
     names = request.form.getlist("names")
 
+    logger.info("Batch prediction started with %s image(s)", len(files))
     results = []
     for i, file in enumerate(files):
         lat = float(lats[i]) if i < len(lats) and lats[i] else 12.9716
@@ -640,6 +711,8 @@ def predict_batch():
             logger.error(f"  [{i+1}] {name}: error — {e}")
             results.append({"name": name, "lat": lat, "lng": lng, "error": str(e), "status": "error"})
 
+    success_count = sum(1 for item in results if item.get("status") == "ok")
+    logger.info("Batch prediction completed: %s/%s succeeded", success_count, len(results))
     return jsonify({"results": results, "count": len(results)})
 
 
@@ -647,11 +720,14 @@ def predict_batch():
 def predict():
     """Single-image prediction (kept for compatibility)."""
     if "image" not in request.files:
+        logger.warning("Single prediction request missing image field")
         return jsonify({"error": "No image field"}), 400
     file = request.files["image"]
+    logger.info("Single prediction request received for %s", file.filename or "unknown")
     try:
         image = Image.open(io.BytesIO(file.read())).convert("RGB")
     except Exception as e:
+        logger.exception("Failed to read uploaded image %s", file.filename or "unknown")
         return jsonify({"error": str(e)}), 400
     pred = _predict_single(image)
     return jsonify({**pred, "backend": "gemini" if _GEMINI_ESTIMATOR.available else "reference_object_cv"})
@@ -758,5 +834,6 @@ def export_geojson():
 
 
 if __name__ == "__main__":
-    logger.info("🌊 Starting Flood Depth Estimator at http://localhost:5000")
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    logger.info("🌊 Starting Flood Depth Estimator at http://localhost:5050")
+    logger.info("Logging enabled: stream console + file %s", LOG_FILE)
+    app.run(host="0.0.0.0", port=5050, debug=False)
