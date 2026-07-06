@@ -614,6 +614,7 @@ def _predict_single(image: Image.Image) -> dict:
         "waterline_pct": waterline_pct,
         "water_coverage": water_coverage,
         "reference_objects": reference_objects,
+        "model_used": result.get("model_used", ""),
     }
 
 
@@ -665,6 +666,7 @@ def health():
         "gemini_available": gemini_ok,
         "warning": None if gemini_ok else "gemini_api_key_missing",
         "active_method": "gemini" if gemini_ok else "reference_object_cv",
+        "fallback_models": _GEMINI_ESTIMATOR.fallback_models,
         "reference_cv_available": True,
     })
 

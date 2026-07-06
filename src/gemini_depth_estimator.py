@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,12 @@ GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{mode
 
 DEFAULT_MODEL = "gemini-pro-latest"
 DEFAULT_TIMEOUT_S = 60.0
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_RETRY_BASE_S = 1.5
+# Separate free-tier quota buckets per model — when the primary's daily quota
+# is exhausted (429 ...PerDay...), these are tried in order.
+DEFAULT_FALLBACK_MODELS = ["gemini-2.5-flash-lite", "gemini-2.0-flash"]
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 MAX_DEPTH_CM = 150.0
 
 PROMPT = (
@@ -101,6 +108,11 @@ class GeminiUnavailableError(GeminiError):
 
 class GeminiRequestError(GeminiError):
     """The HTTP request failed (network, timeout, non-200, quota)."""
+
+    def __init__(self, message: str, retryable: bool = False, quota_exhausted: bool = False):
+        super().__init__(message)
+        self.retryable = retryable          # transient: worth retrying the same model
+        self.quota_exhausted = quota_exhausted  # daily quota gone: skip straight to fallback model
 
 
 class GeminiResponseError(GeminiError):
@@ -189,18 +201,33 @@ class GeminiDepthEstimator:
         model_name: str = DEFAULT_MODEL,
         timeout_s: float = DEFAULT_TIMEOUT_S,
         session=None,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_base_s: float = DEFAULT_RETRY_BASE_S,
+        fallback_models: Optional[list] = None,
     ):
         self.api_key = (api_key or "").strip()
         self.model_name = model_name or DEFAULT_MODEL
         self.timeout_s = timeout_s
+        self.max_retries = max(0, int(max_retries))
+        self.retry_base_s = retry_base_s
+        self.fallback_models = list(fallback_models) if fallback_models is not None else list(DEFAULT_FALLBACK_MODELS)
         self._session = session  # injectable for tests; lazily built otherwise
+        self._sleep = time.sleep  # injectable for tests
 
     @classmethod
     def from_env(cls) -> "GeminiDepthEstimator":
+        fallback_env = os.environ.get("GEMINI_FALLBACK_MODELS")
+        fallback = (
+            [m.strip() for m in fallback_env.split(",") if m.strip()]
+            if fallback_env is not None else None
+        )
         return cls(
             api_key=os.environ.get("GEMINI_API_KEY", "") or os.environ.get("GOOGLE_API_KEY", ""),
             model_name=os.environ.get("GEMINI_MODEL", DEFAULT_MODEL),
             timeout_s=float(os.environ.get("GEMINI_TIMEOUT", DEFAULT_TIMEOUT_S)),
+            max_retries=int(os.environ.get("GEMINI_MAX_RETRIES", DEFAULT_MAX_RETRIES)),
+            retry_base_s=float(os.environ.get("GEMINI_RETRY_BASE_S", DEFAULT_RETRY_BASE_S)),
+            fallback_models=fallback,
         )
 
     @property
@@ -241,26 +268,60 @@ class GeminiDepthEstimator:
     def estimate(self, image) -> dict:
         """
         Predict flood depth for a PIL Image via the Gemini endpoint.
-        Returns the same shape as ReferenceDepthEstimator.estimate():
-        depth_cm, confidence, visual_cues, label_guide, waterline_pct, water_coverage.
-        Raises a GeminiError subclass on any failure.
+        Retries transient failures (throttle, 5xx, network) with exponential
+        backoff, then walks the fallback-model chain (separate quota buckets).
+        Returns the same shape as ReferenceDepthEstimator.estimate(), plus
+        model_used. Raises a GeminiError subclass only when every model fails.
         """
         if not self.available:
             raise GeminiUnavailableError("GEMINI_API_KEY is not set")
 
-        url = GEMINI_ENDPOINT.format(model=self.model_name)
+        payload = self._build_payload(image)
+        models = [self.model_name] + [m for m in self.fallback_models if m != self.model_name]
+        last_exc: Optional[GeminiError] = None
+        for i, model in enumerate(models):
+            try:
+                result = self._call_model_with_retries(model, payload)
+                result["model_used"] = model
+                return result
+            except GeminiError as exc:
+                last_exc = exc
+                if i < len(models) - 1:
+                    logger.warning(f"Model {model} failed ({exc}); trying fallback {models[i + 1]}")
+        raise last_exc
+
+    def _call_model_with_retries(self, model: str, payload: dict) -> dict:
+        attempts = self.max_retries + 1
+        for attempt in range(attempts):
+            try:
+                return self._request_once(model, payload)
+            except GeminiRequestError as exc:
+                # Daily quota won't recover by waiting; other models might have quota.
+                if exc.quota_exhausted or not exc.retryable or attempt == attempts - 1:
+                    raise
+                delay = self.retry_base_s * (2 ** attempt)
+                logger.warning(f"Transient Gemini error on {model} ({exc}); retrying in {delay:.1f}s")
+                self._sleep(delay)
+
+    def _request_once(self, model: str, payload: dict) -> dict:
+        url = GEMINI_ENDPOINT.format(model=model)
         try:
             resp = self._get_session().post(
                 url,
                 params={"key": self.api_key},
-                json=self._build_payload(image),
+                json=payload,
                 timeout=self.timeout_s,
             )
         except Exception as exc:
-            raise GeminiRequestError(f"Gemini request failed: {exc}") from exc
+            raise GeminiRequestError(f"Gemini request failed: {exc}", retryable=True) from exc
 
         if resp.status_code != 200:
-            raise GeminiRequestError(f"Gemini HTTP {resp.status_code}: {resp.text[:300]}")
+            quota_exhausted = resp.status_code == 429 and "PerDay" in (resp.text or "")
+            raise GeminiRequestError(
+                f"Gemini HTTP {resp.status_code}: {resp.text[:300]}",
+                retryable=resp.status_code in RETRYABLE_STATUS,
+                quota_exhausted=quota_exhausted,
+            )
 
         try:
             body = resp.json()
