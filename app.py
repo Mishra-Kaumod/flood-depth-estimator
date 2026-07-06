@@ -1,37 +1,23 @@
 """
 Flood Depth Estimator — Rich Web UI
 3-section interface: image upload grid + live Bengaluru map + intensity results map
+Prediction backend: Gemini vision endpoint, with reference-object CV fallback.
 """
 
 import base64
 import io
 import json
 import logging
-from pathlib import Path
 
 import numpy as np
-import torch
-import torch.nn as nn
-from torchvision import models, transforms
 from PIL import Image
 from flask import Flask, request, jsonify, render_template_string
 
 from src.reference_depth_estimator import ReferenceDepthEstimator
+from src.gemini_depth_estimator import GeminiDepthEstimator, GeminiError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
-
-DEFAULT_MODEL_PATH = Path(__file__).parent / "models" / "best_flood_model_water_aware.pth"
-EXTERNAL_MODEL_PATH = Path(r"E:\flood_model_v6.1.pth")
-MODEL_PATH = EXTERNAL_MODEL_PATH if EXTERNAL_MODEL_PATH.exists() else DEFAULT_MODEL_PATH
-EXTERNAL_MODEL_ACTIVE = MODEL_PATH == EXTERNAL_MODEL_PATH
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-TRANSFORM = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
 
 BENGALURU_AREAS = [
     {"name": "Koramangala",    "lat": 12.9344, "lng": 77.6269},
@@ -52,57 +38,8 @@ BENGALURU_AREAS = [
 ]
 
 # ─────────────────────────────────────────────────────────
-# Model
+# Prediction backends
 # ─────────────────────────────────────────────────────────
-
-def build_model(head_variant: str = "deep") -> nn.Module:
-    m = models.efficientnet_b0(weights=None)
-    num_features = m.classifier[1].in_features
-    if head_variant == "compact":
-        m.classifier = nn.Sequential(
-            nn.Dropout(0.2), nn.Linear(num_features, 256), nn.ReLU(),
-            nn.Dropout(0.1), nn.Linear(256, 1), nn.Sigmoid(),
-        )
-    else:
-        m.classifier = nn.Sequential(
-            nn.Dropout(0.2), nn.Linear(num_features, 256), nn.ReLU(),
-            nn.Dropout(0.1), nn.Linear(256, 128), nn.ReLU(),
-            nn.Linear(128, 1), nn.Sigmoid(),
-        )
-    return m.to(DEVICE)
-
-def load_model() -> nn.Module:
-    if not MODEL_PATH.exists():
-        logger.warning(f"Model file not found at {MODEL_PATH}. Using random weights.")
-        model = build_model()
-        model.eval()
-        return model
-    checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
-    state_dict = checkpoint.get("model_state_dict", checkpoint)
-    model = build_model(head_variant="deep")
-    try:
-        model.load_state_dict(state_dict, strict=True)
-    except RuntimeError as deep_err:
-        logger.warning("Deep head load failed; trying compact head. Error: %s", deep_err)
-        model = build_model(head_variant="compact")
-        model.load_state_dict(state_dict, strict=True)
-    model.eval()
-    logger.info(f"✅ Loading model from {MODEL_PATH}")
-    if isinstance(checkpoint, dict):
-        epoch = checkpoint.get("epoch", "?")
-        val_loss = checkpoint.get("val_loss", checkpoint.get("best_val_loss", "?"))
-        logger.info(f"✅ Loaded water-aware model — epoch {epoch}, val_loss {val_loss}")
-        # Detect label collapse: val_loss near zero = model always predicted 0
-        if isinstance(val_loss, (int, float)) and val_loss < 1e-5:
-            logger.error(
-                "=" * 65 + "\n"
-                "  ⚠️  LABEL COLLAPSE DETECTED\n"
-                f"  val_loss={val_loss:.2e} ≈ 0  →  model was trained on all-zero labels\n"
-                "  All predictions will be ~0 cm. Retrain with labeled data.\n"
-                "  See Flood_Depth_Google_Colab.ipynb Step 7 for how to create labels.csv\n"
-                + "=" * 65
-            )
-    return model
 
 def depth_to_severity(depth_cm: float) -> dict:
     if depth_cm < 5:
@@ -116,24 +53,15 @@ def depth_to_severity(depth_cm: float) -> dict:
     else:
         return {"level": "CRITICAL", "label": "Severe / dangerous flooding",    "color": "#7f1d1d", "stage": 5}
 
-_MODEL = load_model()
+_GEMINI_ESTIMATOR = GeminiDepthEstimator.from_env()
 _REFERENCE_ESTIMATOR = ReferenceDepthEstimator()
 
-# Detect label collapse once at startup
-def _is_collapsed() -> bool:
-    if not MODEL_PATH.exists():
-        return False
-    try:
-        ck = torch.load(MODEL_PATH, map_location="cpu", weights_only=False)
-        vl = ck.get("best_val_loss", ck.get("val_loss", 1.0)) if isinstance(ck, dict) else 1.0
-        return isinstance(vl, float) and vl < 1e-5
-    except Exception:
-        return False
-
-_MODEL_COLLAPSED = _is_collapsed()
-if _MODEL_COLLAPSED:
-    logger.warning("🔀 ML model is collapsed → predictions will use reference_object_cv fallback")
-logger.info(f"Model ready on {DEVICE}")
+if _GEMINI_ESTIMATOR.available:
+    logger.info(f"✅ Gemini prediction backend ready — model {_GEMINI_ESTIMATOR.model_name}")
+else:
+    logger.warning(
+        "🔀 GEMINI_API_KEY not set → predictions will use reference_object_cv fallback"
+    )
 
 # ─────────────────────────────────────────────────────────
 # HTML Template
@@ -550,14 +478,20 @@ function showResults(results) {
     const s = r.severity;
     const methodBadge = r.method === 'reference_object_cv'
       ? `<span style="background:#f59e0b;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">CV FALLBACK</span>`
-      : (r.method === 'ml_blend' ? `<span style="background:#3b82f6;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">ML+CV</span>` : '');
+      : (r.method === 'gemini' ? `<span style="background:#3b82f6;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">GEMINI</span>` : '');
     const cueHtml = (r.visual_cues && r.visual_cues.length)
       ? `<div style="font-size:.67rem;color:#64748b;margin-top:3px">🔍 ${r.visual_cues.slice(0,2).join(' · ')}</div>` : '';
+    const refHtml = (r.reference_objects && r.reference_objects.length)
+      ? `<div style="font-size:.67rem;color:#475569;margin-top:2px">📏 ${r.reference_objects.slice(0,3).map(o =>
+          `${o.name.replace(/_/g,' ')} (${o.known_height_cm}cm) → ${o.depth_estimate_cm}cm`).join(' · ')}</div>` : '';
     return `<div class="r-card" id="rc-${i}" style="border-left-color:${s.color}" onclick="flyTo(${r.lat},${r.lng},${i})">
       <div class="r-card-name">${r.name} ${methodBadge}</div>
-      <div class="r-card-depth" style="color:${s.color}">${r.depth_cm} cm</div>
+      <div class="r-card-depth" style="color:${s.color}">${r.depth_cm} cm${
+        (r.depth_range_cm && r.depth_range_cm[0] !== r.depth_range_cm[1])
+          ? ` <span style="font-size:.6em;color:#64748b;font-weight:400">(${r.depth_range_cm[0]}–${r.depth_range_cm[1]})</span>` : ''}</div>
       <div class="r-card-level" style="color:${s.color}">${s.level} — ${s.label}</div>
       ${cueHtml}
+      ${refHtml}
       <div class="r-card-loc">📍 ${r.lat.toFixed(4)}, ${r.lng.toFixed(4)}</div>
     </div>`;
   }).join('');
@@ -643,75 +577,43 @@ def index():
 def _predict_single(image: Image.Image) -> dict:
     """
     Run depth prediction on a PIL Image.
-    Uses the reference CV estimator when the ML model is collapsed.
-    When the ML model is healthy, blends ML output (70%) with reference CV (30%)
-    to incorporate physical reference-object cues alongside learned features.
+    Primary path: Gemini vision endpoint. Falls back to the reference-object
+    CV estimator when Gemini is unconfigured or a call fails.
     """
-    if _MODEL_COLLAPSED:
-        img_arr = np.array(image)
-        ref_result = _REFERENCE_ESTIMATOR.estimate(img_arr)
-        depth_cm = ref_result["depth_cm"]
-        confidence = ref_result["confidence"]
-        method = "reference_object_cv"
-        visual_cues = ref_result.get("visual_cues", [])
-        label_guide = ref_result.get("label_guide", "")
-        waterline_pct = ref_result.get("waterline_pct", 0)
-        water_coverage = ref_result.get("water_coverage", 0)
-    elif EXTERNAL_MODEL_ACTIVE:
-        with torch.no_grad():
-            tensor = TRANSFORM(image).unsqueeze(0).to(DEVICE)
-            ml_raw = float(_MODEL(tensor).squeeze().item())
-        # v6.1 may emit normalized depth (0..1) or direct cm; infer by range.
-        ml_depth = ml_raw * 100.0 if ml_raw <= 1.5 else ml_raw
-        depth_cm = float(np.clip(ml_depth, 0.0, 150.0))
+    result = None
+    method = "reference_object_cv"
+    if _GEMINI_ESTIMATOR.available:
         try:
-            from mc_dropout import mc_dropout_confidence
-            _, confidence = mc_dropout_confidence(_MODEL, tensor)
-        except Exception:
-            confidence = 0.78 if depth_cm > 1 else 0.55
-        method = "ml_only"
-        visual_cues = []
-        label_guide = ""
-        waterline_pct = 0
-        water_coverage = 0
-    else:
+            result = _GEMINI_ESTIMATOR.estimate(image)
+            method = "gemini"
+        except GeminiError as exc:
+            logger.warning(f"Gemini prediction failed, falling back to reference CV: {exc}")
+
+    if result is None:
         img_arr = np.array(image)
-        ref_result = _REFERENCE_ESTIMATOR.estimate(img_arr)
-        with torch.no_grad():
-            tensor = TRANSFORM(image).unsqueeze(0).to(DEVICE)
-            depth_norm = float(_MODEL(tensor).squeeze().item())
-        ml_depth = depth_norm * 100.0
-        ref_depth = ref_result.get("depth_cm", np.nan)
-        ref_conf = ref_result.get("confidence", 0.0)
-        ref_valid = isinstance(ref_depth, (int, float)) and np.isfinite(ref_depth) and 0 <= ref_depth <= 150
-        if ref_valid:
-            # Blend: 70% ML + 30% reference CV
-            depth_cm = 0.70 * ml_depth + 0.30 * float(ref_depth)
-            confidence = round(min(depth_norm * 1.25, 0.85) * 0.7 + float(ref_conf) * 0.3, 4)
-            method = "ml_blend"
-            visual_cues = ref_result.get("visual_cues", [])
-            label_guide = ref_result.get("label_guide", "")
-            waterline_pct = ref_result.get("waterline_pct", 0)
-            water_coverage = ref_result.get("water_coverage", 0)
-        else:
-            depth_cm = ml_depth
-            confidence = round(min(max(depth_norm, 0.0), 1.0), 4)
-            method = "ml_only"
-            visual_cues = []
-            label_guide = ""
-            waterline_pct = 0
-            water_coverage = 0
+        result = _REFERENCE_ESTIMATOR.estimate(img_arr)
+
+    depth_cm = result["depth_cm"]
+    confidence = result["confidence"]
+    visual_cues = result.get("visual_cues", [])
+    label_guide = result.get("label_guide", "")
+    waterline_pct = result.get("waterline_pct", 0)
+    water_coverage = result.get("water_coverage", 0)
+    reference_objects = result.get("reference_objects", [])
 
     depth_cm = round(depth_cm, 2)
     return {
         "depth_cm": depth_cm,
+        "depth_range_cm": result.get("depth_range_cm") or [depth_cm, depth_cm],
         "confidence": round(confidence, 4),
         "severity": depth_to_severity(depth_cm),
         "method": method,
         "visual_cues": visual_cues,
         "label_guide": label_guide,
+        "scene_analysis": result.get("scene_analysis", ""),
         "waterline_pct": waterline_pct,
         "water_coverage": water_coverage,
+        "reference_objects": reference_objects,
     }
 
 
@@ -751,21 +653,18 @@ def predict():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
     pred = _predict_single(image)
-    return jsonify({**pred, "device": str(DEVICE)})
+    return jsonify({**pred, "backend": "gemini" if _GEMINI_ESTIMATOR.available else "reference_object_cv"})
 
 
 @app.get("/health")
 def health():
-    ckpt_ok = MODEL_PATH.exists()
-    warning = "label_collapse" if _MODEL_COLLAPSED else None
-    active_method = "reference_object_cv" if _MODEL_COLLAPSED else ("ml_only" if EXTERNAL_MODEL_ACTIVE else "ml_blend")
+    gemini_ok = _GEMINI_ESTIMATOR.available
     return jsonify({
         "status": "ok",
-        "model": str(MODEL_PATH.name),
-        "model_loaded": ckpt_ok,
-        "device": str(DEVICE),
-        "warning": warning,
-        "active_method": active_method,
+        "model": _GEMINI_ESTIMATOR.model_name,
+        "gemini_available": gemini_ok,
+        "warning": None if gemini_ok else "gemini_api_key_missing",
+        "active_method": "gemini" if gemini_ok else "reference_object_cv",
         "reference_cv_available": True,
     })
 
