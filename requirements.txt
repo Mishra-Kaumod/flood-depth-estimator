@@ -1,0 +1,5 @@
+# Railway/Nixpacks fallback dependency list.
+# Primary deploy path uses Dockerfile, but this keeps auto-detection deployable.
+-r requirements-local.txt
+numpy>=1.26.0
+gunicorn>=22.0.0
