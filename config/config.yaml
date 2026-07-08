@@ -101,6 +101,7 @@ inference:
   model_path: "models/best_flood_model_water_aware.pth"
   device: "cpu"  # "cpu" or "cuda"
   precision: "float32"  # "float32" or "float16" for quantization
+  pipeline_mode: "segformer_yolov8_depthv2_fusion"
   use_mc_dropout_confidence: true
   mc_passes: 8
   

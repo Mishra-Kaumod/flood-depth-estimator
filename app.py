@@ -18,6 +18,7 @@ from PIL import Image
 from flask import Flask, request, jsonify, render_template_string
 
 from src.reference_depth_estimator import ReferenceDepthEstimator
+from src.segformer_yolo_depthv2_pipeline import get_segformer_yolo_depthv2_pipeline
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ MODEL_PATH = Path(ENV_MODEL_PATH) if ENV_MODEL_PATH else (
 )
 EXTERNAL_MODEL_ACTIVE = MODEL_PATH == EXTERNAL_MODEL_PATH
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+PIPELINE_MODE = os.environ.get("FLOOD_PIPELINE_MODE", "segformer_yolov8_depthv2_fusion").strip().lower()
 
 TRANSFORM = transforms.Compose([
     transforms.Resize((224, 224)),
@@ -122,6 +124,7 @@ def depth_to_severity(depth_cm: float) -> dict:
 
 _MODEL = load_model()
 _REFERENCE_ESTIMATOR = ReferenceDepthEstimator()
+_SEGFORMER_YOLO_DEPTH_PIPELINE = get_segformer_yolo_depthv2_pipeline()
 
 # Detect label collapse once at startup
 def _is_collapsed() -> bool:
@@ -554,7 +557,11 @@ function showResults(results) {
     const s = r.severity;
     const methodBadge = r.method === 'reference_object_cv'
       ? `<span style="background:#f59e0b;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">CV FALLBACK</span>`
-      : (r.method === 'ml_blend' ? `<span style="background:#3b82f6;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">ML+CV</span>` : '');
+      : (r.method === 'ml_blend'
+          ? `<span style="background:#3b82f6;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">ML+CV</span>`
+          : (r.method === 'segformer_yolov8_depthv2_fusion'
+              ? `<span style="background:#7c3aed;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">FULL STACK</span>`
+              : ''));
     const cueHtml = (r.visual_cues && r.visual_cues.length)
       ? `<div style="font-size:.67rem;color:#64748b;margin-top:3px">🔍 ${r.visual_cues.slice(0,2).join(' · ')}</div>` : '';
     return `<div class="r-card" id="rc-${i}" style="border-left-color:${s.color}" onclick="flyTo(${r.lat},${r.lng},${i})">
@@ -651,6 +658,9 @@ def _predict_single(image: Image.Image) -> dict:
     When the ML model is healthy, blends ML output (70%) with reference CV (30%)
     to incorporate physical reference-object cues alongside learned features.
     """
+    if PIPELINE_MODE == "segformer_yolov8_depthv2_fusion":
+        img_arr = np.array(image)
+        return _SEGFORMER_YOLO_DEPTH_PIPELINE.predict(img_arr)
     if _MODEL_COLLAPSED:
         img_arr = np.array(image)
         ref_result = _REFERENCE_ESTIMATOR.estimate(img_arr)
@@ -760,12 +770,16 @@ def predict():
 
 @app.get("/health")
 def health():
-    ckpt_ok = MODEL_PATH.exists()
-    warning = "label_collapse" if _MODEL_COLLAPSED else None
-    active_method = "reference_object_cv" if _MODEL_COLLAPSED else ("ml_only" if EXTERNAL_MODEL_ACTIVE else "ml_blend")
+    pipeline_active = PIPELINE_MODE == "segformer_yolov8_depthv2_fusion"
+    ckpt_ok = MODEL_PATH.exists() or pipeline_active
+    warning = None if pipeline_active else ("label_collapse" if _MODEL_COLLAPSED else None)
+    if pipeline_active:
+        active_method = "segformer_yolov8_depthv2_fusion"
+    else:
+        active_method = "reference_object_cv" if _MODEL_COLLAPSED else ("ml_only" if EXTERNAL_MODEL_ACTIVE else "ml_blend")
     return jsonify({
         "status": "ok",
-        "model": str(MODEL_PATH.name),
+        "model": "SegFormer→YOLOv8→DepthAnythingV2→Fusion" if pipeline_active else str(MODEL_PATH.name),
         "model_loaded": ckpt_ok,
         "device": str(DEVICE),
         "warning": warning,
