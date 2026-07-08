@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: flood-depth-estimator
+    env: python
+    region: singapore  # closest to Bengaluru
+    plan: free
+    buildCommand: pip install -r requirements-local.txt
+    startCommand: python app.py
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 10000
