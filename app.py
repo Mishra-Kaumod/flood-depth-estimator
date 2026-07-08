@@ -7,6 +7,7 @@ import base64
 import io
 import json
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -22,8 +23,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_PATH = Path(__file__).parent / "models" / "best_flood_model_water_aware.pth"
+ENV_MODEL_PATH = os.environ.get("MODEL_PATH")
 EXTERNAL_MODEL_PATH = Path(r"E:\flood_model_v6.1.pth")
-MODEL_PATH = EXTERNAL_MODEL_PATH if EXTERNAL_MODEL_PATH.exists() else DEFAULT_MODEL_PATH
+MODEL_PATH = Path(ENV_MODEL_PATH) if ENV_MODEL_PATH else (
+    EXTERNAL_MODEL_PATH if EXTERNAL_MODEL_PATH.exists() else DEFAULT_MODEL_PATH
+)
 EXTERNAL_MODEL_ACTIVE = MODEL_PATH == EXTERNAL_MODEL_PATH
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -857,7 +861,6 @@ def export_geojson():
 
 
 if __name__ == "__main__":
-    import os
     port = int(os.environ.get("PORT", 5000))
     logger.info(f"Starting Flood Depth Estimator on port {port}")
     app.run(host="0.0.0.0", port=port, debug=False)

@@ -25,5 +25,5 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*", "tasks*", "temporal_aggregator*", "mc_dropout*", "schemas*", "src*"]
+include = ["src*", "flood_project*"]
 exclude = ["archived*", "tests*", "*.ipynb", "Retrain*", "colab*", "retrain*"]
