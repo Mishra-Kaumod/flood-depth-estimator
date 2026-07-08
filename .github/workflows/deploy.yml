@@ -52,7 +52,7 @@ jobs:
       - name: Enforce repository hygiene (quarantine non-production files)
         run: |
           echo "=== Phase 6: Production file audit ==="
-          for f in app.py tasks.py temporal_aggregator.py mc_dropout.py schemas.py geojson_export.py Dockerfile pyproject.toml; do
+          for f in app.py tasks.py mc_dropout.py serve.py Dockerfile pyproject.toml; do
             test -f "$f" || (echo "ERROR: Missing production file: $f" && exit 1)
           done
           if ls Retrain_*.py colab_*.py retrain_*.py 2>/dev/null | grep -v archived; then
