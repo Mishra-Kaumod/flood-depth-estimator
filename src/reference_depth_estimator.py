@@ -178,6 +178,14 @@ class ReferenceDepthEstimator:
             "label_guide": label_guide,
         }
 
+    def detect_reference_objects(self, image_rgb: np.ndarray, water_mask: np.ndarray) -> Dict[str, list]:
+        """
+        Public wrapper for reference object extraction used by fusion pipelines.
+        Returns contour-derived candidates for vehicles and people.
+        """
+        vehicles, people = self._detect_reference_objects(image_rgb, water_mask)
+        return {"vehicles": vehicles, "people": people}
+
     # ── Water detection ─────────────────────────────────────────────────────
 
     def _detect_water(self, img: np.ndarray) -> Tuple[np.ndarray, float]:
@@ -246,11 +254,12 @@ class ReferenceDepthEstimator:
 
         # Higher confidence if waterline is well-defined (sharp boundary)
         if waterline_y < h:
-            above = smooth[max(0, waterline_y - 10):waterline_y].mean()
-            below = smooth[waterline_y:min(h, waterline_y + 10)].mean()
-            sharpness = below - above
-            if sharpness > 0.3:
-                confidence = min(confidence + 0.15, 0.80)
+            above_slice = smooth[max(0, waterline_y - 10):waterline_y]
+            below_slice = smooth[waterline_y:min(h, waterline_y + 10)]
+            if above_slice.size > 0 and below_slice.size > 0:
+                sharpness = float(below_slice.mean() - above_slice.mean())
+                if sharpness > 0.3:
+                    confidence = min(confidence + 0.15, 0.80)
 
         return waterline_y, confidence
 
