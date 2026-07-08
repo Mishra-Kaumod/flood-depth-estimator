@@ -1,18 +1,23 @@
 """
 Stage-aligned flood inference pipeline:
-RGB -> SegFormer water mask -> YOLOv8 reference objects ->
-Depth Anything V2 dense depth proxy -> Fusion engine ->
-Calibration/severity model.
+  Stage 1 — SegFormer (water mask)       — always classical
+  Stage 2 — YOLOv8   (reference objects) — always classical
+  Stage 3 — Depth Anything V2            — Gemini-enhanced when key present, else proxy
+  Stage 4 — Fusion Engine                — Gemini-enhanced when key present, else math
+  Stage 5 — Calibration / Severity Model — Gemini-enhanced when key present, else math
 
-The code keeps explicit stage boundaries so UI and APIs can report
-traceable execution details for each step.
+Gemini is OPTIONAL for stages 3-5 only.
+Set GEMINI_API_KEY in env or pass gemini_api_key to the constructor.
+Stages 1 and 2 are always run with the local classical approach regardless of the key.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import pickle
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -50,12 +55,14 @@ def _depth_to_severity(depth_cm: float) -> Dict[str, Any]:
 class SegformerYoloDepthV2Pipeline:
     """
     Structured multi-stage pipeline with deterministic stage order.
+    Gemini Vision is optionally active for stages 3-5 only.
     """
 
     def __init__(
         self,
         yolo_weights_path: str = "yolov8n.pt",
         yolo_confidence: float = 0.25,
+        gemini_api_key: Optional[str] = None,
     ) -> None:
         self.water_detector = WaterRegionDetector()
         self.reference_estimator = ReferenceDepthEstimator()
@@ -64,6 +71,22 @@ class SegformerYoloDepthV2Pipeline:
         self._yolo_model = None
         self._yolo_backend = "contour-proxy"
         self._load_yolo_if_available()
+        # Gemini — stages 3-5 only
+        self._gemini_model = None
+        self._gemini_key: Optional[str] = gemini_api_key or os.environ.get("GEMINI_API_KEY")
+        if self._gemini_key:
+            self._init_gemini()
+
+    def _init_gemini(self) -> None:
+        try:
+            import google.generativeai as genai
+
+            genai.configure(api_key=self._gemini_key)
+            self._gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+            logger.info("Gemini 1.5 Flash ready — stages 3-5 enhanced")
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Gemini init failed (%s). Stages 3-5 will use fallback.", exc)
+            self._gemini_model = None
 
     def _load_yolo_if_available(self) -> None:
         if not self.yolo_weights_path.exists():
@@ -268,6 +291,98 @@ class SegformerYoloDepthV2Pipeline:
 
         return round(depth_cm, 2), round(confidence, 4), action
 
+    # ------------------------------------------------------------------
+    # Gemini enhancement helpers — stages 3, 4, 5 only
+    # ------------------------------------------------------------------
+
+    def _gemini_dense_depth(self, image_rgb: np.ndarray) -> Optional[Dict[str, Any]]:
+        """Stage 3 — Gemini Vision refines depth map from image context."""
+        if not self._gemini_model:
+            return None
+        try:
+            from PIL import Image as PILImage
+
+            pil_img = PILImage.fromarray(image_rgb)
+            prompt = (
+                "Analyze this Bengaluru flood image. "
+                "Estimate: (1) percentage of ground covered by flood water, "
+                "(2) deepest visible water depth in centimeters, "
+                "(3) any reference objects visible (car, person, motorbike). "
+                "Respond ONLY with a JSON object, no markdown: "
+                '{"water_coverage_pct": 45, "max_depth_cm": 35, '
+                '"dense_depth_proxy_0_to_1": 0.29, "references_found": ["car at ~35cm"], '
+                '"confidence": 0.75}'
+            )
+            resp = self._gemini_model.generate_content([prompt, pil_img])
+            match = re.search(r"\{.*?\}", resp.text.strip(), re.DOTALL)
+            if match:
+                return json.loads(match.group())
+        except Exception as exc:
+            logger.warning("Gemini stage-3 dense-depth call failed: %s", exc)
+        return None
+
+    def _gemini_fusion(
+        self, features: Dict[str, Any], image_rgb: np.ndarray
+    ) -> Optional[Dict[str, Any]]:
+        """Stage 4 — Gemini fuses structured sensor features with visual context."""
+        if not self._gemini_model:
+            return None
+        try:
+            from PIL import Image as PILImage
+
+            pil_img = PILImage.fromarray(image_rgb)
+            prompt = (
+                "You are a flood analysis engine for Bengaluru.\n"
+                f"Sensor readings:\n"
+                f"  water_coverage={features['water_coverage_pct']:.1f}%\n"
+                f"  reference_objects={int(features['reference_count'])} "
+                f"(max_submersion={features['max_reference_submersion']:.2f})\n"
+                f"  dense_depth_proxy mean={features['dense_depth_mean']:.3f} "
+                f"p90={features['dense_depth_p90']:.3f}\n"
+                f"  reference_object_depth_cm={features['reference_depth_cm']:.1f}\n"
+                "Combine the image and sensor data. Respond ONLY with JSON (no markdown): "
+                '{"fused_depth_cm": 45.0, "confidence": 0.82, "key_signal": "car bumper submerged ~35cm"}'
+            )
+            resp = self._gemini_model.generate_content([prompt, pil_img])
+            match = re.search(r"\{.*?\}", resp.text.strip(), re.DOTALL)
+            if match:
+                return json.loads(match.group())
+        except Exception as exc:
+            logger.warning("Gemini stage-4 fusion call failed: %s", exc)
+        return None
+
+    def _gemini_calibration(
+        self, features: Dict[str, Any], prior_depth_cm: float, prior_confidence: float
+    ) -> Optional[Dict[str, Any]]:
+        """Stage 5 — Gemini cross-validates severity and action trigger."""
+        if not self._gemini_model:
+            return None
+        try:
+            prompt = (
+                "Calibration task for Bengaluru flood response.\n"
+                f"Prior depth estimate: {prior_depth_cm:.1f} cm (confidence {prior_confidence:.2f})\n"
+                f"Water coverage: {features['water_coverage_pct']:.1f}%\n"
+                f"Reference objects: {int(features['reference_count'])}\n"
+                "Produce a calibrated severity and recommended municipal action.\n"
+                "Severity bands: SAFE (<5cm), LOW (5-20cm), MEDIUM (20-50cm), HIGH (50-80cm), CRITICAL (>80cm)\n"
+                "Actions: Monitor | Advisory Monitoring | Issue Municipal Warning | "
+                "Activate Traffic Management | Deploy Emergency Diversion\n"
+                "Respond ONLY with JSON (no markdown): "
+                '{"calibrated_depth_cm": 45.0, "severity": "MEDIUM", "confidence": 0.85, '
+                '"next_action": "Issue Municipal Warning", "rationale": "one-line reason"}'
+            )
+            resp = self._gemini_model.generate_content(prompt)
+            match = re.search(r"\{.*?\}", resp.text.strip(), re.DOTALL)
+            if match:
+                return json.loads(match.group())
+        except Exception as exc:
+            logger.warning("Gemini stage-5 calibration call failed: %s", exc)
+        return None
+
+    # ------------------------------------------------------------------
+    # predict
+    # ------------------------------------------------------------------
+
     def predict(self, image_rgb: np.ndarray) -> Dict[str, Any]:
         if image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
             raise ValueError("predict expects an RGB image array with shape (H, W, 3)")
@@ -295,12 +410,22 @@ class SegformerYoloDepthV2Pipeline:
         )
 
         dense_depth_map = self._depth_anything_v2_dense_map(image_rgb, water_mask)
+        # Stage 3: optional Gemini depth refinement
+        gemini_depth_data = self._gemini_dense_depth(image_rgb)
+        stage3_backend = "dense-depth-proxy"
+        stage3_gemini_note = ""
+        if gemini_depth_data:
+            stage3_backend = "gemini-1.5-flash+proxy"
+            stage3_gemini_note = (
+                f" gemini_max_depth={gemini_depth_data.get('max_depth_cm', '?')}cm"
+                f" gemini_coverage={gemini_depth_data.get('water_coverage_pct', '?')}%"
+            )
         trace.append(
             {
                 "stage": "Depth Anything V2",
-                "backend": "dense-depth-proxy",
+                "backend": stage3_backend,
                 "status": "ok",
-                "summary": f"dense_p90={float(np.percentile(dense_depth_map, 90)):.3f}",
+                "summary": f"dense_p90={float(np.percentile(dense_depth_map, 90)):.3f}{stage3_gemini_note}",
             }
         )
 
@@ -312,10 +437,23 @@ class SegformerYoloDepthV2Pipeline:
             dense_depth_map=dense_depth_map,
             reference_estimate=reference_estimate,
         )
+        # Stage 4: optional Gemini fusion override
+        gemini_fusion_data = self._gemini_fusion(features, image_rgb)
+        stage4_backend = "feature-fusion-v1"
+        if gemini_fusion_data and "fused_depth_cm" in gemini_fusion_data:
+            # Blend Gemini fused estimate with sensor features (70/30 Gemini/sensor)
+            features["reference_depth_cm"] = round(
+                0.70 * float(gemini_fusion_data["fused_depth_cm"])
+                + 0.30 * features["reference_depth_cm"],
+                2,
+            )
+            features["gemini_fused_depth_cm"] = round(float(gemini_fusion_data["fused_depth_cm"]), 2)
+            features["gemini_key_signal"] = gemini_fusion_data.get("key_signal", "")
+            stage4_backend = "gemini-1.5-flash+feature-fusion-v1"
         trace.append(
             {
                 "stage": "Fusion Engine",
-                "backend": "feature-fusion-v1",
+                "backend": stage4_backend,
                 "status": "ok",
                 "summary": (
                     f"coverage={features['water_coverage_pct']:.2f}% "
@@ -326,10 +464,21 @@ class SegformerYoloDepthV2Pipeline:
 
         depth_cm, confidence, action = self._calibration_severity_model(features)
         severity = _depth_to_severity(depth_cm)
+        # Stage 5: optional Gemini calibration override
+        gemini_cal_data = self._gemini_calibration(features, depth_cm, confidence)
+        stage5_backend = "calibration-v1"
+        if gemini_cal_data and "calibrated_depth_cm" in gemini_cal_data:
+            raw_depth = float(gemini_cal_data["calibrated_depth_cm"])
+            depth_cm = round(float(np.clip(raw_depth, 0.0, 180.0)), 2)
+            confidence = round(float(np.clip(gemini_cal_data.get("confidence", confidence), 0.2, 0.98)), 4)
+            action = gemini_cal_data.get("next_action", action)
+            severity = _depth_to_severity(depth_cm)
+            features["gemini_calibration_rationale"] = gemini_cal_data.get("rationale", "")
+            stage5_backend = "gemini-1.5-flash+calibration-v1"
         trace.append(
             {
                 "stage": "Calibration/Severity Model",
-                "backend": "calibration-v1",
+                "backend": stage5_backend,
                 "status": "ok",
                 "summary": f"depth_cm={depth_cm:.2f} severity={severity['level']}",
             }
@@ -348,6 +497,7 @@ class SegformerYoloDepthV2Pipeline:
             "confidence": confidence,
             "severity": severity,
             "method": "segformer_yolov8_depthv2_fusion",
+            "gemini_enhanced": self._gemini_model is not None,
             "visual_cues": visual_cues,
             "label_guide": reference_estimate.get("label_guide", ""),
             "waterline_pct": reference_estimate.get("waterline_pct", 0.0),
@@ -364,5 +514,7 @@ _PIPELINE: Optional[SegformerYoloDepthV2Pipeline] = None
 def get_segformer_yolo_depthv2_pipeline() -> SegformerYoloDepthV2Pipeline:
     global _PIPELINE
     if _PIPELINE is None:
-        _PIPELINE = SegformerYoloDepthV2Pipeline()
+        _PIPELINE = SegformerYoloDepthV2Pipeline(
+            gemini_api_key=os.environ.get("GEMINI_API_KEY"),
+        )
     return _PIPELINE

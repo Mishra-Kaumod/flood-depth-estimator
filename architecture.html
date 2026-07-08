@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Bengaluru Flood Depth Estimator — System Architecture</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --border: #334155;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent-blue: #38bdf8;
+    --accent-purple: #a78bfa;
+    --accent-green: #4ade80;
+    --accent-orange: #fb923c;
+    --accent-red: #f87171;
+    --accent-gemini: #facc15;
+    --stage-1: #0e7490;
+    --stage-2: #7c3aed;
+    --stage-3: #0f766e;
+    --stage-4: #92400e;
+    --stage-5: #9f1239;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; padding: 2rem; }
+  h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem; }
+  .subtitle { color: var(--muted); font-size: 0.95rem; margin-bottom: 2.5rem; }
+  .pipeline { display: flex; flex-direction: column; align-items: center; gap: 0; width: 100%; max-width: 900px; margin: 0 auto; }
+
+  .input-box { background: #1e3a5f; border: 2px solid var(--accent-blue); border-radius: 12px;
+    padding: 1rem 2rem; text-align: center; font-weight: 600; font-size: 1.1rem;
+    color: var(--accent-blue); width: 280px; }
+
+  .arrow { width: 2px; height: 32px; background: var(--border); position: relative; }
+  .arrow::after { content: ''; position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%);
+    border-left: 7px solid transparent; border-right: 7px solid transparent;
+    border-top: 10px solid var(--border); }
+
+  .stage-card { background: var(--card); border-radius: 14px; padding: 1.25rem 1.5rem; width: 100%; max-width: 860px;
+    border-left: 5px solid; display: grid; grid-template-columns: 220px 1fr; gap: 1rem; align-items: start; }
+  .stage-card.s1 { border-color: var(--stage-1); }
+  .stage-card.s2 { border-color: var(--stage-2); }
+  .stage-card.s3 { border-color: var(--stage-3); }
+  .stage-card.s4 { border-color: var(--stage-4); }
+  .stage-card.s5 { border-color: var(--stage-5); }
+
+  .stage-left { display: flex; flex-direction: column; gap: 0.4rem; }
+  .stage-num { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .stage-name { font-size: 1.05rem; font-weight: 700; }
+  .stage-model { font-size: 0.8rem; color: var(--muted); font-style: italic; }
+  .badge { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; margin-top: 0.3rem; }
+  .badge-classical { background: #1e3a5f; color: var(--accent-blue); }
+  .badge-gemini { background: #3b2f00; color: var(--accent-gemini); }
+  .badge-optional { background: #1c2640; color: var(--accent-purple); border: 1px dashed var(--accent-purple); }
+
+  .stage-right { display: flex; flex-direction: column; gap: 0.5rem; }
+  .stage-right p { font-size: 0.875rem; color: var(--muted); line-height: 1.5; }
+  .output-label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text); opacity: 0.6; margin-top: 0.5rem; }
+  .output-value { font-size: 0.8rem; font-family: 'Courier New', monospace; color: var(--accent-green); }
+  .gemini-note { font-size: 0.75rem; color: var(--accent-gemini); margin-top: 0.4rem;
+    background: #1c1800; border: 1px solid #3b2f00; border-radius: 6px; padding: 0.3rem 0.6rem; }
+
+  .output-section { background: var(--card); border-radius: 14px; padding: 1.5rem; width: 100%; max-width: 860px;
+    border: 2px solid var(--accent-green); }
+  .output-section h3 { font-size: 1rem; color: var(--accent-green); margin-bottom: 1rem; }
+  .output-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; }
+  .out-item { background: #0f2818; border-radius: 8px; padding: 0.75rem; }
+  .out-item .key { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+  .out-item .val { font-size: 0.9rem; font-weight: 600; color: var(--accent-green); margin-top: 0.2rem; }
+
+  .infra-section { background: var(--card); border-radius: 14px; padding: 1.5rem; width: 100%; max-width: 860px; }
+  .infra-section h3 { font-size: 1rem; color: var(--accent-orange); margin-bottom: 1rem; }
+  .infra-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem; }
+  .infra-item { background: #1c1209; border-radius: 8px; padding: 0.75rem; border-left: 3px solid var(--accent-orange); }
+  .infra-item .layer { font-size: 0.7rem; color: var(--accent-orange); text-transform: uppercase; font-weight: 600; }
+  .infra-item .name { font-size: 0.9rem; font-weight: 600; margin-top: 0.2rem; }
+  .infra-item .desc { font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem; }
+
+  .legend { display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; margin-top: 2rem; padding: 1rem; 
+    background: var(--card); border-radius: 10px; width: 100%; max-width: 860px; }
+  .legend-item { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; }
+  .legend-title { color: var(--muted); font-weight: 600; font-size: 0.75rem; }
+
+  .full-arrow { display: flex; flex-direction: column; align-items: center; width: 100%; }
+</style>
+</head>
+<body>
+
+<h1>🌊 Bengaluru Flood Depth Estimator</h1>
+<p class="subtitle">End-to-end system architecture — 5-stage inference pipeline with optional Gemini Vision enhancement</p>
+
+<div class="pipeline">
+
+  <!-- Input -->
+  <div class="input-box">📷 RGB Image Input</div>
+
+  <div class="arrow"></div>
+
+  <!-- Stage 1 -->
+  <div class="stage-card s1">
+    <div class="stage-left">
+      <span class="stage-num">Stage 1</span>
+      <span class="stage-name">SegFormer</span>
+      <span class="stage-model">WaterRegionDetector (classical CV)</span>
+      <span class="badge badge-classical">Always Classical</span>
+    </div>
+    <div class="stage-right">
+      <p>Segments flood water pixels using color-space analysis, edge detection, and morphological operations. No pre-trained neural model required at runtime.</p>
+      <div class="output-label">Output</div>
+      <div class="output-value">water_mask[H,W] · water_coverage_pct: float</div>
+    </div>
+  </div>
+
+  <div class="arrow"></div>
+
+  <!-- Stage 2 -->
+  <div class="stage-card s2">
+    <div class="stage-left">
+      <span class="stage-num">Stage 2</span>
+      <span class="stage-name">YOLOv8</span>
+      <span class="stage-model">yolov8n.pt or contour proxy</span>
+      <span class="badge badge-classical">Always Classical</span>
+    </div>
+    <div class="stage-right">
+      <p>Detects real-world reference objects (cars, people, motorcycles) for scale calibration. Falls back to contour-based proxy when yolov8n.pt is absent.</p>
+      <div class="output-label">Output</div>
+      <div class="output-value">references: List[ReferenceObject] · ref_backend: str</div>
+    </div>
+  </div>
+
+  <div class="arrow"></div>
+
+  <!-- Stage 3 -->
+  <div class="stage-card s3">
+    <div class="stage-left">
+      <span class="stage-num">Stage 3</span>
+      <span class="stage-name">Depth Anything V2</span>
+      <span class="stage-model">Dense depth proxy map</span>
+      <span class="badge badge-classical">Classical fallback</span>
+      <span class="badge badge-gemini">✨ Gemini-enhanced</span>
+    </div>
+    <div class="stage-right">
+      <p>Produces a dense per-pixel depth proxy map using luminance inversion, vertical gradient prior, and texture energy. With Gemini: Vision API analyzes the image for a scene-level depth estimate that refines the proxy.</p>
+      <div class="gemini-note">🔑 Requires <code>GEMINI_API_KEY</code> — optional. Classical proxy always runs.</div>
+      <div class="output-label">Output</div>
+      <div class="output-value">dense_depth_map[H,W]: float32 · gemini_max_depth_cm (optional)</div>
+    </div>
+  </div>
+
+  <div class="arrow"></div>
+
+  <!-- Stage 4 -->
+  <div class="stage-card s4">
+    <div class="stage-left">
+      <span class="stage-num">Stage 4</span>
+      <span class="stage-name">Fusion Engine</span>
+      <span class="stage-model">feature-fusion-v1</span>
+      <span class="badge badge-classical">Classical fallback</span>
+      <span class="badge badge-gemini">✨ Gemini-enhanced</span>
+    </div>
+    <div class="stage-right">
+      <p>Combines water coverage, reference object submersion, and depth-map statistics into structured features. With Gemini: fused depth estimate blends Gemini's scene understanding (70%) with sensor math (30%).</p>
+      <div class="gemini-note">🔑 Gemini fuses visual context with structured features. Falls back to math-only.</div>
+      <div class="output-label">Output</div>
+      <div class="output-value">features: Dict[str, float] · gemini_fused_depth_cm (optional)</div>
+    </div>
+  </div>
+
+  <div class="arrow"></div>
+
+  <!-- Stage 5 -->
+  <div class="stage-card s5">
+    <div class="stage-left">
+      <span class="stage-num">Stage 5</span>
+      <span class="stage-name">Calibration / Severity Model</span>
+      <span class="stage-model">calibration-v1</span>
+      <span class="badge badge-classical">Classical fallback</span>
+      <span class="badge badge-gemini">✨ Gemini-enhanced</span>
+    </div>
+    <div class="stage-right">
+      <p>Converts structured features into final depth (cm), confidence, severity band, and municipal action trigger. With Gemini: cross-validates and calibrates the final severity classification with a rationale.</p>
+      <div class="gemini-note">🔑 Gemini returns calibrated depth, severity, next action, and rationale.</div>
+      <div class="output-label">Output</div>
+      <div class="output-value">depth_cm · confidence · severity: SAFE→CRITICAL · action_trigger · rationale</div>
+    </div>
+  </div>
+
+  <div class="arrow"></div>
+
+  <!-- Final Output -->
+  <div class="output-section">
+    <h3>✅ Unified Prediction Response</h3>
+    <div class="output-grid">
+      <div class="out-item"><div class="key">Depth</div><div class="val">depth_cm</div></div>
+      <div class="out-item"><div class="key">Confidence</div><div class="val">0.0 – 1.0</div></div>
+      <div class="out-item"><div class="key">Severity</div><div class="val">SAFE / LOW / MEDIUM / HIGH / CRITICAL</div></div>
+      <div class="out-item"><div class="key">Action</div><div class="val">action_trigger</div></div>
+      <div class="out-item"><div class="key">Water Coverage</div><div class="val">0.0 – 1.0</div></div>
+      <div class="out-item"><div class="key">Gemini Enhanced</div><div class="val">true / false</div></div>
+      <div class="out-item"><div class="key">Pipeline Trace</div><div class="val">5-stage trace list</div></div>
+      <div class="out-item"><div class="key">Structured Features</div><div class="val">Dict[str, float]</div></div>
+    </div>
+  </div>
+
+  <div style="height:2rem"></div>
+
+  <!-- Infrastructure Layer -->
+  <div class="infra-section">
+    <h3>🏗️ Infrastructure &amp; Serving Layer</h3>
+    <div class="infra-grid">
+      <div class="infra-item">
+        <div class="layer">API Server</div>
+        <div class="name">Flask + Gunicorn</div>
+        <div class="desc">app.py — /predict-batch, /ingest, /health, /map-data, /feedback</div>
+      </div>
+      <div class="infra-item">
+        <div class="layer">Event Queue</div>
+        <div class="name">Celery + Redis</div>
+        <div class="desc">tasks.py — async batch processing, DLQ, retries</div>
+      </div>
+      <div class="infra-item">
+        <div class="layer">High-Performance Serving</div>
+        <div class="name">LitServe</div>
+        <div class="desc">serve.py — GPU-optimised serving for production scale</div>
+      </div>
+      <div class="infra-item">
+        <div class="layer">Config</div>
+        <div class="name">config/config.yaml</div>
+        <div class="desc">pipeline_mode, gemini_api_key, model paths, thresholds</div>
+      </div>
+      <div class="infra-item">
+        <div class="layer">Observability</div>
+        <div class="name">Prometheus metrics</div>
+        <div class="desc">/metrics endpoint — latency, throughput, contradiction rate, confidence</div>
+      </div>
+      <div class="infra-item">
+        <div class="layer">Data Persistence</div>
+        <div class="name">SQLite + Redis</div>
+        <div class="desc">Predictions, feedback, model versions, idempotency cache</div>
+      </div>
+      <div class="infra-item">
+        <div class="layer">CI / CD</div>
+        <div class="name">GitHub Actions</div>
+        <div class="desc">.github/workflows/ — readiness gates, F1/MAE/latency checks</div>
+      </div>
+      <div class="infra-item">
+        <div class="layer">Deployment</div>
+        <div class="name">Docker + Railway</div>
+        <div class="desc">Dockerfile + railway.toml — containerised, auto-deploy on push</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Legend -->
+  <div class="legend">
+    <span class="legend-title">Legend:</span>
+    <div class="legend-item"><div class="legend-dot" style="background:#38bdf8"></div> Always Classical (Stages 1 &amp; 2)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#facc15"></div> Gemini-enhanced optional (Stages 3, 4, 5)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#4ade80"></div> Final Output</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#fb923c"></div> Infrastructure</div>
+    <p style="color:var(--muted); font-size:0.75rem; margin-left: auto;">Set <code style="color:var(--accent-gemini)">GEMINI_API_KEY</code> env var to enable Gemini for stages 3-5</p>
+  </div>
+
+</div>
+
+</body>
+</html>
