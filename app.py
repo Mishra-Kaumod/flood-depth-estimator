@@ -777,6 +777,12 @@ def health():
         active_method = "segformer_yolov8_depthv2_fusion"
     else:
         active_method = "reference_object_cv" if _MODEL_COLLAPSED else ("ml_only" if EXTERNAL_MODEL_ACTIVE else "ml_blend")
+    if pipeline_active:
+        from src.segformer_yolo_depthv2_pipeline import get_segformer_yolo_depthv2_pipeline
+        _pipe = get_segformer_yolo_depthv2_pipeline()
+        gemini_active = _pipe._gemini_model is not None
+    else:
+        gemini_active = False
     return jsonify({
         "status": "ok",
         "model": "SegFormer→YOLOv8→DepthAnythingV2→Fusion" if pipeline_active else str(MODEL_PATH.name),
@@ -784,6 +790,7 @@ def health():
         "device": str(DEVICE),
         "warning": warning,
         "active_method": active_method,
+        "gemini_enhanced_stages_3_5": gemini_active,
         "reference_cv_available": True,
     })
 

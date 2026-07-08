@@ -102,6 +102,10 @@ inference:
   device: "cpu"  # "cpu" or "cuda"
   precision: "float32"  # "float32" or "float16" for quantization
   pipeline_mode: "segformer_yolov8_depthv2_fusion"
+  # Optional Gemini API key for stage 3-5 enhancement.
+  # Leave blank to use classical fallbacks for all stages.
+  # Override at runtime via GEMINI_API_KEY env var.
+  gemini_api_key: ""
   use_mc_dropout_confidence: true
   mc_passes: 8
   
