@@ -52,6 +52,35 @@ def _depth_to_severity(depth_cm: float) -> Dict[str, Any]:
     return {"level": "CRITICAL", "label": "Severe / dangerous flooding", "color": "#7f1d1d", "stage": 5}
 
 
+_SEVERITY_LEVELS = ["SAFE", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+_SEVERITY_ANCHOR_DEPTH_CM = {
+    "SAFE": 2.0,
+    "LOW": 12.5,
+    "MEDIUM": 35.0,
+    "HIGH": 65.0,
+    "CRITICAL": 110.0,
+}
+
+
+def _severity_level_to_index(level: str) -> Optional[int]:
+    normalized = str(level).strip().upper()
+    if normalized not in _SEVERITY_LEVELS:
+        return None
+    return _SEVERITY_LEVELS.index(normalized)
+
+
+def _severity_anchor_depth(level: str) -> Optional[float]:
+    normalized = str(level).strip().upper()
+    return _SEVERITY_ANCHOR_DEPTH_CM.get(normalized)
+
+
+def _severity_from_index(index: int) -> Dict[str, Any]:
+    clipped_index = int(np.clip(index, 0, len(_SEVERITY_LEVELS) - 1))
+    level = _SEVERITY_LEVELS[clipped_index]
+    anchor_depth = _SEVERITY_ANCHOR_DEPTH_CM[level]
+    return _depth_to_severity(anchor_depth)
+
+
 class SegformerYoloDepthV2Pipeline:
     """
     Structured multi-stage pipeline with deterministic stage order.
@@ -354,21 +383,24 @@ class SegformerYoloDepthV2Pipeline:
     def _gemini_calibration(
         self, features: Dict[str, Any], prior_depth_cm: float, prior_confidence: float
     ) -> Optional[Dict[str, Any]]:
-        """Stage 5 — Gemini cross-validates severity and action trigger."""
+        """Stage 5 evaluator — Gemini re-checks classical 5-bucket grading."""
         if not self._gemini_model:
             return None
         try:
+            prior_bucket = _depth_to_severity(prior_depth_cm)["level"]
             prompt = (
-                "Calibration task for Bengaluru flood response.\n"
+                "Post-evaluation task for Bengaluru flood response.\n"
+                "The system already produced a classical 5-bucket flood grade.\n"
                 f"Prior depth estimate: {prior_depth_cm:.1f} cm (confidence {prior_confidence:.2f})\n"
+                f"Prior bucket grade: {prior_bucket}\n"
                 f"Water coverage: {features['water_coverage_pct']:.1f}%\n"
                 f"Reference objects: {int(features['reference_count'])}\n"
-                "Produce a calibrated severity and recommended municipal action.\n"
+                "Re-check and confirm/correct the grade with higher trust in Gemini evaluation.\n"
                 "Severity bands: SAFE (<5cm), LOW (5-20cm), MEDIUM (20-50cm), HIGH (50-80cm), CRITICAL (>80cm)\n"
                 "Actions: Monitor | Advisory Monitoring | Issue Municipal Warning | "
                 "Activate Traffic Management | Deploy Emergency Diversion\n"
                 "Respond ONLY with JSON (no markdown): "
-                '{"calibrated_depth_cm": 45.0, "severity": "MEDIUM", "confidence": 0.85, '
+                '{"bucket_level": "MEDIUM", "calibrated_depth_cm": 45.0, "confidence": 0.85, '
                 '"next_action": "Issue Municipal Warning", "rationale": "one-line reason"}'
             )
             resp = self._gemini_model.generate_content(prompt)
@@ -464,23 +496,66 @@ class SegformerYoloDepthV2Pipeline:
 
         depth_cm, confidence, action = self._calibration_severity_model(features)
         severity = _depth_to_severity(depth_cm)
-        # Stage 5: optional Gemini calibration override
+        # Stage 5: optional Gemini evaluator after classical 5-bucket grading.
+        # Final result is Gemini-weighted (75% Gemini, 25% classical).
+        classical_depth_cm = depth_cm
+        classical_confidence = confidence
+        classical_severity = severity
         gemini_cal_data = self._gemini_calibration(features, depth_cm, confidence)
         stage5_backend = "calibration-v1"
-        if gemini_cal_data and "calibrated_depth_cm" in gemini_cal_data:
-            raw_depth = float(gemini_cal_data["calibrated_depth_cm"])
-            depth_cm = round(float(np.clip(raw_depth, 0.0, 180.0)), 2)
-            confidence = round(float(np.clip(gemini_cal_data.get("confidence", confidence), 0.2, 0.98)), 4)
+        if gemini_cal_data:
+            gemini_depth_raw = gemini_cal_data.get("calibrated_depth_cm")
+            gemini_level = str(
+                gemini_cal_data.get("bucket_level", gemini_cal_data.get("severity", ""))
+            ).strip().upper()
+            gemini_depth_cm: Optional[float] = None
+
+            if gemini_depth_raw is not None:
+                try:
+                    gemini_depth_cm = float(gemini_depth_raw)
+                except (TypeError, ValueError):
+                    gemini_depth_cm = None
+            if gemini_depth_cm is None and gemini_level:
+                gemini_depth_cm = _severity_anchor_depth(gemini_level)
+
+            if gemini_depth_cm is not None:
+                blended_depth = (0.75 * gemini_depth_cm) + (0.25 * classical_depth_cm)
+                depth_cm = round(float(np.clip(blended_depth, 0.0, 180.0)), 2)
+
+            base_idx = classical_severity["stage"] - 1
+            gemini_idx = _severity_level_to_index(gemini_level)
+            if gemini_idx is not None:
+                final_idx = int(round((0.75 * gemini_idx) + (0.25 * base_idx)))
+                severity = _severity_from_index(final_idx)
+            else:
+                severity = _depth_to_severity(depth_cm)
+
+            gemini_confidence_raw = gemini_cal_data.get("confidence", classical_confidence)
+            try:
+                gemini_confidence = float(gemini_confidence_raw)
+            except (TypeError, ValueError):
+                gemini_confidence = classical_confidence
+            confidence = round(
+                float(np.clip((0.75 * gemini_confidence) + (0.25 * classical_confidence), 0.2, 0.98)),
+                4,
+            )
             action = gemini_cal_data.get("next_action", action)
-            severity = _depth_to_severity(depth_cm)
+
+            features["classical_bucket"] = classical_severity["level"]
+            features["gemini_bucket"] = gemini_level if gemini_idx is not None else ""
+            features["gemini_evaluator_weight"] = 0.75
+            features["classical_weight"] = 0.25
             features["gemini_calibration_rationale"] = gemini_cal_data.get("rationale", "")
-            stage5_backend = "gemini-1.5-flash+calibration-v1"
+            stage5_backend = "gemini-evaluator(75%)+calibration-v1(25%)"
         trace.append(
             {
                 "stage": "Calibration/Severity Model",
                 "backend": stage5_backend,
                 "status": "ok",
-                "summary": f"depth_cm={depth_cm:.2f} severity={severity['level']}",
+                "summary": (
+                    f"depth_cm={depth_cm:.2f} severity={severity['level']}"
+                    f" classical={classical_severity['level']}"
+                ),
             }
         )
 
