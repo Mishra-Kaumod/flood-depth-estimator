@@ -1,5 +1,5 @@
-# Railway/Nixpacks fallback dependency list.
-# Primary deploy path uses Dockerfile, but this keeps auto-detection deployable.
+# Base dependency list for local tooling and generic Python environments.
+# Production containers install from Dockerfile / requirements-local.txt.
 -r requirements-local.txt
 numpy>=1.26.0
 gunicorn>=22.0.0
