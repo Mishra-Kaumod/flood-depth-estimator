@@ -60,7 +60,7 @@ training:
   
   # Model checkpointing
   checkpoint_dir: "models"
-  best_model_path: "models/best_flood_model_water_aware.pth"
+  best_model_path: "models/best_floodnet_v2.pth"
   save_frequency: 1  # save after every N epochs
   model_registry:
     enabled: false
@@ -98,7 +98,7 @@ data:
 # INFERENCE & SERVING CONFIGURATION (ECS/Fargate, Lambda)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 inference:
-  model_path: "models/best_flood_model_water_aware.pth"
+  model_path: "models/best_floodnet_v2.pth"
   device: "cpu"  # "cpu" or "cuda"
   precision: "float32"  # "float32" or "float16" for quantization
   pipeline_mode: "segformer_yolov8_depthv2_fusion"
