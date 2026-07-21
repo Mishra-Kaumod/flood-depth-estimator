@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     sensor_height_cm:        float          = 300.0
     yolo_conf_threshold:     float          = 0.4
     pipeline_workers:        int            = 4
+    # Set pipeline_stub_mode=true in .env for local dev without model weights.
+    # All three stages fall back to heuristic stubs regardless of weight paths.
+    pipeline_stub_mode:      bool           = False
 
     # ── Gemini ────────────────────────────────────────────────────────────────
     gemini_api_key:  str  = Field("", alias="GEMINI_API_KEY")
@@ -110,6 +113,7 @@ class Settings(BaseSettings):
     def pipeline_cfg(self) -> dict:
         return {
             "device":              self.pipeline_device,
+            "stub_mode":           self.pipeline_stub_mode,
             "segformer_weights":   str(self.segformer_weights) if self.segformer_weights else None,
             "yolo_weights":        str(self.yolo_weights)      if self.yolo_weights      else None,
             "depth_weights":       str(self.depth_weights)     if self.depth_weights     else None,

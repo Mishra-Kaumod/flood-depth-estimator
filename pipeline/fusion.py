@@ -113,11 +113,35 @@ class FusionStage:
         img_shape:     tuple,
     ) -> tuple[np.ndarray, str, float]:
         """
-        Convert relative 0→1 depth to absolute centimetres.
-        Returns (depth_map_cm, source_label, confidence).
+        Convert relative 0→1 depth map to absolute centimetres.
+        Returns (depth_map_cm, source_label, confidence 0-1).
+
+        Math (YOLO-found branch):
+        ─────────────────────────
+        Given a reference object with known real-world height H_cm and
+        apparent pixel height P_px:
+
+          px_per_cm  = P_px / H_cm          # pixels per cm at the object's depth
+
+        We assume a pinhole camera with focal length ≈ image_height pixels
+        (typical for CCTV lenses), giving us the object's metric depth:
+
+          depth_at_obj_cm = image_height * H_cm / P_px   (i.e. image_h / px_per_cm)
+
+        The depth model's relative map is sampled inside the object's bounding
+        box to get rel_at_obj (average relative depth at that location). This
+        anchors the scale factor:
+
+          scale = depth_at_obj_cm / rel_at_obj
+
+        So that depth_map_cm = depth_map_rel × scale satisfies:
+          depth_map_cm[bbox] ≈ depth_at_obj_cm ✓
+
+        Fallback branch (no reference object):
+          scale = sensor_height_cm  (flat constant, low-confidence estimate)
         """
-        best_obj   = None
-        best_conf  = 0.0
+        best_obj  = None
+        best_conf = 0.0
 
         for obj in yolo_result.objects:
             if obj.confidence > best_conf and obj.pixel_height > 10:
@@ -125,16 +149,30 @@ class FusionStage:
                 best_conf = obj.confidence
 
         if best_obj is not None and best_obj.pixel_height > 0:
-            # pixels_per_cm = pixel_height / real_height_cm
-            # depth_cm      = depth_rel * (real_height_cm / pixels_per_cm * scale)
-            # Simple linear scale: 1 unit of relative depth ≈ sensor_height_cm
-            scale   = self.sensor_height_cm   # cm per relative unit at mid-range
-            src     = f"yolo_{best_obj.class_name}"
-            conf    = min(best_obj.confidence, 1.0)
+            # ── Reference-object calibration ─────────────────────────────────
+            px_per_cm = best_obj.pixel_height / best_obj.real_height_cm
+
+            # Sample mean relative depth inside the reference object's bbox
+            x1, y1, x2, y2 = best_obj.bbox_xyxy
+            img_h = depth_map_rel.shape[0]
+            x1 = max(0, x1); y1 = max(0, y1)
+            x2 = min(depth_map_rel.shape[1], x2); y2 = min(img_h, y2)
+            roi = depth_map_rel[y1:y2, x1:x2]
+            rel_at_obj = float(np.mean(roi)) if roi.size > 0 else 0.5
+
+            # Perspective estimate: distance to object in cm
+            depth_at_obj_cm = img_h / px_per_cm   # = img_h * real_h / pixel_h
+
+            # Scale so that depth_map_cm at the object equals depth_at_obj_cm
+            scale = depth_at_obj_cm / max(rel_at_obj, 1e-6)
+
+            src  = f"yolo_{best_obj.class_name}"
+            conf = min(best_obj.confidence, 1.0)
         else:
-            scale   = self.sensor_height_cm
-            src     = "fallback"
-            conf    = 0.3
+            # ── Fallback: use sensor mounting height as scale constant ───────
+            scale = self.sensor_height_cm
+            src   = "fallback"
+            conf  = 0.3
 
         depth_map_cm = (depth_map_rel * scale).astype(np.float32)
         return depth_map_cm, src, round(conf, 3)

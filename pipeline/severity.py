@@ -55,6 +55,15 @@ class FloodPrediction:
     yolo_engine:          str
     depth_engine:         str
 
+    # Gemini ensemble fields (populated by runner.py; None when Gemini disabled)
+    gemini_depth_cm:       float | None = None
+    gemini_risk:           str   | None = None
+    gemini_confidence:     float | None = None
+    gemini_reasoning:      str   | None = None
+    gemini_agreement:      bool  | None = None
+    gemini_agreement_score: float | None = None  # 0–1 numeric agreement
+    ensemble_method:       str   | None = None
+
     def to_dict(self) -> dict:
         d = asdict(self)
         # Remove numpy arrays (water_mask etc.) if accidentally included

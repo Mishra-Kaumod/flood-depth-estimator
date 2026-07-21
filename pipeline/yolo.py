@@ -54,20 +54,34 @@ class YOLOStage:
     """
     Detects reference objects for depth calibration.
     Loads YOLOv8 once at startup.
+
+    Args:
+        model_path:  path to YOLOv8 .pt weights file.
+                     Ignored when stub_mode=True.
+        device:      "cpu" | "cuda" | "mps"
+        conf_threshold: minimum detection confidence.
+        stub_mode:   Force stub (no real detections) — useful when ultralytics
+                     is not installed or for fast local dev without GPU.
     """
 
     def __init__(self, model_path: str | None = None, device: str = "cpu",
-                 conf_threshold: float = 0.4):
+                 conf_threshold: float = 0.4, stub_mode: bool = False):
         self.device    = device
         self.conf_thr  = conf_threshold
         self._model    = None
         self._engine   = "stub"
+
+        if stub_mode:
+            log.info("YOLOv8 stage: stub_mode=True — skipping model load")
+            return
 
         if model_path and Path(model_path).exists():
             try:
                 self._model = self._load(model_path)
                 self._engine = "yolov8"
                 log.info("YOLOv8 loaded from %s", model_path)
+            except ImportError as exc:
+                log.warning("YOLOv8 import error (install ultralytics): %s", exc)
             except Exception:
                 log.warning("YOLOv8 load failed — using stub", exc_info=True)
         else:
@@ -81,7 +95,12 @@ class YOLOStage:
 
     # ── Real model ────────────────────────────────────────────────────────────
     def _load(self, path: str):
-        from ultralytics import YOLO
+        try:
+            from ultralytics import YOLO
+        except ImportError as exc:
+            raise ImportError(
+                "ultralytics package not found. Install with: pip install ultralytics"
+            ) from exc
         return YOLO(path)
 
     def _yolo_predict(self, image_bgr: np.ndarray) -> YOLOResult:
