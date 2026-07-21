@@ -33,6 +33,7 @@ datasets/
 *.pth
 !models/best_flood_model.pth
 !models/best_flood_model_water_aware.pth
+!models/best_floodnet_v2.pth
 *.pt
 
 # Results
