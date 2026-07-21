@@ -2,10 +2,22 @@
 
 Pre-trained model is now included in the repository via **Git LFS** for easy team access.
 
+## Available Models
+
+| File | Size | Architecture | Status |
+|------|------|-------------|--------|
+| `best_floodnet_v2.pth` | 20.6 MB | EfficientNet-B4, multi-task | ✅ **Production (current)** |
+| `best_flood_model_water_aware.pth` | 52.9 MB | EfficientNet-B0, water-aware loss | Previous production |
+| `best_flood_model.pth` | 44.8 MB | EfficientNet-B0, MSE loss | Baseline |
+
+Active model is set in `config/config.yaml` → `inference.model_path`.
+
+---
+
 ## Quick Start
 
 ### Model Available in Repository
-- **File:** `models/best_flood_model.pth`
+- **File:** `models/best_floodnet_v2.pth` ← current production
 - **Size:** 42.72 MB (stored via Git LFS)
 - **Architecture:** EfficientNet-B0
 - **Input:** 224x224 RGB image
