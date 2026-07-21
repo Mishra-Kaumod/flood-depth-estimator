@@ -17,8 +17,9 @@ from src.pipeline import execute_event
 from src.settings import load_settings_dict
 
 try:
-    from litserve import LitServer
+    from litserve import LitAPI, LitServer
 except ImportError:
+    LitAPI = object
     LitServer = None
     logging.warning("LitServe not installed. Install: pip install litserve")
 
@@ -34,9 +35,9 @@ def load_config(config_path: str = "config/config.yaml") -> dict:
     return load_settings_dict(config_path=config_path)
 
 
-class FloodDepthPredictor(LitServer if LitServer else object):
-    def __init__(self, config_path: str = "config/config.yaml"):
-        self.config = load_config(config_path)
+class FloodDepthPredictor(LitAPI):
+    def setup(self, device):
+        self.config = load_config("config/config.yaml")
         self.retry_policy = RetryPolicy(max_attempts=3, base_delay_seconds=0.5, max_delay_seconds=6.0)
         self.dlq = get_dead_letter_router()
         logger.info("Unified serve adapter ready")
@@ -106,21 +107,25 @@ class FloodDepthPredictor(LitServer if LitServer else object):
 def main() -> None:
     config = load_config("config/config.yaml")
     litserve_cfg = config.get("inference", {}).get("litserve", {})
-    predictor = FloodDepthPredictor("config/config.yaml")
 
     if not LitServer:
         logger.error("LitServe not available. Install: pip install litserve")
         return
 
-    server = LitServer(
-        predictor,
-        port=litserve_cfg.get("port", 8000),
-        host=litserve_cfg.get("host", "0.0.0.0"),
+    predictor = FloodDepthPredictor(
         max_batch_size=litserve_cfg.get("max_batch_size", 8),
         batch_timeout=litserve_cfg.get("batch_timeout", 0.05),
-        workers=litserve_cfg.get("workers", 4),
     )
-    server.run()
+
+    server = LitServer(
+        predictor,
+        accelerator="auto",
+        workers_per_device=litserve_cfg.get("workers", 2),
+    )
+    server.run(
+        port=litserve_cfg.get("port", 8000),
+        host=litserve_cfg.get("host", "0.0.0.0"),
+    )
 
 
 def health_check() -> Dict[str, Any]:
