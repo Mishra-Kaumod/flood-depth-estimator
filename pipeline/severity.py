@@ -125,26 +125,67 @@ class SeverityStage:
 
     # ── Scoring (swap for ML model here) ─────────────────────────────────────
     def _load(self, path: str):
-        # import joblib; return joblib.load(path)   # sklearn / XGBoost
-        raise NotImplementedError
+        """
+        Load the joblib bundle produced by scripts/train_severity_model.py.
+        Bundle keys: gbr_mean, gbr_q10, gbr_q90, feature_cols, max_depth_in_train.
+        """
+        try:
+            import joblib
+        except ImportError as exc:
+            raise ImportError("pip install joblib") from exc
+        bundle = joblib.load(path)
+        required = {"gbr_mean", "gbr_q10", "gbr_q90", "feature_cols", "max_depth_in_train"}
+        missing = required - set(bundle.keys())
+        if missing:
+            raise ValueError(f"Model bundle missing keys: {missing}")
+        return bundle
 
     def _score(self, f: StructuredFeatures) -> tuple[float, float]:
-        """Returns (estimated_depth_cm, confidence 0-1)."""
-        if self._model is not None:
-            # feature_vec = np.array([[f.water_coverage_pct,
-            #                          f.mean_flood_depth_cm,
-            #                          f.p90_flood_depth_cm,
-            #                          f.max_flood_depth_cm]])
-            # depth = float(self._model.predict(feature_vec)[0])
-            # conf  = 0.85
-            pass
+        """
+        Returns (estimated_depth_cm, confidence 0-1).
 
-        # Rule-based fallback — use p90 depth (robust to outliers)
-        depth  = f.p90_flood_depth_cm
-        # Confidence based on calibration source + water coverage
-        conf   = 0.85 if "yolo_" in f.calibration_source else 0.55
+        When trained model is loaded:
+          depth = gbr_mean.predict(feature_vec)
+          conf  = 1 − clip((q90 − q10) / max_depth_in_train, 0, 1)
+          (narrow prediction interval = high confidence)
+
+        Fallback (no model):
+          depth = p90_flood_depth_cm (robust to outliers)
+          conf  = calibration_confidence (from FusionStage, not hardcoded buckets)
+        """
         if f.water_coverage_pct < 1:
-            depth, conf = 0.0, 0.9   # clearly no flood
+            return 0.0, 0.9   # clearly no flood — short-circuit before any model
+
+        if self._model is not None:
+            import numpy as np
+            gbr_mean = self._model["gbr_mean"]
+            gbr_q10  = self._model["gbr_q10"]
+            gbr_q90  = self._model["gbr_q90"]
+            feature_cols     = self._model["feature_cols"]
+            max_depth_train  = self._model["max_depth_in_train"]
+
+            feat_map = {
+                "water_coverage_pct":   f.water_coverage_pct,
+                "mean_flood_depth_cm":  f.mean_flood_depth_cm,
+                "p90_flood_depth_cm":   f.p90_flood_depth_cm,
+                "max_flood_depth_cm":   f.max_flood_depth_cm,
+                "calibration_confidence": f.calibration_confidence,
+            }
+            X = np.array([[feat_map[c] for c in feature_cols]])
+
+            depth   = max(float(gbr_mean.predict(X)[0]), 0.0)
+            q10_val = float(gbr_q10.predict(X)[0])
+            q90_val = float(gbr_q90.predict(X)[0])
+            interval_width = max(q90_val - q10_val, 0.0)
+            conf = 1.0 - min(interval_width / max(max_depth_train, 1.0), 1.0)
+            return round(depth, 1), round(conf, 3)
+
+        # ── Rule-based fallback (no trained model yet) ────────────────────
+        depth = f.p90_flood_depth_cm
+        # Use calibration_confidence from FusionStage — it reflects how well
+        # the depth map was anchored (YOLO reference vs sensor-height fallback).
+        # Avoids hardcoded 0.85/0.55 buckets.
+        conf = f.calibration_confidence
         return round(depth, 1), round(conf, 3)
 
     @staticmethod

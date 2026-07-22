@@ -19,6 +19,8 @@ from .fusion             import FusionStage
 from .severity           import SeverityStage, FloodPrediction
 from .gemini_validator   import GeminiValidator, EnsembleResult
 from .temporal           import TemporalSmoother
+from .uncertainty        import UncertaintyStage
+from .auto_calibration   import CameraGeometryCalibrator, CameraCalibrationStore
 
 log = logging.getLogger("pipeline.runner")
 
@@ -60,6 +62,25 @@ class PipelineRunner:
             method      = p.get("temporal_smoothing",  "ema"),
             alpha       = p.get("temporal_alpha",      0.3),
         )
+
+        # MC-dropout uncertainty stage (Step 3)
+        self.uncertainty = UncertaintyStage(
+            depth_stage         = self.depth,
+            n_passes            = p.get("uncertainty_passes",    8),
+            mini_ensemble_paths = p.get("uncertainty_ensemble_paths", []),
+        )
+
+        # Per-camera auto-calibration store (Step 4)
+        self.cal_store   = CameraCalibrationStore(
+            p.get("calibration_store_dir", "camera_calibration")
+        )
+        self.calibrator  = CameraGeometryCalibrator(
+            store            = self.cal_store,
+            dry_frames_needed= p.get("dry_frames_needed", 50),
+            sensor_height_cm = p.get("sensor_height_cm", 300),
+        )
+        # Inject store into fusion so it can use geometry profiles
+        self.fusion.calibration_store = self.cal_store
 
         log.info("Pipeline ready  (gemini=%s, smoother=%s)",
                  self.gemini.enabled, self.smoother.method)
@@ -124,7 +145,19 @@ class PipelineRunner:
         seg_res    = self.seg.predict(img_bgr)
         yolo_res   = self.yolo.predict(img_bgr)
         depth_res  = self.depth.predict(img_bgr)
-        features   = self.fusion.fuse(img_bgr, seg_res, yolo_res, depth_res)
+        features   = self.fusion.fuse(img_bgr, seg_res, yolo_res, depth_res,
+                                      camera_id=camera_id)
+
+        # ── Feed dry frames to auto-calibrator (Step 4) ───────────────────────
+        self.calibrator.observe(camera_id, img_bgr, seg_res.water_coverage_pct)
+
+        # ── Stage 3b — MC-dropout uncertainty ────────────────────────────────
+        # Computes depth_uncertainty_score ∈ [0,1]: 0=confident, 1=uncertain.
+        # Attached to features so severity._score() can optionally use it.
+        features.depth_uncertainty_score = self.uncertainty.score(
+            img_bgr, features.water_mask
+        )
+
         prediction = self.severity.predict(
             features      = features,
             location_id   = location_id,
@@ -176,6 +209,37 @@ class PipelineRunner:
             prediction.gemini_agreement     = None
             prediction.gemini_agreement_score = None
             prediction.ensemble_method      = "model_only"
+
+        # ── 3-source confidence blend ─────────────────────────────────────────
+        # Sources:
+        #   1. severity_conf   — from severity._score() (calibration-based or
+        #                        GBR prediction-interval-based when model loaded)
+        #   2. agreement_score — from Step 1 blind Gemini comparison (0=disagree,
+        #                        1=agree); None when Gemini disabled
+        #   3. uncertainty     — 1 − depth_uncertainty_score (0=uncertain, 1=confident)
+        #
+        # Formula (all weights sum to 1.0):
+        #   When Gemini is active:
+        #     conf = 0.5 * severity_conf + 0.3 * agreement_score + 0.2 * depth_certainty
+        #   When Gemini is disabled:
+        #     conf = 0.7 * severity_conf + 0.3 * depth_certainty
+        #
+        # severity_conf is already in prediction.confidence_pct if Gemini ran
+        # (already blended at 70/30 above); we re-blend here with uncertainty.
+        depth_certainty = 1.0 - features.depth_uncertainty_score  # invert: high = confident
+        if prediction.gemini_agreement_score is not None:
+            # Gemini ran — 3-way blend
+            severity_conf_01 = prediction.confidence_pct / 100.0
+            final_conf = (
+                0.5 * severity_conf_01
+                + 0.3 * prediction.gemini_agreement_score
+                + 0.2 * depth_certainty
+            )
+        else:
+            # No Gemini — 2-way blend
+            severity_conf_01 = prediction.confidence_pct / 100.0
+            final_conf = 0.7 * severity_conf_01 + 0.3 * depth_certainty
+        prediction.confidence_pct = round(min(final_conf, 1.0) * 100, 1)
 
         # ── P4 — Temporal smoothing per camera ────────────────────────────────
         raw_depth = prediction.water_depth_cm

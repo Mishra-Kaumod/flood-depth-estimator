@@ -42,7 +42,7 @@ class StructuredFeatures:
     p90_flood_depth_cm:    float    # 90th-percentile depth (robust max)
 
     # Calibration quality
-    calibration_source:    str      # "yolo_<class>" | "fallback"
+    calibration_source:    str      # "yolo_<class>" | "fallback" | "geometry_<id>"
     calibration_confidence: float   # 0-1
 
     # Engines used
@@ -54,15 +54,23 @@ class StructuredFeatures:
     water_mask:            np.ndarray = field(repr=False)
     depth_map_cm:          np.ndarray = field(repr=False)   # absolute cm
 
+    # Uncertainty (from UncertaintyStage MC-dropout; 0=confident, 1=uncertain)
+    depth_uncertainty_score: float = 0.5
+
 
 class FusionStage:
 
-    def __init__(self, sensor_height_cm: float = 300.0):
+    def __init__(self, sensor_height_cm: float = 300.0,
+                 calibration_store=None):
         """
-        sensor_height_cm: approximate camera mounting height above ground.
-        Used as secondary calibration fallback.
+        sensor_height_cm:  approximate camera mounting height above ground.
+                           Used as tertiary calibration fallback.
+        calibration_store: optional CameraCalibrationStore from auto_calibration.py.
+                           When set, enables the geometry-profile calibration branch
+                           (highest priority when a profile exists for the camera).
         """
-        self.sensor_height_cm = sensor_height_cm
+        self.sensor_height_cm   = sensor_height_cm
+        self.calibration_store  = calibration_store
 
     def fuse(
         self,
@@ -70,13 +78,14 @@ class FusionStage:
         seg_result:   SegFormerResult,
         yolo_result:  YOLOResult,
         depth_result: DepthResult,
+        camera_id:    str = "",
     ) -> StructuredFeatures:
 
         depth_map_rel = depth_result.depth_map   # H×W float32 0→1
 
         # ── Step 1: calibrate depth map to absolute cm ───────────────────────
         depth_map_cm, cal_source, cal_conf = self._calibrate(
-            depth_map_rel, yolo_result, image_bgr.shape
+            depth_map_rel, yolo_result, image_bgr.shape, camera_id
         )
 
         # ── Step 2: extract flood depth only where water mask is True ────────
@@ -111,48 +120,77 @@ class FusionStage:
         depth_map_rel: np.ndarray,
         yolo_result:   YOLOResult,
         img_shape:     tuple,
+        camera_id:     str = "",
     ) -> tuple[np.ndarray, str, float]:
         """
         Convert relative 0→1 depth map to absolute centimetres.
         Returns (depth_map_cm, source_label, confidence 0-1).
 
-        Math (YOLO-found branch):
-        ─────────────────────────
-        Given a reference object with known real-world height H_cm and
-        apparent pixel height P_px:
+        Priority order for calibration source:
+        ────────────────────────────────────────
+        Branch A — Geometry profile (highest priority):
+          A stored CalibrationProfile for this camera_id is available.
+          scale = focal_px / rel_at_centre  (centre of image, representative)
+          If a YOLO reference object is also detected, it's used as a
+          cross-check: if it disagrees by >20%, a warning is logged.
+          conf = 0.95 (geometric calibration is the most stable source)
 
-          px_per_cm  = P_px / H_cm          # pixels per cm at the object's depth
-
-        We assume a pinhole camera with focal length ≈ image_height pixels
-        (typical for CCTV lenses), giving us the object's metric depth:
-
-          depth_at_obj_cm = image_height * H_cm / P_px   (i.e. image_h / px_per_cm)
-
-        The depth model's relative map is sampled inside the object's bounding
-        box to get rel_at_obj (average relative depth at that location). This
-        anchors the scale factor:
-
+        Branch B — YOLO reference object:
+          A real-world-height reference object (car, person, sign) was detected.
           scale = depth_at_obj_cm / rel_at_obj
+          where depth_at_obj_cm = img_h * real_h / pixel_h  (perspective estimate)
+          conf = min(detection_confidence, 1.0)
 
-        So that depth_map_cm = depth_map_rel × scale satisfies:
-          depth_map_cm[bbox] ≈ depth_at_obj_cm ✓
-
-        Fallback branch (no reference object):
-          scale = sensor_height_cm  (flat constant, low-confidence estimate)
+        Branch C — Sensor height fallback:
+          No geometry profile, no YOLO detection.
+          scale = sensor_height_cm  (flat constant)
+          conf  = 0.3
         """
+        from .auto_calibration import DISAGREEMENT_WARN
+
         best_obj  = None
         best_conf = 0.0
-
         for obj in yolo_result.objects:
             if obj.confidence > best_conf and obj.pixel_height > 10:
                 best_obj  = obj
                 best_conf = obj.confidence
 
+        # ── Branch A: Geometry profile ────────────────────────────────────────
+        if self.calibration_store and camera_id:
+            profile = self.calibration_store.get(camera_id)
+            if profile is not None:
+                # Use centre of image as a representative reference pixel
+                cy = depth_map_rel.shape[0] // 2
+                cx = depth_map_rel.shape[1] // 2
+                rel_at_centre = float(depth_map_rel[cy, cx])
+                scale = profile.scale_factor_for_rel_depth(rel_at_centre)
+
+                # Optional YOLO cross-check
+                if best_obj is not None and best_obj.pixel_height > 0:
+                    px_per_cm   = best_obj.pixel_height / best_obj.real_height_cm
+                    img_h       = depth_map_rel.shape[0]
+                    x1, y1, x2, y2 = best_obj.bbox_xyxy
+                    roi = depth_map_rel[max(0,y1):min(img_h,y2),
+                                        max(0,x1):min(depth_map_rel.shape[1],x2)]
+                    rel_at_obj   = float(np.mean(roi)) if roi.size > 0 else rel_at_centre
+                    yolo_scale   = (img_h / px_per_cm) / max(rel_at_obj, 1e-6)
+                    ratio = abs(scale - yolo_scale) / max(scale, 1.0)
+                    if ratio > DISAGREEMENT_WARN:
+                        log.warning(
+                            "Camera %s: geometry scale=%.0f YOLO scale=%.0f "
+                            "disagree by %.0f%% (>%.0f%% threshold) — "
+                            "using geometry profile",
+                            camera_id, scale, yolo_scale, ratio * 100,
+                            DISAGREEMENT_WARN * 100,
+                        )
+
+                depth_map_cm = (depth_map_rel * scale).astype(np.float32)
+                return depth_map_cm, f"geometry_{camera_id[:16]}", 0.95
+
+        # ── Branch B: YOLO reference object ───────────────────────────────────
         if best_obj is not None and best_obj.pixel_height > 0:
-            # ── Reference-object calibration ─────────────────────────────────
             px_per_cm = best_obj.pixel_height / best_obj.real_height_cm
 
-            # Sample mean relative depth inside the reference object's bbox
             x1, y1, x2, y2 = best_obj.bbox_xyxy
             img_h = depth_map_rel.shape[0]
             x1 = max(0, x1); y1 = max(0, y1)
@@ -160,16 +198,13 @@ class FusionStage:
             roi = depth_map_rel[y1:y2, x1:x2]
             rel_at_obj = float(np.mean(roi)) if roi.size > 0 else 0.5
 
-            # Perspective estimate: distance to object in cm
-            depth_at_obj_cm = img_h / px_per_cm   # = img_h * real_h / pixel_h
-
-            # Scale so that depth_map_cm at the object equals depth_at_obj_cm
+            depth_at_obj_cm = img_h / px_per_cm
             scale = depth_at_obj_cm / max(rel_at_obj, 1e-6)
 
             src  = f"yolo_{best_obj.class_name}"
             conf = min(best_obj.confidence, 1.0)
         else:
-            # ── Fallback: use sensor mounting height as scale constant ───────
+            # ── Branch C: Fallback ─────────────────────────────────────────────
             scale = self.sensor_height_cm
             src   = "fallback"
             conf  = 0.3

@@ -17,8 +17,12 @@ from pipeline.fusion   import StructuredFeatures
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def make_features(
     p90_depth=0.0, mean_depth=0.0, max_depth=0.0,
-    water_pct=0.0, cal_source="fallback"
+    water_pct=0.0, cal_source="fallback", cal_confidence=None
 ):
+    # Mirror actual FusionStage behaviour: YOLO-calibrated maps have higher
+    # calibration_confidence than fallback (YOLO conf ≈ 0.8, fallback = 0.3)
+    if cal_confidence is None:
+        cal_confidence = 0.8 if cal_source.startswith("yolo_") else 0.3
     return StructuredFeatures(
         water_coverage_pct    = water_pct,
         water_pixel_count     = int(water_pct * 100),
@@ -26,7 +30,7 @@ def make_features(
         max_flood_depth_cm    = max_depth,
         p90_flood_depth_cm    = p90_depth,
         calibration_source    = cal_source,
-        calibration_confidence= 0.7,
+        calibration_confidence= cal_confidence,
         seg_engine            = "test",
         yolo_engine           = "test",
         depth_engine          = "test",
