@@ -554,19 +554,32 @@ function showResults(results) {
     if (r.status === 'error') return `<div class="r-card" style="border-left-color:#ef4444">
       <div class="r-card-name">${r.name}</div>
       <div style="font-size:.8rem;color:#ef4444">Error: ${r.error}</div></div>`;
-    if (r.status === 'unpredictable') return `<div class="r-card" style="border-left-color:#f59e0b">
-      <div class="r-card-name">${r.name} <span style="background:#f59e0b;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">NO REFERENCE</span></div>
-      <div style="font-size:.8rem;color:#b45309;margin-top:4px">⚠️ ${r.message || 'No known reference object detected.'}</div>
-      <div style="font-size:.7rem;color:#92400e;margin-top:2px">Known: ${(r.known_labels||[]).join(', ')}</div>
-    </div>`;
+    if (r.status === 'low_confidence') {
+      const s2 = r.severity;
+      const confPct = r.confidence !== undefined ? (r.confidence*100).toFixed(0)+'%' : '?';
+      const commentHtml = r.scene_comment
+        ? `<div style="font-size:.7rem;color:#92400e;margin-top:4px;line-height:1.4">💬 ${r.scene_comment}</div>` : '';
+      return `<div class="r-card" id="rc-${i}" style="border-left-color:#f59e0b" onclick="flyTo(${r.lat},${r.lng},${i})">
+        <div class="r-card-name">${r.name}
+          <span style="background:#f59e0b;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">NO SCALE ANCHOR</span>
+        </div>
+        <div class="r-card-depth" style="color:${s2.color}">${r.depth_cm} cm</div>
+        <div class="r-card-level" style="color:${s2.color}">${s2.level} — ${s2.label}</div>
+        <div style="font-size:.72rem;color:#b45309;margin-top:2px">⚠️ SegFormer + DepthV2 estimate only · Confidence ${confPct}</div>
+        ${commentHtml}
+        <div class="r-card-loc">📍 ${r.lat.toFixed(4)}, ${r.lng.toFixed(4)}</div>
+      </div>`;
+    }
     const s = r.severity;
     const methodBadge = r.method === 'reference_object_cv'
       ? `<span style="background:#f59e0b;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">CV FALLBACK</span>`
-      : (r.method === 'ml_blend'
+      : r.method === 'ml_blend'
           ? `<span style="background:#3b82f6;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">ML+CV</span>`
-          : (r.method === 'segformer_yolov8_depthv2_fusion'
+          : r.method === 'segformer_yolov8_depthv2_fusion'
               ? `<span style="background:#7c3aed;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">FULL STACK</span>`
-              : ''));
+              : r.method === 'segformer_depthv2_only'
+                  ? `<span style="background:#d97706;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">DEPTH ESTIMATE</span>`
+                  : '';
     const cueHtml = (r.visual_cues && r.visual_cues.length)
       ? `<div style="font-size:.67rem;color:#64748b;margin-top:3px">🔍 ${r.visual_cues.slice(0,2).join(' · ')}</div>` : '';
     return `<div class="r-card" id="rc-${i}" style="border-left-color:${s.color}" onclick="flyTo(${r.lat},${r.lng},${i})">
@@ -751,9 +764,12 @@ def predict_batch():
         try:
             image = Image.open(io.BytesIO(file.read())).convert("RGB")
             pred = _predict_single(image)
-            if pred.get("unpredictable"):
-                logger.warning(f"  [{i+1}] {name}: UNPREDICTABLE - {pred.get('reason','unknown')}")
-                results.append({"name": name, "lat": lat, "lng": lng, "status": "unpredictable", **pred})
+            if pred.get("no_reference_warning"):
+                logger.warning(
+                    f"  [{i+1}] {name}: {pred['depth_cm']}cm [{pred['method']}] "
+                    f"conf={pred['confidence']} — NO SCALE ANCHOR (SegFormer+DepthV2 only)"
+                )
+                results.append({"name": name, "lat": lat, "lng": lng, "status": "low_confidence", **pred})
             else:
                 logger.info(f"  [{i+1}] {name}: {pred['depth_cm']} cm ({pred['severity']['level']}) [{pred['method']}]")
                 results.append({"name": name, "lat": lat, "lng": lng, "status": "ok", **pred})

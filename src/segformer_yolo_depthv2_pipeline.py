@@ -336,6 +336,63 @@ class SegformerYoloDepthV2Pipeline:
 
         return round(depth_cm, 2), round(confidence, 4), action
 
+
+    def _segformer_scene_comment(
+        self,
+        water_mask: "np.ndarray",
+        water_coverage_pct: float,
+        dense_depth_map: "np.ndarray",
+    ) -> str:
+        """
+        Plain-English summary of what SegFormer + DepthV2 observe.
+        Called when no YOLO reference objects are available so the
+        operator understands the basis for the estimate.
+        """
+        h = water_mask.shape[0]
+
+        # --- Water extent ---
+        if water_coverage_pct < 5:
+            extent = "minimal flood traces"
+        elif water_coverage_pct < 20:
+            extent = f"partial flooding ({water_coverage_pct:.0f}% of scene)"
+        elif water_coverage_pct < 50:
+            extent = f"moderate flooding ({water_coverage_pct:.0f}% of scene)"
+        elif water_coverage_pct < 75:
+            extent = f"extensive flooding ({water_coverage_pct:.0f}% of scene)"
+        else:
+            extent = f"near-total inundation ({water_coverage_pct:.0f}% of scene)"
+
+        # --- Vertical distribution (is water at bottom = ground level?) ---
+        top_half_water = float(np.mean(water_mask[:h // 2] > 0)) * 100
+        bot_half_water = float(np.mean(water_mask[h // 2:] > 0)) * 100
+        if bot_half_water > top_half_water * 1.5:
+            position = "concentrated at ground level (lower frame)"
+        elif top_half_water > bot_half_water * 1.2:
+            position = "visible throughout scene including upper frame"
+        else:
+            position = "distributed across the scene"
+
+        # --- DepthV2 relative depth signal ---
+        water_pixels = dense_depth_map[water_mask > 0]
+        if water_pixels.size == 0:
+            water_pixels = dense_depth_map.reshape(-1)
+        p90 = float(np.percentile(water_pixels, 90))
+        if p90 < 0.20:
+            depth_signal = "shallow depth cues (proxy p90 < 0.20)"
+        elif p90 < 0.40:
+            depth_signal = "moderate depth cues (proxy p90 ≈ {:.2f})".format(p90)
+        elif p90 < 0.65:
+            depth_signal = "significant depth cues (proxy p90 ≈ {:.2f})".format(p90)
+        else:
+            depth_signal = "deep flood cues (proxy p90 ≈ {:.2f})".format(p90)
+
+        return (
+            f"SegFormer detects {extent}, {position}. "
+            f"DepthV2 indicates {depth_signal}. "
+            "Estimate derived from visual depth cues only — no real-world scale anchor available. "
+            "Add a car, person or motorbike to the scene for a calibrated reading."
+        )
+
     # ------------------------------------------------------------------
     # Gemini enhancement helpers — stages 3, 4, 5 only
     # ------------------------------------------------------------------
@@ -457,21 +514,16 @@ class SegformerYoloDepthV2Pipeline:
             }
         )
 
-        # Gate: refuse prediction when no known reference objects are detected.
-        if not references:
-            logger.warning("Prediction refused: no known reference objects found.")
-            return {
-                "unpredictable": True,
-                "reason": "no_reference_object",
-                "message": (
-                    "Cannot estimate flood depth: no known reference object detected in the image. "
-                    "Please include a visible car, person, truck, motorcycle, bus, or bicycle "
-                    "so the model has a real-world scale anchor."
-                ),
-                "known_labels": sorted(KNOWN_REFERENCE_LABELS),
-                "method": "segformer_yolov8_depthv2_fusion",
-                "pipeline_trace": trace,
-            }
+        # When no known reference objects are detected YOLO cannot provide a
+        # real-world scale anchor.  We do NOT refuse — instead we continue with
+        # SegFormer + DepthV2 only, flag the result as low-confidence, and
+        # describe what SegFormer sees so the operator still gets useful context.
+        no_reference = len(references) == 0
+        if no_reference:
+            logger.info(
+                "No YOLO reference objects found — estimate will use SegFormer + DepthV2 only. "
+                "Confidence will be capped at 0.55."
+            )
 
         dense_depth_map = self._depth_anything_v2_dense_map(image_rgb, water_mask)
         # Stage 3: optional Gemini depth refinement
@@ -599,11 +651,27 @@ class SegformerYoloDepthV2Pipeline:
         stage_cues = [f"{step['stage']}: {step['summary']}" for step in trace]
         visual_cues = stage_cues + ref_cues
 
+        # When no YOLO objects were found, cap confidence and attach a plain-English
+        # description of what SegFormer + DepthV2 observed so the operator has context.
+        scene_comment: str = ""
+        scale_anchor: str = "yolo_reference"
+        if no_reference:
+            confidence = round(float(np.clip(confidence, 0.0, 0.55)), 4)
+            scale_anchor = "none"
+            scene_comment = self._segformer_scene_comment(
+                water_mask=water_mask,
+                water_coverage_pct=water_coverage_pct,
+                dense_depth_map=dense_depth_map,
+            )
+
         return {
             "depth_cm": depth_cm,
             "confidence": confidence,
             "severity": severity,
-            "method": "segformer_yolov8_depthv2_fusion",
+            "method": "segformer_depthv2_only" if no_reference else "segformer_yolov8_depthv2_fusion",
+            "scale_anchor": scale_anchor,
+            "no_reference_warning": no_reference,
+            "scene_comment": scene_comment,
             "gemini_enhanced": self._gemini_model is not None,
             "visual_cues": visual_cues,
             "label_guide": reference_estimate.get("label_guide", ""),
