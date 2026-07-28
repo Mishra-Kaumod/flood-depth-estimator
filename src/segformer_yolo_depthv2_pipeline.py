@@ -300,7 +300,15 @@ class SegformerYoloDepthV2Pipeline:
     def _calibration_severity_model(self, features: Dict[str, float]) -> Tuple[float, float, str]:
         coverage = features["water_coverage_pct"] / 100.0
         dense_depth_cm = features["dense_depth_p90"] * 120.0
-        reference_depth_cm = features["reference_depth_cm"]
+        yolo_count = int(features.get("reference_count", 0))
+
+        # Reference object depth ONLY contributes when YOLO detected known objects.
+        # When reference_count == 0 the CV estimator result is unreliable without a
+        # real-world scale anchor, so it is excluded from the depth formula entirely.
+        if yolo_count > 0:
+            reference_depth_cm = features["reference_depth_cm"]
+        else:
+            reference_depth_cm = 0.0
 
         if coverage < 0.02:
             depth_cm = 0.0
@@ -310,8 +318,10 @@ class SegformerYoloDepthV2Pipeline:
             depth_cm = dense_depth_cm
 
         depth_cm = float(np.clip(depth_cm, 0.0, 180.0))
-        reference_count = min(features["reference_count"] / 4.0, 1.0)
-        confidence = float(np.clip(0.35 + (coverage * 0.35) + (reference_count * 0.30), 0.2, 0.98))
+        reference_count_norm = min(yolo_count / 4.0, 1.0)
+        # Confidence is lower when no YOLO reference objects found
+        base_conf = 0.30 if yolo_count == 0 else 0.40
+        confidence = float(np.clip(base_conf + (coverage * 0.35) + (reference_count_norm * 0.30), 0.2, 0.98))
 
         if depth_cm >= 100.0:
             action = "Deploy Emergency Diversion"

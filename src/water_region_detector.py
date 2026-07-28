@@ -13,161 +13,94 @@ import logging
 logger = logging.getLogger(__name__)
 
 class WaterRegionDetector:
-    """
-    Detects water regions in flood images using multiple methods:
-    1. Color-based detection (blue/cyan channels)
-    2. Contrast-based detection (water has different reflectance)
-    3. Morphological operations (clean up noise)
-    """
-    
-    def __init__(
-        self,
-        use_hsv: bool = True,
-        use_rgb: bool = True,
-        use_contrast: bool = True,
-        min_water_area_ratio: float = 0.01,  # At least 1% of image is water
-    ):
-        """
-        Initialize water detector.
-        
-        Args:
-            use_hsv: Use HSV color space detection
-            use_rgb: Use RGB channel analysis
-            use_contrast: Use contrast-based detection
-            min_water_area_ratio: Minimum percentage of image that must be water
-        """
+    def __init__(self, use_hsv=True, use_rgb=True, use_contrast=True, min_water_area_ratio=0.01):
         self.use_hsv = use_hsv
         self.use_rgb = use_rgb
         self.use_contrast = use_contrast
         self.min_water_area_ratio = min_water_area_ratio
-    
-    def detect(self, image: np.ndarray) -> Tuple[np.ndarray, float]:
-        """
-        Detect water regions in image.
-        
-        Args:
-            image: RGB image (H, W, 3) with values 0-255
-        
-        Returns:
-            water_mask: Binary mask (H, W) where 1=water, 0=not water
-            water_coverage: Percentage of image that is water (0-100)
-        """
+
+    def detect(self, image):
         h, w = image.shape[:2]
-        combined_mask = np.zeros((h, w), dtype=np.uint8)
-        
-        # Method 1: HSV-based detection
+        mask = np.zeros((h, w), dtype=np.uint8)
         if self.use_hsv:
-            hsv_mask = self._detect_hsv(image)
-            combined_mask = np.maximum(combined_mask, hsv_mask)
-        
-        # Method 2: RGB channel detection
+            mask = np.maximum(mask, self._detect_hsv(image))
         if self.use_rgb:
-            rgb_mask = self._detect_rgb(image)
-            combined_mask = np.maximum(combined_mask, rgb_mask)
-        
-        # Method 3: Contrast-based detection
+            mask = np.maximum(mask, self._detect_rgb(image))
         if self.use_contrast:
-            contrast_mask = self._detect_contrast(image)
-            combined_mask = np.maximum(combined_mask, contrast_mask)
-        
-        # Morphological cleanup
-        combined_mask = self._morphological_cleanup(combined_mask)
-        
-        # Calculate coverage
-        water_pixels = np.sum(combined_mask > 0)
-        total_pixels = h * w
-        water_coverage = (water_pixels / total_pixels) * 100
-        
-        return combined_mask, water_coverage
-    
-    def _detect_hsv(self, image: np.ndarray) -> np.ndarray:
-        """Detect water using HSV color space."""
+            mask = np.maximum(mask, self._detect_flatness(image))
+
+        mask = self._morphological_cleanup(mask)
+
+        # Position prior (applied AFTER morphology so close/open can't undo it):
+        # Hard-zero the top 30% of the image — that region is nearly always sky/rooftop,
+        # not flood water. Ramp-fade rows 30-45% to soften the boundary.
+        hard_zero = int(h * 0.30)
+        ramp_end  = int(h * 0.45)
+        mask[:hard_zero, :] = 0
+        if ramp_end > hard_zero:
+            ramp = np.linspace(0.0, 1.0, ramp_end - hard_zero, dtype=np.float32)
+            mask[hard_zero:ramp_end, :] = np.clip(
+                mask[hard_zero:ramp_end, :].astype(np.float32) * ramp[:, np.newaxis], 0, 255
+            ).astype(np.uint8)
+        water_pct = float(np.sum(mask > 0)) / float(h * w) * 100.0
+        return mask, water_pct
+
+    def _detect_hsv(self, image):
         hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
-        
-        # Water typically has:
-        # - Hue: 90-180 (cyan to blue range)
-        # - Saturation: 50-255 (saturated)
-        # - Value: 50-255 (visible)
-        
-        lower_water = np.array([80, 50, 50])
-        upper_water = np.array([180, 255, 255])
-        
-        mask = cv2.inRange(hsv, lower_water, upper_water)
+        h_, s_, v_ = hsv[:,:,0], hsv[:,:,1], hsv[:,:,2]
+        # Clear / blue-green water
+        clear = ((h_ >= 85) & (h_ <= 140) & (s_ >= 40) & (v_ >= 40)).astype(np.uint8) * 255
+        # Murky brown (most Bengaluru floods): hue 0-25 or 160-180
+        muddy_h = (h_ <= 25) | (h_ >= 160)
+        muddy = (muddy_h & (s_ >= 15) & (s_ <= 190) & (v_ >= 45) & (v_ <= 225)).astype(np.uint8) * 255
+        # Grey/dark stagnant water: only when saturation is very low AND
+        # value is mid-range (distinguishes from sky and very bright surfaces)
+        grey = ((s_ < 30) & (v_ >= 50) & (v_ <= 160)).astype(np.uint8) * 255
+        return np.maximum(np.maximum(clear, muddy), grey)
+
+    def _detect_rgb(self, image):
+        r = image[:,:,0].astype(np.float32)
+        g = image[:,:,1].astype(np.float32)
+        b = image[:,:,2].astype(np.float32)
+        bright = (r + g + b) / 3.0
+        # Clear blue water
+        blue = ((b > g) & (b > r) & ((b - r) > 15) & (b > 30)).astype(np.uint8) * 255
+        # Turbid brown/orange water
+        brown = ((r > b) & (g > b) & (r > 40) & (r < 215) & ((r - b) > 10) & ((r - b) < 110) & (bright < 205) & (bright > 28)).astype(np.uint8) * 255
+        # Dark stagnant water: neutral dark pixels that are NOT too uniform
+        # (add minimum brightness floor to skip near-black non-water)
+        dark = ((bright > 35) & (bright < 110) & (np.abs(r - g) < 25) & (np.abs(g - b) < 25) & (np.abs(r - b) < 25)).astype(np.uint8) * 255
+        return np.maximum(np.maximum(blue, brown), dark)
+
+    def _detect_flatness(self, image):
+        """Low-texture regions in the bottom half are likely water surface.
+        Requires the image to have meaningful texture variation before flagging."""
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY).astype(np.float32)
+        h = gray.shape[0]
+        lap = np.abs(cv2.Laplacian(gray, cv2.CV_32F))
+        tex = cv2.GaussianBlur(lap, (11, 11), 0)
+        global_tex_std = float(np.std(tex))
+        # Only apply when image has meaningful texture variation
+        # (pure-colour synthetic images would otherwise flag everywhere)
+        if global_tex_std < 1.5:
+            return np.zeros(gray.shape, dtype=np.uint8)
+        thresh = float(np.percentile(tex, 30))
+        # Require minimum absolute texture to be counted as flat-water
+        min_abs_thresh = max(thresh, 1.0)
+        flat = (tex <= min_abs_thresh).astype(np.float32)
+        # Only keep bottom 60% of image (water on ground, not sky / upper scene)
+        flat[:int(h * 0.40), :] = 0.0
+        return (flat * 255).astype(np.uint8)
+
+    def _morphological_cleanup(self, mask, kernel_size=7):
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k, iterations=2)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k, iterations=1)
         return mask
-    
-    def _detect_rgb(self, image: np.ndarray) -> np.ndarray:
-        """Detect water using RGB channels."""
-        r, g, b = image[:,:,0], image[:,:,1], image[:,:,2]
-        
-        # Water typically has:
-        # - Blue > Green > Red (blue-dominant)
-        # - High blue, medium green, low red
-        
-        # Condition 1: Blue channel dominant
-        blue_dominant = (b > g) & (b > r)
-        
-        # Condition 2: Not too dark (avoid shadows)
-        not_dark = (b > 30)
-        
-        # Condition 3: Blue-green difference (water has strong blue channel)
-        blue_green_diff = (b - g) > 20
-        
-        mask = (blue_dominant & not_dark & blue_green_diff).astype(np.uint8) * 255
-        return mask
-    
-    def _detect_contrast(self, image: np.ndarray) -> np.ndarray:
-        """Detect water using contrast characteristics."""
-        # Convert to grayscale
-        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        
-        # Water typically has lower contrast (smooth reflections)
-        # Calculate local contrast
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-        
-        # Local mean
-        local_mean = cv2.morphologyEx(gray, cv2.MORPH_OPEN, kernel)
-        
-        # Local std (approximated)
-        contrast = np.abs(gray.astype(float) - local_mean.astype(float))
-        
-        # Low contrast regions are likely water
-        threshold = np.percentile(contrast, 25)  # Bottom 25% contrast
-        mask = (contrast < threshold).astype(np.uint8) * 255
-        
-        return mask
-    
-    def _morphological_cleanup(self, mask: np.ndarray, kernel_size: int = 5) -> np.ndarray:
-        """Clean up mask using morphological operations."""
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-        
-        # Close small holes
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-        
-        # Open small noise
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-        
-        return mask
-    
-    def get_water_bounding_boxes(self, mask: np.ndarray) -> list:
-        """
-        Get bounding boxes of water regions.
-        Useful for visualizing and processing distinct water areas.
-        
-        Returns:
-            List of (x, y, w, h) tuples for each water region
-        """
+
+    def get_water_bounding_boxes(self, mask):
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        bboxes = []
-        for contour in contours:
-            x, y, w, h = cv2.boundingRect(contour)
-            area = w * h
-            
-            # Only keep significant regions
-            if area > 100:  # At least 100 pixels
-                bboxes.append((x, y, w, h))
-        
-        return bboxes
+        return [cv2.boundingRect(c) for c in contours if cv2.boundingRect(c)[2] * cv2.boundingRect(c)[3] > 100]
 
 
 class RegionBasedDataLoader:
