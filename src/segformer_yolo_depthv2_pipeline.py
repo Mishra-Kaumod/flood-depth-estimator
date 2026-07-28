@@ -81,6 +81,12 @@ def _severity_from_index(index: int) -> Dict[str, Any]:
     return _depth_to_severity(anchor_depth)
 
 
+KNOWN_REFERENCE_LABELS = {
+    "person", "car", "truck", "bus", "motorbike", "motorcycle", "bicycle",
+    # contour-proxy generic labels
+    "vehicle",
+}
+
 class SegformerYoloDepthV2Pipeline:
     """
     Structured multi-stage pipeline with deterministic stage order.
@@ -440,6 +446,22 @@ class SegformerYoloDepthV2Pipeline:
                 "summary": f"reference_objects={len(references)}",
             }
         )
+
+        # Gate: refuse prediction when no known reference objects are detected.
+        if not references:
+            logger.warning("Prediction refused: no known reference objects found.")
+            return {
+                "unpredictable": True,
+                "reason": "no_reference_object",
+                "message": (
+                    "Cannot estimate flood depth: no known reference object detected in the image. "
+                    "Please include a visible car, person, truck, motorcycle, bus, or bicycle "
+                    "so the model has a real-world scale anchor."
+                ),
+                "known_labels": sorted(KNOWN_REFERENCE_LABELS),
+                "method": "segformer_yolov8_depthv2_fusion",
+                "pipeline_trace": trace,
+            }
 
         dense_depth_map = self._depth_anything_v2_dense_map(image_rgb, water_mask)
         # Stage 3: optional Gemini depth refinement

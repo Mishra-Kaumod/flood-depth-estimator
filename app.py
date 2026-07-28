@@ -554,6 +554,11 @@ function showResults(results) {
     if (r.status === 'error') return `<div class="r-card" style="border-left-color:#ef4444">
       <div class="r-card-name">${r.name}</div>
       <div style="font-size:.8rem;color:#ef4444">Error: ${r.error}</div></div>`;
+    if (r.status === 'unpredictable') return `<div class="r-card" style="border-left-color:#f59e0b">
+      <div class="r-card-name">${r.name} <span style="background:#f59e0b;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">NO REFERENCE</span></div>
+      <div style="font-size:.8rem;color:#b45309;margin-top:4px">⚠️ ${r.message || 'No known reference object detected.'}</div>
+      <div style="font-size:.7rem;color:#92400e;margin-top:2px">Known: ${(r.known_labels||[]).join(', ')}</div>
+    </div>`;
     const s = r.severity;
     const methodBadge = r.method === 'reference_object_cv'
       ? `<span style="background:#f59e0b;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">CV FALLBACK</span>`
@@ -660,7 +665,8 @@ def _predict_single(image: Image.Image) -> dict:
     """
     if PIPELINE_MODE == "segformer_yolov8_depthv2_fusion":
         img_arr = np.array(image)
-        return _SEGFORMER_YOLO_DEPTH_PIPELINE.predict(img_arr)
+        result = _SEGFORMER_YOLO_DEPTH_PIPELINE.predict(img_arr)
+        return result  # includes unpredictable=True when no reference objects found
     if _MODEL_COLLAPSED:
         img_arr = np.array(image)
         ref_result = _REFERENCE_ESTIMATOR.estimate(img_arr)
@@ -745,8 +751,12 @@ def predict_batch():
         try:
             image = Image.open(io.BytesIO(file.read())).convert("RGB")
             pred = _predict_single(image)
-            logger.info(f"  [{i+1}] {name}: {pred['depth_cm']} cm ({pred['severity']['level']}) [{pred['method']}]")
-            results.append({"name": name, "lat": lat, "lng": lng, "status": "ok", **pred})
+            if pred.get("unpredictable"):
+                logger.warning(f"  [{i+1}] {name}: UNPREDICTABLE - {pred.get('reason','unknown')}")
+                results.append({"name": name, "lat": lat, "lng": lng, "status": "unpredictable", **pred})
+            else:
+                logger.info(f"  [{i+1}] {name}: {pred['depth_cm']} cm ({pred['severity']['level']}) [{pred['method']}]")
+                results.append({"name": name, "lat": lat, "lng": lng, "status": "ok", **pred})
         except Exception as e:
             logger.error(f"  [{i+1}] {name}: error — {e}")
             results.append({"name": name, "lat": lat, "lng": lng, "error": str(e), "status": "error"})
