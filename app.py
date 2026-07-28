@@ -718,7 +718,7 @@ def _predict_single(image: Image.Image) -> dict:
     if PIPELINE_MODE == "segformer_yolov8_depthv2_fusion":
         img_arr = np.array(image)
         result = _SEGFORMER_YOLO_DEPTH_PIPELINE.predict(img_arr)
-        return result  # includes unpredictable=True when no reference objects found
+        return result  # no_reference_warning=True when no YOLO objects found (still estimates)
     if _MODEL_COLLAPSED:
         img_arr = np.array(image)
         ref_result = _REFERENCE_ESTIMATOR.estimate(img_arr)
