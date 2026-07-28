@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import torch
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 import logging
 
 logger = logging.getLogger(__name__)
@@ -97,6 +97,93 @@ class WaterRegionDetector:
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k, iterations=2)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k, iterations=1)
         return mask
+
+
+    # ------------------------------------------------------------------
+    # Validation: scrub false positives using texture, connectivity,
+    # and scene-gravity priors. Called by detect_validated().
+    # ------------------------------------------------------------------
+
+    def _validate_and_refine(
+        self,
+        mask: np.ndarray,
+        image_rgb: np.ndarray,
+    ):
+        h, w = mask.shape
+        water_pixels = int(np.sum(mask > 0))
+        flags = []
+        score = 1.0
+
+        if water_pixels < 50:
+            return mask, 1.0, flags
+
+        gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
+        abs_lap = np.abs(cv2.Laplacian(gray, cv2.CV_32F))
+
+        # A. Surface texture within water region
+        # Real still/slow water = smooth (low Laplacian mean).
+        # Dry road/soil/buildings = rough (higher Laplacian mean).
+        water_tex_mean = float(np.mean(abs_lap[mask > 0]))
+        if water_tex_mean > 28:
+            flags.append('HIGH_TEXTURE')   # strong false-positive signal
+            score -= 0.40
+        elif water_tex_mean > 18:
+            flags.append('MODERATE_TEXTURE')
+            score -= 0.20
+
+        # B. Scrub high-texture pixels from the mask
+        tex_smooth = cv2.GaussianBlur(abs_lap, (9, 9), 0)
+        water_tex_vals = tex_smooth[mask > 0]
+        tex_thresh = float(np.percentile(water_tex_vals, 65))
+        refined = np.where((mask > 0) & (tex_smooth <= tex_thresh), 255, 0).astype(np.uint8)
+        refined = self._morphological_cleanup(refined, kernel_size=5)
+        if int(np.sum(refined > 0)) < water_pixels * 0.20:
+            refined = mask  # revert if we erased too much
+        else:
+            mask = refined
+
+        # C. Connectivity — large blob vs scattered patches
+        n_labels, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        if n_labels > 1:
+            areas = stats[1:, cv2.CC_STAT_AREA]
+            largest = int(np.max(areas))
+            total_a = int(np.sum(areas))
+            conn_ratio = largest / total_a if total_a > 0 else 1.0
+            if conn_ratio < 0.35:
+                flags.append('FRAGMENTED')
+                score -= 0.25
+            elif conn_ratio < 0.55:
+                flags.append('SCATTERED')
+                score -= 0.10
+
+        # D. Centre-of-mass height (water should hug the bottom)
+        ys, _ = np.where(mask > 0)
+        if len(ys) > 0:
+            com_y = float(np.mean(ys)) / h
+            if com_y < 0.38:
+                flags.append('WATER_TOO_HIGH')
+                score -= 0.30
+            elif com_y < 0.50:
+                flags.append('WATER_UPPER_MIDFRAME')
+                score -= 0.10
+
+        # E. Colour diversity check — real water is more uniform
+        water_px_rgb = image_rgb[mask > 0]
+        if water_px_rgb.shape[0] > 50:
+            color_std = float(np.mean(np.std(water_px_rgb.astype(float), axis=0)))
+            if color_std > 50:
+                flags.append('COLOR_DIVERSE')
+                score -= 0.15
+
+        score = float(np.clip(score, 0.05, 1.0))
+        return mask, score, flags
+
+    def detect_validated(self, image: np.ndarray):
+        mask, water_pct = self.detect(image)
+        mask, water_confidence, flags = self._validate_and_refine(mask, image)
+        h, w = mask.shape
+        water_pct = float(np.sum(mask > 0)) / float(h * w) * 100.0
+        return mask, water_pct, water_confidence, flags
 
     def get_water_bounding_boxes(self, mask):
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)

@@ -144,10 +144,12 @@ class SegformerYoloDepthV2Pipeline:
             self._yolo_model = None
             self._yolo_backend = "contour-proxy"
 
-    def _segformer_water_mask(self, image_rgb: np.ndarray) -> Tuple[np.ndarray, float]:
-        # SegFormer-aligned stage boundary. Current backend is a lightweight detector.
-        water_mask, water_coverage = self.water_detector.detect(image_rgb)
-        return (water_mask > 0).astype(np.uint8) * 255, float(water_coverage)
+    def _segformer_water_mask(
+        self, image_rgb: np.ndarray
+    ) -> Tuple[np.ndarray, float, float, List[str]]:
+        # SegFormer-aligned stage. detect_validated() also scrubs false positives.
+        mask, water_pct, water_conf, water_flags = self.water_detector.detect_validated(image_rgb)
+        return (mask > 0).astype(np.uint8) * 255, float(water_pct), float(water_conf), water_flags
 
     def _extract_reference_from_yolo(
         self,
@@ -342,6 +344,8 @@ class SegformerYoloDepthV2Pipeline:
         water_mask: "np.ndarray",
         water_coverage_pct: float,
         dense_depth_map: "np.ndarray",
+        water_confidence: float = 1.0,
+        water_flags: Optional[List[str]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """
         Returns (plain_text_comment, structured_detail_dict).
@@ -412,6 +416,30 @@ class SegformerYoloDepthV2Pipeline:
             "No real-world scale anchor — visual depth cues only. "
             "Add a car, person or motorbike for a calibrated reading."
         )
+        # ── Validation flags from _validate_and_refine ──────────────
+        wflags = water_flags or []
+        water_conf_label: str
+        if water_confidence >= 0.80:
+            water_conf_label = "high"
+        elif water_confidence >= 0.55:
+            water_conf_label = "moderate"
+        else:
+            water_conf_label = "low"
+
+        # Tighten comment when detection is suspect
+        if water_confidence < 0.55:
+            qual = " (low-confidence detection — may be dry surface)"
+        elif water_confidence < 0.80:
+            qual = " (moderate-confidence detection)"
+        else:
+            qual = ""
+
+        comment = (
+            f"SegFormer detects {extent}{qual}, {pos_icon} {position}. "
+            f"DepthV2: {depth_signal}. "
+            "No real-world scale anchor — visual depth cues only. "
+            "Add a car, person or motorbike for a calibrated reading."
+        )
         detail = {
             "water_pct": round(water_coverage_pct, 1),
             "water_level": water_level,
@@ -421,6 +449,9 @@ class SegformerYoloDepthV2Pipeline:
             "bot_pct": round(bot_pct, 1),
             "depth_p90": round(p90, 3),
             "depth_level": depth_level,
+            "water_confidence": round(water_confidence, 2),
+            "water_conf_label": water_conf_label,
+            "water_flags": wflags,
         }
         return comment, detail
 
@@ -525,13 +556,19 @@ class SegformerYoloDepthV2Pipeline:
 
         trace: List[Dict[str, str]] = []
 
-        water_mask, water_coverage_pct = self._segformer_water_mask(image_rgb)
+        water_mask, water_coverage_pct, water_confidence, water_flags = (
+            self._segformer_water_mask(image_rgb)
+        )
         trace.append(
             {
                 "stage": "SegFormer",
                 "backend": "classical-water-detector",
                 "status": "ok",
-                "summary": f"water_coverage={water_coverage_pct:.2f}%",
+                "summary": (
+                    f"water_coverage={water_coverage_pct:.2f}% "
+                    f"water_confidence={water_confidence:.2f}"
+                    + (f" flags={water_flags}" if water_flags else "")
+                ),
             }
         )
 
@@ -694,7 +731,14 @@ class SegformerYoloDepthV2Pipeline:
                 water_mask=water_mask,
                 water_coverage_pct=water_coverage_pct,
                 dense_depth_map=dense_depth_map,
+                water_confidence=water_confidence,
+                water_flags=water_flags,
             )
+            # Further cap confidence when water detection itself is low-quality
+            if water_confidence < 0.55:
+                confidence = round(float(np.clip(confidence, 0.0, 0.35)), 4)
+            elif water_confidence < 0.80:
+                confidence = round(float(np.clip(confidence, 0.0, 0.45)), 4)
 
         return {
             "depth_cm": depth_cm,
@@ -705,6 +749,8 @@ class SegformerYoloDepthV2Pipeline:
             "no_reference_warning": no_reference,
             "scene_comment": scene_comment,
             "no_ref_detail": no_ref_detail,
+            "water_confidence": water_confidence,
+            "water_flags": water_flags,
             "gemini_enhanced": self._gemini_model is not None,
             "visual_cues": visual_cues,
             "label_guide": reference_estimate.get("label_guide", ""),

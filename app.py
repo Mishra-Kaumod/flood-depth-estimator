@@ -558,21 +558,45 @@ function showResults(results) {
       const s2 = r.severity;
       const confPct = r.confidence !== undefined ? (r.confidence*100).toFixed(0)+'%' : '?';
       const d = r.no_ref_detail || {};
-      // Mini bar helper: fills `filled` out of 10 segments
+      // Mini bar helper
       function miniBar(pct, color) {
         const filled = Math.round(Math.min(pct,100)/10);
         return '<span style="letter-spacing:1px;color:'+color+'">'+'█'.repeat(filled)+'<span style="color:#d1d5db">'+'░'.repeat(10-filled)+'</span></span>';
       }
-      // depth bar: map level to filled count
-      const depthFill = {shallow:2,moderate:5,significant:7,deep:10}[d.depth_level] || 5;
-      const waterBar  = d.water_pct   !== undefined ? miniBar(d.water_pct, '#2563eb') : '';
-      const depthBar  = d.depth_level !== undefined ? miniBar(depthFill*10, '#7c3aed') : '';
-      const wLabel    = d.water_level  ? d.water_level.charAt(0).toUpperCase()+d.water_level.slice(1) : '';
-      const dLabel    = d.depth_level  ? d.depth_level.charAt(0).toUpperCase()+d.depth_level.slice(1) : '';
-      const posIcon   = d.pos_icon || '';
-      const posLabel  = d.water_position || '';
-      const botPct    = d.bot_pct !== undefined ? d.bot_pct.toFixed(0)+'%' : '';
-      const topPct    = d.top_pct !== undefined ? d.top_pct.toFixed(0)+'%' : '';
+      const depthFill  = {shallow:2,moderate:5,significant:7,deep:10}[d.depth_level] || 5;
+      const waterBar   = d.water_pct   !== undefined ? miniBar(d.water_pct, '#2563eb') : '';
+      const depthBar   = d.depth_level !== undefined ? miniBar(depthFill*10, '#7c3aed') : '';
+      const wLabel     = d.water_level   ? d.water_level.charAt(0).toUpperCase()+d.water_level.slice(1) : '';
+      const dLabel     = d.depth_level   ? d.depth_level.charAt(0).toUpperCase()+d.depth_level.slice(1) : '';
+      const posIcon    = d.pos_icon || '';
+      const posLabel   = d.water_position || '';
+      const botPct     = d.bot_pct !== undefined ? d.bot_pct.toFixed(0)+'%' : '';
+      const topPct     = d.top_pct !== undefined ? d.top_pct.toFixed(0)+'%' : '';
+
+      // ── Water signal quality badge & colour ────────────────────────────
+      const wConf      = d.water_confidence !== undefined ? d.water_confidence : 1.0;
+      const wConfLbl   = d.water_conf_label || (wConf >= 0.8 ? 'high' : wConf >= 0.55 ? 'moderate' : 'low');
+      const wqColor    = wConf >= 0.80 ? '#16a34a' : wConf >= 0.55 ? '#d97706' : '#dc2626';
+      const wqLabel    = {'high':'✅ High','moderate':'⚠️ Moderate','low':'🚨 Low (possible false positive)'}[wConfLbl] || wConfLbl;
+      const wqBar      = miniBar(wConf * 100, wqColor);
+
+      // ── Validation flag pills ──────────────────────────────────────────
+      const FLAG_META = {
+        HIGH_TEXTURE:         {label:'High texture — likely dry surface',   color:'#dc2626'},
+        MODERATE_TEXTURE:     {label:'Moderate texture — uncertain surface', color:'#d97706'},
+        FRAGMENTED:           {label:'Fragmented patches — not flood-like',  color:'#dc2626'},
+        SCATTERED:            {label:'Scattered water regions',              color:'#d97706'},
+        WATER_TOO_HIGH:       {label:'Water detected too high in frame',     color:'#dc2626'},
+        WATER_UPPER_MIDFRAME: {label:'Water in mid-upper frame',             color:'#d97706'},
+        COLOR_DIVERSE:        {label:'High colour diversity — not water-like',color:'#d97706'},
+      };
+      const flags = d.water_flags || r.water_flags || [];
+      const flagPills = flags.map(f => {
+        const m = FLAG_META[f] || {label:f, color:'#6b7280'};
+        return `<span style="display:inline-block;margin:1px 2px;padding:0 5px;border-radius:10px;font-size:.6rem;font-weight:600;background:${m.color}22;color:${m.color};border:1px solid ${m.color}66">${m.label}</span>`;
+      }).join('');
+      const flagsHtml = flags.length ? `<div style="margin-top:3px">${flagPills}</div>` : '';
+
       const detailHtml = (d.water_pct !== undefined) ? `
         <div style="margin-top:6px;padding:6px 8px;background:#fef3c7;border-radius:6px;border:1px solid #fcd34d">
           <div style="font-size:.67rem;font-weight:700;color:#92400e;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px">Scene Analysis (SegFormer + DepthV2)</div>
@@ -584,10 +608,7 @@ function showResults(results) {
             </tr>
             <tr>
               <td style="padding:2px 4px 2px 0;white-space:nowrap">📍 Distribution</td>
-              <td style="padding:2px 4px">
-                <span style="font-size:.9em">${posIcon}</span>
-                <span style="font-size:.67rem;color:#92400e"> bot ${botPct} · top ${topPct}</span>
-              </td>
+              <td style="padding:2px 4px"><span style="font-size:.9em">${posIcon}</span> <span style="font-size:.67rem;color:#92400e">bot ${botPct} · top ${topPct}</span></td>
               <td style="padding:2px 0;text-align:right;white-space:nowrap">${posLabel}</td>
             </tr>
             <tr>
@@ -595,16 +616,29 @@ function showResults(results) {
               <td style="padding:2px 4px">${depthBar}</td>
               <td style="padding:2px 0;text-align:right;white-space:nowrap"><b>${dLabel}</b> (p90 ${d.depth_p90})</td>
             </tr>
+            <tr style="border-top:1px solid #fcd34d">
+              <td style="padding:3px 4px 2px 0;white-space:nowrap">🔬 Water signal</td>
+              <td style="padding:3px 4px">${wqBar}</td>
+              <td style="padding:3px 0;text-align:right;white-space:nowrap" style="color:${wqColor}"><b>${wqLabel}</b></td>
+            </tr>
           </table>
+          ${flagsHtml}
           <div style="font-size:.64rem;color:#a16207;margin-top:4px;line-height:1.4">⚠️ No real-world scale anchor · add a car, person or motorbike for a calibrated reading</div>
         </div>` : '';
-      return `<div class="r-card" id="rc-${i}" style="border-left-color:#f59e0b" onclick="flyTo(${r.lat},${r.lng},${i})">
+
+      // Tone down the depth display when water confidence is very low
+      const depthDisplay = wConf < 0.45
+        ? `<div class="r-card-depth" style="color:#9ca3af;text-decoration:line-through">${r.depth_cm} cm</div>
+           <div style="font-size:.75rem;color:#dc2626;font-weight:600">⚠️ Water detection unreliable — estimate likely incorrect</div>`
+        : `<div class="r-card-depth" style="color:${s2.color}">${r.depth_cm} cm</div>
+           <div class="r-card-level" style="color:${s2.color}">${s2.level} — ${s2.label}</div>`;
+
+      return `<div class="r-card" id="rc-${i}" style="border-left-color:${wConf < 0.45 ? '#dc2626' : '#f59e0b'}" onclick="flyTo(${r.lat},${r.lng},${i})">
         <div class="r-card-name">${r.name}
-          <span style="background:#f59e0b;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">NO SCALE ANCHOR</span>
+          <span style="background:${wConf < 0.45 ? '#dc2626' : '#f59e0b'};color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">${wConf < 0.45 ? 'FALSE POSITIVE?' : 'NO SCALE ANCHOR'}</span>
         </div>
-        <div class="r-card-depth" style="color:${s2.color}">${r.depth_cm} cm</div>
-        <div class="r-card-level" style="color:${s2.color}">${s2.level} — ${s2.label}</div>
-        <div style="font-size:.72rem;color:#b45309;margin-top:2px">SegFormer + DepthV2 estimate · Confidence ${confPct}</div>
+        ${depthDisplay}
+        <div style="font-size:.72rem;color:#b45309;margin-top:2px">SegFormer + DepthV2 only · Confidence ${confPct}</div>
         ${detailHtml}
         <div class="r-card-loc" style="margin-top:4px">📍 ${r.lat.toFixed(4)}, ${r.lng.toFixed(4)}</div>
       </div>`;
