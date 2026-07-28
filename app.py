@@ -577,7 +577,7 @@ function showResults(results) {
       const wConf      = d.water_confidence !== undefined ? d.water_confidence : 1.0;
       const wConfLbl   = d.water_conf_label || (wConf >= 0.8 ? 'high' : wConf >= 0.55 ? 'moderate' : 'low');
       const wqColor    = wConf >= 0.80 ? '#16a34a' : wConf >= 0.55 ? '#d97706' : '#dc2626';
-      const wqLabel    = {'high':'✅ High','moderate':'⚠️ Moderate','low':'🚨 Low (possible false positive)'}[wConfLbl] || wConfLbl;
+      const wqLabel    = {'high':'✅ High','moderate':'⚠️ Moderate','low':'🚨 Low (unreliable water signal)'}[wConfLbl] || wConfLbl;
       const wqBar      = miniBar(wConf * 100, wqColor);
 
       // ── Validation flag pills ──────────────────────────────────────────
@@ -638,7 +638,7 @@ function showResults(results) {
 
       return `<div class="r-card" id="rc-${i}" style="border-left-color:${isSuppressed ? '#dc2626' : '#f59e0b'}" onclick="flyTo(${r.lat},${r.lng},${i})">
         <div class="r-card-name">${r.name}
-          <span style="background:${isSuppressed ? '#dc2626' : '#f59e0b'};color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">${isSuppressed ? 'FALSE POSITIVE?' : 'NO SCALE ANCHOR'}</span>
+          <span style="background:${isSuppressed ? '#dc2626' : '#f59e0b'};color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">${isSuppressed ? 'DEPTH WITHHELD' : 'NO SCALE ANCHOR'}</span>
         </div>
         ${depthDisplay}
         <div style="font-size:.72rem;color:#b45309;margin-top:2px">SegFormer + DepthV2 only · Confidence ${confPct}</div>
@@ -845,7 +845,7 @@ def predict_batch():
                 if pred.get("water_detection_unreliable"):
                     logger.warning(
                         f"  [{i+1}] {name}: DEPTH WITHHELD [{pred['method']}] "
-                        f"conf={pred['confidence']} — POSSIBLE FALSE POSITIVE {pred.get('water_flags', [])}"
+                        f"conf={pred['confidence']} — UNRELIABLE WATER SIGNAL {pred.get('water_flags', [])}"
                     )
                 else:
                     logger.warning(
