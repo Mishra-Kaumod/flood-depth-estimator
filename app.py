@@ -557,17 +557,56 @@ function showResults(results) {
     if (r.status === 'low_confidence') {
       const s2 = r.severity;
       const confPct = r.confidence !== undefined ? (r.confidence*100).toFixed(0)+'%' : '?';
-      const commentHtml = r.scene_comment
-        ? `<div style="font-size:.7rem;color:#92400e;margin-top:4px;line-height:1.4">💬 ${r.scene_comment}</div>` : '';
+      const d = r.no_ref_detail || {};
+      // Mini bar helper: fills `filled` out of 10 segments
+      function miniBar(pct, color) {
+        const filled = Math.round(Math.min(pct,100)/10);
+        return '<span style="letter-spacing:1px;color:'+color+'">'+'█'.repeat(filled)+'<span style="color:#d1d5db">'+'░'.repeat(10-filled)+'</span></span>';
+      }
+      // depth bar: map level to filled count
+      const depthFill = {shallow:2,moderate:5,significant:7,deep:10}[d.depth_level] || 5;
+      const waterBar  = d.water_pct   !== undefined ? miniBar(d.water_pct, '#2563eb') : '';
+      const depthBar  = d.depth_level !== undefined ? miniBar(depthFill*10, '#7c3aed') : '';
+      const wLabel    = d.water_level  ? d.water_level.charAt(0).toUpperCase()+d.water_level.slice(1) : '';
+      const dLabel    = d.depth_level  ? d.depth_level.charAt(0).toUpperCase()+d.depth_level.slice(1) : '';
+      const posIcon   = d.pos_icon || '';
+      const posLabel  = d.water_position || '';
+      const botPct    = d.bot_pct !== undefined ? d.bot_pct.toFixed(0)+'%' : '';
+      const topPct    = d.top_pct !== undefined ? d.top_pct.toFixed(0)+'%' : '';
+      const detailHtml = (d.water_pct !== undefined) ? `
+        <div style="margin-top:6px;padding:6px 8px;background:#fef3c7;border-radius:6px;border:1px solid #fcd34d">
+          <div style="font-size:.67rem;font-weight:700;color:#92400e;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px">Scene Analysis (SegFormer + DepthV2)</div>
+          <table style="width:100%;border-collapse:collapse;font-size:.68rem;color:#78350f">
+            <tr>
+              <td style="padding:2px 4px 2px 0;white-space:nowrap">💧 Water coverage</td>
+              <td style="padding:2px 4px">${waterBar}</td>
+              <td style="padding:2px 0;text-align:right;white-space:nowrap"><b>${d.water_pct}%</b> ${wLabel}</td>
+            </tr>
+            <tr>
+              <td style="padding:2px 4px 2px 0;white-space:nowrap">📍 Distribution</td>
+              <td style="padding:2px 4px">
+                <span style="font-size:.9em">${posIcon}</span>
+                <span style="font-size:.67rem;color:#92400e"> bot ${botPct} · top ${topPct}</span>
+              </td>
+              <td style="padding:2px 0;text-align:right;white-space:nowrap">${posLabel}</td>
+            </tr>
+            <tr>
+              <td style="padding:2px 4px 2px 0;white-space:nowrap">📏 Depth signal</td>
+              <td style="padding:2px 4px">${depthBar}</td>
+              <td style="padding:2px 0;text-align:right;white-space:nowrap"><b>${dLabel}</b> (p90 ${d.depth_p90})</td>
+            </tr>
+          </table>
+          <div style="font-size:.64rem;color:#a16207;margin-top:4px;line-height:1.4">⚠️ No real-world scale anchor · add a car, person or motorbike for a calibrated reading</div>
+        </div>` : '';
       return `<div class="r-card" id="rc-${i}" style="border-left-color:#f59e0b" onclick="flyTo(${r.lat},${r.lng},${i})">
         <div class="r-card-name">${r.name}
           <span style="background:#f59e0b;color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">NO SCALE ANCHOR</span>
         </div>
         <div class="r-card-depth" style="color:${s2.color}">${r.depth_cm} cm</div>
         <div class="r-card-level" style="color:${s2.color}">${s2.level} — ${s2.label}</div>
-        <div style="font-size:.72rem;color:#b45309;margin-top:2px">⚠️ SegFormer + DepthV2 estimate only · Confidence ${confPct}</div>
-        ${commentHtml}
-        <div class="r-card-loc">📍 ${r.lat.toFixed(4)}, ${r.lng.toFixed(4)}</div>
+        <div style="font-size:.72rem;color:#b45309;margin-top:2px">SegFormer + DepthV2 estimate · Confidence ${confPct}</div>
+        ${detailHtml}
+        <div class="r-card-loc" style="margin-top:4px">📍 ${r.lat.toFixed(4)}, ${r.lng.toFixed(4)}</div>
       </div>`;
     }
     const s = r.severity;

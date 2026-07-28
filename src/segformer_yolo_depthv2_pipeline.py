@@ -342,35 +342,51 @@ class SegformerYoloDepthV2Pipeline:
         water_mask: "np.ndarray",
         water_coverage_pct: float,
         dense_depth_map: "np.ndarray",
-    ) -> str:
+    ) -> Tuple[str, Dict[str, Any]]:
         """
-        Plain-English summary of what SegFormer + DepthV2 observe.
+        Returns (plain_text_comment, structured_detail_dict).
         Called when no YOLO reference objects are available so the
         operator understands the basis for the estimate.
+        structured_detail_dict keys:
+          water_pct      float   — coverage percentage
+          water_level    str     — "minimal" | "partial" | "moderate" | "extensive" | "near-total"
+          water_position str     — short distribution label
+          bot_pct        float   — % of bottom-half image that is water
+          top_pct        float   — % of top-half image that is water
+          depth_p90      float   — normalised p90 proxy (0-1)
+          depth_level    str     — "shallow" | "moderate" | "significant" | "deep"
         """
         h = water_mask.shape[0]
 
         # --- Water extent ---
         if water_coverage_pct < 5:
             extent = "minimal flood traces"
+            water_level = "minimal"
         elif water_coverage_pct < 20:
             extent = f"partial flooding ({water_coverage_pct:.0f}% of scene)"
+            water_level = "partial"
         elif water_coverage_pct < 50:
             extent = f"moderate flooding ({water_coverage_pct:.0f}% of scene)"
+            water_level = "moderate"
         elif water_coverage_pct < 75:
             extent = f"extensive flooding ({water_coverage_pct:.0f}% of scene)"
+            water_level = "extensive"
         else:
             extent = f"near-total inundation ({water_coverage_pct:.0f}% of scene)"
+            water_level = "near-total"
 
-        # --- Vertical distribution (is water at bottom = ground level?) ---
-        top_half_water = float(np.mean(water_mask[:h // 2] > 0)) * 100
-        bot_half_water = float(np.mean(water_mask[h // 2:] > 0)) * 100
-        if bot_half_water > top_half_water * 1.5:
-            position = "concentrated at ground level (lower frame)"
-        elif top_half_water > bot_half_water * 1.2:
-            position = "visible throughout scene including upper frame"
+        # --- Vertical distribution ---
+        top_pct = float(np.mean(water_mask[:h // 2] > 0)) * 100
+        bot_pct = float(np.mean(water_mask[h // 2:] > 0)) * 100
+        if bot_pct > top_pct * 1.5:
+            position = "ground level (lower frame)"
+            pos_icon = "⬇"
+        elif top_pct > bot_pct * 1.2:
+            position = "throughout scene incl. upper frame"
+            pos_icon = "↕"
         else:
-            position = "distributed across the scene"
+            position = "evenly distributed"
+            pos_icon = "↔"
 
         # --- DepthV2 relative depth signal ---
         water_pixels = dense_depth_map[water_mask > 0]
@@ -378,20 +394,35 @@ class SegformerYoloDepthV2Pipeline:
             water_pixels = dense_depth_map.reshape(-1)
         p90 = float(np.percentile(water_pixels, 90))
         if p90 < 0.20:
-            depth_signal = "shallow depth cues (proxy p90 < 0.20)"
+            depth_signal = "shallow depth cues"
+            depth_level = "shallow"
         elif p90 < 0.40:
-            depth_signal = "moderate depth cues (proxy p90 ≈ {:.2f})".format(p90)
+            depth_signal = "moderate depth cues (p90≈{:.2f})".format(p90)
+            depth_level = "moderate"
         elif p90 < 0.65:
-            depth_signal = "significant depth cues (proxy p90 ≈ {:.2f})".format(p90)
+            depth_signal = "significant depth cues (p90≈{:.2f})".format(p90)
+            depth_level = "significant"
         else:
-            depth_signal = "deep flood cues (proxy p90 ≈ {:.2f})".format(p90)
+            depth_signal = "deep flood cues (p90≈{:.2f})".format(p90)
+            depth_level = "deep"
 
-        return (
-            f"SegFormer detects {extent}, {position}. "
-            f"DepthV2 indicates {depth_signal}. "
-            "Estimate derived from visual depth cues only — no real-world scale anchor available. "
-            "Add a car, person or motorbike to the scene for a calibrated reading."
+        comment = (
+            f"SegFormer detects {extent}, {pos_icon} {position}. "
+            f"DepthV2: {depth_signal}. "
+            "No real-world scale anchor — visual depth cues only. "
+            "Add a car, person or motorbike for a calibrated reading."
         )
+        detail = {
+            "water_pct": round(water_coverage_pct, 1),
+            "water_level": water_level,
+            "water_position": position,
+            "pos_icon": pos_icon,
+            "top_pct": round(top_pct, 1),
+            "bot_pct": round(bot_pct, 1),
+            "depth_p90": round(p90, 3),
+            "depth_level": depth_level,
+        }
+        return comment, detail
 
     # ------------------------------------------------------------------
     # Gemini enhancement helpers — stages 3, 4, 5 only
@@ -654,11 +685,12 @@ class SegformerYoloDepthV2Pipeline:
         # When no YOLO objects were found, cap confidence and attach a plain-English
         # description of what SegFormer + DepthV2 observed so the operator has context.
         scene_comment: str = ""
+        no_ref_detail: Dict[str, Any] = {}
         scale_anchor: str = "yolo_reference"
         if no_reference:
             confidence = round(float(np.clip(confidence, 0.0, 0.55)), 4)
             scale_anchor = "none"
-            scene_comment = self._segformer_scene_comment(
+            scene_comment, no_ref_detail = self._segformer_scene_comment(
                 water_mask=water_mask,
                 water_coverage_pct=water_coverage_pct,
                 dense_depth_map=dense_depth_map,
@@ -672,6 +704,7 @@ class SegformerYoloDepthV2Pipeline:
             "scale_anchor": scale_anchor,
             "no_reference_warning": no_reference,
             "scene_comment": scene_comment,
+            "no_ref_detail": no_ref_detail,
             "gemini_enhanced": self._gemini_model is not None,
             "visual_cues": visual_cues,
             "label_guide": reference_estimate.get("label_guide", ""),
