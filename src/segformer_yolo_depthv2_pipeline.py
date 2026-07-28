@@ -724,6 +724,9 @@ class SegformerYoloDepthV2Pipeline:
         scene_comment: str = ""
         no_ref_detail: Dict[str, Any] = {}
         scale_anchor: str = "yolo_reference"
+        water_detection_unreliable = False
+        suppressed_depth_reason = ""
+        provisional_depth_cm: Optional[float] = None
         if no_reference:
             confidence = round(float(np.clip(confidence, 0.0, 0.55)), 4)
             scale_anchor = "none"
@@ -740,6 +743,20 @@ class SegformerYoloDepthV2Pipeline:
             elif water_confidence < 0.80:
                 confidence = round(float(np.clip(confidence, 0.0, 0.45)), 4)
 
+            # Hard guard: if water signal itself is likely false-positive, do not
+            # surface a numeric depth/severity estimate at all.
+            if water_confidence < 0.45:
+                water_detection_unreliable = True
+                provisional_depth_cm = float(depth_cm)
+                suppressed_depth_reason = (
+                    "Water mask quality is too low for a reliable depth estimate. "
+                    "Likely dry-surface false positive (e.g., textured road/soil)."
+                )
+                depth_cm = None
+                severity = None
+                confidence = round(float(np.clip(confidence, 0.0, 0.20)), 4)
+                action = "Retake image with clearly visible flood water and a reference object."
+
         return {
             "depth_cm": depth_cm,
             "confidence": confidence,
@@ -751,6 +768,9 @@ class SegformerYoloDepthV2Pipeline:
             "no_ref_detail": no_ref_detail,
             "water_confidence": water_confidence,
             "water_flags": water_flags,
+            "water_detection_unreliable": water_detection_unreliable,
+            "suppressed_depth_reason": suppressed_depth_reason,
+            "provisional_depth_cm": provisional_depth_cm,
             "gemini_enhanced": self._gemini_model is not None,
             "visual_cues": visual_cues,
             "label_guide": reference_estimate.get("label_guide", ""),

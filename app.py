@@ -555,7 +555,7 @@ function showResults(results) {
       <div class="r-card-name">${r.name}</div>
       <div style="font-size:.8rem;color:#ef4444">Error: ${r.error}</div></div>`;
     if (r.status === 'low_confidence') {
-      const s2 = r.severity;
+      const s2 = r.severity || {color:'#9ca3af', level:'UNVERIFIED', label:'Depth withheld'};
       const confPct = r.confidence !== undefined ? (r.confidence*100).toFixed(0)+'%' : '?';
       const d = r.no_ref_detail || {};
       // Mini bar helper
@@ -626,16 +626,19 @@ function showResults(results) {
           <div style="font-size:.64rem;color:#a16207;margin-top:4px;line-height:1.4">⚠️ No real-world scale anchor · add a car, person or motorbike for a calibrated reading</div>
         </div>` : '';
 
-      // Tone down the depth display when water confidence is very low
-      const depthDisplay = wConf < 0.45
-        ? `<div class="r-card-depth" style="color:#9ca3af;text-decoration:line-through">${r.depth_cm} cm</div>
-           <div style="font-size:.75rem;color:#dc2626;font-weight:600">⚠️ Water detection unreliable — estimate likely incorrect</div>`
+      // Hard-stop display when water signal is unreliable.
+      const hasNumericDepth = (typeof r.depth_cm === 'number') && isFinite(r.depth_cm);
+      const isSuppressed = !!r.water_detection_unreliable || !hasNumericDepth;
+      const depthDisplay = isSuppressed
+        ? `<div class="r-card-depth" style="color:#9ca3af">Depth withheld</div>
+           <div style="font-size:.75rem;color:#dc2626;font-weight:600">⚠️ Water detection unreliable — no flood depth shown</div>
+           ${r.suppressed_depth_reason ? `<div style="font-size:.68rem;color:#991b1b;margin-top:2px">${r.suppressed_depth_reason}</div>` : ''}`
         : `<div class="r-card-depth" style="color:${s2.color}">${r.depth_cm} cm</div>
            <div class="r-card-level" style="color:${s2.color}">${s2.level} — ${s2.label}</div>`;
 
-      return `<div class="r-card" id="rc-${i}" style="border-left-color:${wConf < 0.45 ? '#dc2626' : '#f59e0b'}" onclick="flyTo(${r.lat},${r.lng},${i})">
+      return `<div class="r-card" id="rc-${i}" style="border-left-color:${isSuppressed ? '#dc2626' : '#f59e0b'}" onclick="flyTo(${r.lat},${r.lng},${i})">
         <div class="r-card-name">${r.name}
-          <span style="background:${wConf < 0.45 ? '#dc2626' : '#f59e0b'};color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">${wConf < 0.45 ? 'FALSE POSITIVE?' : 'NO SCALE ANCHOR'}</span>
+          <span style="background:${isSuppressed ? '#dc2626' : '#f59e0b'};color:#fff;border-radius:4px;padding:1px 6px;font-size:.65rem;font-weight:700">${isSuppressed ? 'FALSE POSITIVE?' : 'NO SCALE ANCHOR'}</span>
         </div>
         ${depthDisplay}
         <div style="font-size:.72rem;color:#b45309;margin-top:2px">SegFormer + DepthV2 only · Confidence ${confPct}</div>
@@ -677,7 +680,8 @@ function showResults(results) {
 
   const bounds = [];
   results.forEach((r, i) => {
-    if (r.status === 'error' || !r.severity) return;
+    const validDepth = (typeof r.depth_cm === 'number') && isFinite(r.depth_cm);
+    if (r.status === 'error' || !r.severity || !validDepth) return;
     const s = r.severity;
     const radius = 300 + (r.depth_cm / 100) * 700;
     const circle = L.circle([r.lat, r.lng], {
@@ -838,10 +842,16 @@ def predict_batch():
             image = Image.open(io.BytesIO(file.read())).convert("RGB")
             pred = _predict_single(image)
             if pred.get("no_reference_warning"):
-                logger.warning(
-                    f"  [{i+1}] {name}: {pred['depth_cm']}cm [{pred['method']}] "
-                    f"conf={pred['confidence']} — NO SCALE ANCHOR (SegFormer+DepthV2 only)"
-                )
+                if pred.get("water_detection_unreliable"):
+                    logger.warning(
+                        f"  [{i+1}] {name}: DEPTH WITHHELD [{pred['method']}] "
+                        f"conf={pred['confidence']} — POSSIBLE FALSE POSITIVE {pred.get('water_flags', [])}"
+                    )
+                else:
+                    logger.warning(
+                        f"  [{i+1}] {name}: {pred['depth_cm']}cm [{pred['method']}] "
+                        f"conf={pred['confidence']} — NO SCALE ANCHOR (SegFormer+DepthV2 only)"
+                    )
                 results.append({"name": name, "lat": lat, "lng": lng, "status": "low_confidence", **pred})
             else:
                 logger.info(f"  [{i+1}] {name}: {pred['depth_cm']} cm ({pred['severity']['level']}) [{pred['method']}]")
