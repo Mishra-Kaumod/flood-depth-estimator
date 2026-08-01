@@ -1,56 +1,51 @@
 # Flood Depth Model Storage
 
-Pre-trained model is now included in the repository via **Git LFS** for easy team access.
+Pre-trained model is included in the repository via **Git LFS** for easy team access.
+
+> **Only one model is active.** The old EfficientNet-B0 baseline has been moved to `archived/`.
 
 ## Quick Start
 
-### Model Available in Repository
-- **File:** `models/best_flood_model.pth`
-- **Size:** 42.72 MB (stored via Git LFS)
-- **Architecture:** EfficientNet-B0
-- **Input:** 224x224 RGB image
-- **Output:** Severity classification + depth in cm (0-100)
+### Active Model
+- **File:** `models/best_flood_model_water_aware.pth`
+- **Architecture:** EfficientNet-B3 + water-aware head
+- **Input:** 224×224 RGB image
+- **Output:** Severity classification + depth in cm (0–300)
 - **Framework:** PyTorch
+- **Note:** Used by the full 5-stage pipeline (SegFormer → YOLOv8 → DepthV2 → Fusion → Calibration)
 
-### Using the Pre-trained Model
+### Using the Active Model
 
 ```python
-from src.train import build_model
+from src.train_water_aware import build_water_aware_model
 import torch
 
-# Load pre-trained model
-model = build_model()
-model.load_state_dict(torch.load('models/best_flood_model.pth'))
+model = build_water_aware_model()
+model.load_state_dict(torch.load('models/best_flood_model_water_aware.pth'))
 model.eval()
-
-# Inference
-from PIL import Image
-image = Image.open('flood_image.jpg')
-# ... preprocess and predict
 ```
 
 ### Running the Inference Server
 
 ```bash
-# Start LitServe inference server
-python serve.py
-
-# Server runs on http://localhost:8000
-# Automatically loads models/best_flood_model.pth
+python app.py
+# Server runs on http://localhost:5000
+# Automatically loads models/best_flood_model_water_aware.pth
 ```
 
-## For Development (Local Training)
+## For Development (Local Training / Fine-tuning)
 
-When training locally, new models save to:
 ```bash
-python src/train.py --config config/config.yaml --output models
-# Creates: models/best_flood_model.pth (overwrites if exists)
+python src/train_water_aware.py --config config/config.yaml --output models
+# Creates: models/best_flood_model_water_aware.pth (overwrites if exists)
 ```
 
-To preserve trained model:
-```bash
-cp models/best_flood_model.pth models/best_flood_model_v2.pth
-```
+## Archived Models
+
+| File | Architecture | Status |
+|------|-------------|--------|
+| `archived/best_flood_model.pth` | EfficientNet-B0 (baseline) | Superseded |
+| `archived/severity_model.pth` | Early severity classifier | Superseded |
 
 ## Git LFS Details
 
@@ -101,62 +96,29 @@ If team exceeds free tier:
 
 | Property | Value |
 |----------|-------|
-| Architecture | EfficientNet-B0 |
-| Parameters | 4.37 million |
-| Input Size | 224x224 RGB |
-| Output | Depth (0-100 cm) |
+| Architecture | EfficientNet-B3 + water-aware head |
+| Input Size | 224×224 RGB |
+| Output | Depth (0–300 cm) + severity bucket |
 | Framework | PyTorch |
-| Training Loss | MSE |
 | Optimizer | AdamW |
-| Trained On | Flood Depth Dataset |
 
-## Distribution Methods
+## Distribution (Git LFS)
 
-### Method 1: Clone from GitHub (CURRENT - Recommended for teams <20 people)
 ```bash
+# Clone — model downloads automatically
 git clone https://github.com/Mishra-Kaumod/flood-depth-estimator.git
-# Model included via Git LFS
+
+# If model shows as pointer, pull manually
+git lfs pull
 ```
 
-### Method 2: Direct Download Link
-```bash
-wget https://github.com/Mishra-Kaumod/flood-depth-estimator/releases/download/v1.0/best_flood_model.pth
-# Or download via GitHub Releases page
-```
-
-### Method 3: AWS S3 (Production)
-```bash
-aws s3 cp s3://flood-depth-models/v1/best_flood_model.pth models/
-```
-
-## Best Practices
-
-1. ✅ Always use Git LFS for >10 MB files
-2. ✅ Commit `.gitattributes` with LFS configuration
-3. ✅ Keep production model updated with latest version
-4. ✅ Version models: `best_flood_model_v1.pth`, `v2.pth`, etc.
-5. ✅ Document model training date and dataset version
-6. ✅ Monitor Git LFS bandwidth usage (GitHub dashboard)
+> GitHub free tier: 1 GB/month LFS bandwidth (~23 full clones/month).
 
 ## Troubleshooting
 
-### Model Not Downloaded After Clone
 ```bash
-git lfs pull  # Manually pull LFS objects
-git lfs fsck  # Verify integrity
-```
-
-### File Shows as Pointer Instead of Model
-```bash
-git lfs install  # Reinstall Git LFS
-git lfs pull     # Pull actual file
-```
-
-### Upload Large Model
-```bash
-git lfs track models/best_flood_model.pth
-git add models/best_flood_model.pth .gitattributes
-git commit -m "Update: pre-trained model"
-git push origin main
+git lfs install   # reinstall LFS hooks
+git lfs pull      # force-download model
+git lfs fsck      # verify integrity
 ```
 
