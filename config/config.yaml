@@ -130,7 +130,7 @@ inference:
     provider: "google"
     model: "gemini-flash-latest"
     endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
-    google_api_key: "REDACTED"
+    google_api_key: ""
     temperature: 0.0
     max_output_tokens: 256
     apply_corrections: false
