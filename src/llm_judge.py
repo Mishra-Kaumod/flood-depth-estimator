@@ -76,9 +76,7 @@ class LLMJudge:
                         }
                     ]
                 }
-            ],
-            "temperature": self.temperature,
-            "maxOutputTokens": self.max_output_tokens,
+            ]
         }
 
     def _build_prompt(self, prediction: Dict[str, Any]) -> str:
@@ -89,18 +87,29 @@ class LLMJudge:
             f"Confidence %: {prediction.get('confidence_pct', 'unknown')}",
             f"Water coverage %: {prediction.get('water_coverage_pct', 'unknown')}",
             f"Reference depth cm: {prediction.get('reference_depth_cm', 'unknown')}",
+            f"Reference count: {prediction.get('reference_count', 'unknown')}",
+            f"Largest water region %: {prediction.get('largest_water_region_pct', 'unknown')}",
+            f"Dense depth p90: {prediction.get('dense_depth_p90', 'unknown')}",
+            f"Dense depth p95: {prediction.get('dense_depth_p95', 'unknown')}",
+            f"Region depth cm: {prediction.get('region_depth_cm', 'unknown')}",
             f"Waterline pct: {prediction.get('waterline_pct', 'unknown')}",
         ]
         prompt_text = (
             "You are a flood inference validation assistant. "
-            "Review the following flood prediction result from a computer vision pipeline and compare the prediction against the available scene evidence. "
-            "The evidence includes water coverage, reference depth, region-based depth estimates, and any supporting scene features. "
-            "Decide whether the predicted depth and severity are plausible and whether a correction is needed. "
-            "Return ONLY a single JSON object with the exact keys: prediction_correct, recommended_depth_cm, recommended_severity, reason. "
+            "You do NOT see the original image. You only receive structured pipeline evidence from the computer vision model. "
+            "Review the predicted flood depth and severity and compare them to the available scene evidence provided below. "
+            "The evidence includes water coverage, reference-depth statistics, region-based depth estimates, and visual cues extracted by the pipeline. "
+            "If the evidence clearly shows visible water, do not label the prediction as a false positive simply because the predicted depth is high. "
+            "If the evidence shows no visible water, explain that clearly. "
+            "If the evidence supports visible waterlogging but not a flood event, you may set recommended_severity and final_severity to \"WATERLOGGED\" or \"NO_FLOOD\" and explain that clearly. "
+            "Return ONLY a single JSON object with the exact keys: prediction_correct, recommended_depth_cm, recommended_severity, final_depth_cm, final_severity, evidence_summary, reason. "
             "Use double quotes and do not include any explanation outside the JSON object. "
-            "If you are uncertain, set prediction_correct to true and keep recommended_depth_cm equal to the predicted value.\n\n"
+            "Always provide final_depth_cm and final_severity as the final recommendation. "
+            "If you are uncertain, set prediction_correct to true and keep recommended_depth_cm and final_depth_cm equal to the predicted value.\n\n"
             "Prediction details:\n"
             + "\n".join(fields)
+            + "\n\nVisual cues:\n"
+            + "\n".join(str(cue) for cue in prediction.get("visual_cues", []))
             + "\n\nRespond only with valid JSON."
         )
         return prompt_text
@@ -142,9 +151,9 @@ class LLMJudge:
                     if result:
                         return result
 
-            if set(parsed_payload.keys()) >= {"prediction_correct", "recommended_depth_cm", "recommended_severity", "reason"}:
+            if set(parsed_payload.keys()) >= {"prediction_correct", "recommended_depth_cm", "recommended_severity", "final_depth_cm", "final_severity", "reason"}:
                 return parsed_payload
-            if set(parsed_payload.keys()) >= {"plausible", "recommended_depth_cm", "recommended_severity", "reason"}:
+            if set(parsed_payload.keys()) >= {"plausible", "recommended_depth_cm", "recommended_severity", "final_depth_cm", "final_severity", "reason"}:
                 return parsed_payload
 
             for key in ("outputText", "text", "content"):
@@ -163,12 +172,25 @@ class LLMJudge:
         if isinstance(contents, str):
             return contents
         if isinstance(contents, dict):
-            return self._extract_text_from_output(contents.get("output")) or self._extract_text_from_output(contents.get("text"))
+            return (
+                self._extract_text_from_output(contents.get("output"))
+                or self._extract_text_from_output(contents.get("text"))
+                or self._extract_text_from_output(contents.get("content"))
+                or self._extract_text_from_output(contents.get("parts"))
+            )
         if isinstance(contents, list):
             parts = []
             for item in contents:
                 if isinstance(item, dict):
-                    parts.append(self._extract_text_from_output(item.get("content") or item.get("text") or item.get("output")) or "")
+                    parts.append(
+                        self._extract_text_from_output(
+                            item.get("content")
+                            or item.get("text")
+                            or item.get("output")
+                            or item.get("parts")
+                        )
+                        or ""
+                    )
                 elif isinstance(item, str):
                     parts.append(item)
             return "".join(parts)
@@ -184,6 +206,8 @@ class LLMJudge:
             "plausible": None,
             "recommended_depth_cm": None,
             "recommended_severity": None,
+            "final_depth_cm": None,
+            "final_severity": None,
             "reason": None,
         }
 
@@ -203,8 +227,16 @@ class LLMJudge:
                     result["recommended_depth_cm"] = float(value)
                 except ValueError:
                     pass
+            elif "final_depth" in lower_line and ":" in line:
+                value = line.split(":", 1)[1].strip().rstrip(".,")
+                try:
+                    result["final_depth_cm"] = float(value)
+                except ValueError:
+                    pass
             elif "recommended_severity" in lower_line and ":" in line:
                 result["recommended_severity"] = line.split(":", 1)[1].strip().strip('"')
+            elif "final_severity" in lower_line and ":" in line:
+                result["final_severity"] = line.split(":", 1)[1].strip().strip('"')
             elif result["reason"] is None:
                 if "reason" in lower_line and ":" in line:
                     result["reason"] = line.split(":", 1)[1].strip().strip('"')
@@ -230,7 +262,12 @@ class LLMJudge:
             text = text[start : end + 1]
         try:
             parsed = json.loads(text)
-            if set(parsed.keys()) >= {"plausible", "recommended_depth_cm", "recommended_severity", "reason"}:
+            if (
+                "recommended_depth_cm" in parsed
+                and "recommended_severity" in parsed
+                and "reason" in parsed
+                and ("prediction_correct" in parsed or "plausible" in parsed)
+            ):
                 return parsed
         except json.JSONDecodeError:
             return None

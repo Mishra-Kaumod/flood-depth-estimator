@@ -40,9 +40,19 @@ class ReferenceObject:
     water_submersion_ratio: float
 
 
-def _depth_to_severity(depth_cm: float) -> Dict[str, Any]:
+def _depth_to_severity(depth_cm: float, features: Dict[str, float]) -> Dict[str, Any]:
+    coverage = features.get("water_coverage_pct", 0.0) / 100.0
+    max_reference_submersion = features.get("max_reference_submersion", 0.0)
+
     if depth_cm < 5:
         return {"level": "SAFE", "label": "No significant flooding", "color": "#16a34a", "stage": 1}
+    if depth_cm < 20 and coverage < 0.35 and max_reference_submersion < 0.5:
+        return {
+            "level": "WATERLOGGED",
+            "label": "Localized waterlogging / no flood",
+            "color": "#f59e0b",
+            "stage": 2,
+        }
     if depth_cm < 20:
         return {"level": "LOW", "label": "Minor flooding", "color": "#ca8a04", "stage": 2}
     if depth_cm < 50:
@@ -395,6 +405,15 @@ class SegformerYoloDepthV2Pipeline:
         }
         return features
 
+    def _is_waterlogged(self, depth_cm: float, coverage: float, max_reference_submersion: float) -> bool:
+        return (
+            depth_cm < 20.0
+            and coverage < 0.35
+            and max_reference_submersion < 0.5
+        ) or (
+            depth_cm < 12.0 and coverage < 0.45
+        )
+
     def _calibration_severity_model(self, features: Dict[str, float]) -> Tuple[float, float, str]:
         coverage = features["water_coverage_pct"] / 100.0
         dense_depth_cm = features["dense_depth_p90"] * 120.0
@@ -403,11 +422,20 @@ class SegformerYoloDepthV2Pipeline:
         largest_region_pct = features.get("largest_water_region_pct", 0.0) / 100.0
         waterline_pct = features.get("waterline_pct", 0.0) / 100.0
         region_depth_cm = features.get("region_depth_cm", 0.0)
+        max_reference_submersion = features.get("max_reference_submersion", 0.0)
 
         if coverage < 0.02:
             depth_cm = 0.0
         elif reference_count > 0 and reference_depth_cm > 0:
             depth_cm = (0.65 * reference_depth_cm) + (0.35 * dense_depth_cm)
+            if max_reference_submersion < 0.80 and coverage < 0.70:
+                depth_cm = min(depth_cm, 80.0)
+            if max_reference_submersion < 0.70 and coverage < 0.65:
+                depth_cm = min(depth_cm, 65.0)
+            if max_reference_submersion < 0.60 and coverage < 0.55:
+                depth_cm = min(depth_cm, 50.0)
+            if max_reference_submersion < 0.50 and coverage < 0.50:
+                depth_cm = min(depth_cm, 40.0)
         elif region_depth_cm > 0:
             depth_cm = max(region_depth_cm, min(dense_depth_cm * 0.8, 40.0))
         else:
@@ -425,7 +453,9 @@ class SegformerYoloDepthV2Pipeline:
         depth_cm = float(np.clip(depth_cm, 0.0, 180.0))
         confidence = float(np.clip(0.35 + (coverage * 0.35) + (min(reference_count, 1.0) * 0.30), 0.2, 0.98))
 
-        if depth_cm >= 100.0:
+        if self._is_waterlogged(depth_cm, coverage, max_reference_submersion):
+            action = "Monitor"
+        elif depth_cm >= 100.0:
             action = "Deploy Emergency Diversion"
         elif depth_cm >= 60.0:
             action = "Activate Traffic Management"
@@ -495,7 +525,7 @@ class SegformerYoloDepthV2Pipeline:
         )
 
         depth_cm, confidence, action = self._calibration_severity_model(features)
-        severity = _depth_to_severity(depth_cm)
+        severity = _depth_to_severity(depth_cm, features)
         trace.append(
             {
                 "stage": "Calibration/Severity Model",

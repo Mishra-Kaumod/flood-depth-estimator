@@ -131,6 +131,29 @@ class UnifiedEventProcessor:
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         metadata: dict[str, Any] = {"schema_version": event.schema_version}
 
+        # Use the simple no-water gate only for the fallback single-frame model.
+        # The fusion pipeline already has more robust partial-water detection.
+        if self.pipeline_mode != "segformer_yolov8_depthv2_fusion" and not _has_significant_water(image):
+            band = self.classifier.classify(0.0)
+            return FloodResultEvent(
+                event_id=event.event_id,
+                trace_id=event.trace_id,
+                source=event.source,
+                timestamp=event.timestamp,
+                camera_id=event.camera_id,
+                latitude=event.latitude,
+                longitude=event.longitude,
+                estimated_depth_meters=0.0,
+                confidence_score=0.99,
+                color_code=band.hex_color,
+                action_trigger="NO_FLOOD_DETECTED",
+                severity=band.severity,
+                severity_label=band.label,
+                method="water_gate_rejected",
+                window_frame_count=1,
+                metadata=metadata,
+            )
+
         if self.pipeline_mode == "segformer_yolov8_depthv2_fusion":
             staged = self.segformer_yolo_depth_pipeline.predict(np.array(image))
             depth_cm = float(staged["depth_cm"])
@@ -141,26 +164,6 @@ class UnifiedEventProcessor:
             metadata["structured_features"] = staged.get("structured_features", {})
             metadata["visual_cues"] = staged.get("visual_cues", [])
         else:
-            if not _has_significant_water(image):
-                band = self.classifier.classify(0.0)
-                return FloodResultEvent(
-                    event_id=event.event_id,
-                    trace_id=event.trace_id,
-                    source=event.source,
-                    timestamp=event.timestamp,
-                    camera_id=event.camera_id,
-                    latitude=event.latitude,
-                    longitude=event.longitude,
-                    estimated_depth_meters=0.0,
-                    confidence_score=0.99,
-                    color_code=band.hex_color,
-                    action_trigger="NO_FLOOD_DETECTED",
-                    severity=band.severity,
-                    severity_label=band.label,
-                    method="water_gate_rejected",
-                    window_frame_count=1,
-                    metadata=metadata,
-                )
             assert self.transform is not None
             tensor = self.transform(image).unsqueeze(0).to(self.device)
             depth_cm, confidence = self._predict_depth_and_confidence(tensor)

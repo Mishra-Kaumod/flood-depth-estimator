@@ -73,41 +73,71 @@ class FloodApiService:
         result_payload["visual_cues"] = result.metadata.get("visual_cues", [])
 
         llm_judge_result = None
-        if self.llm_judge is not None and self.llm_judge.enabled:
-            structured = result_payload.get("structured_features", {}) or {}
-            prediction = {
-                "depth_cm": depth_cm,
-                "severity_label": result.severity_label,
-                "action_trigger": result.action_trigger,
-                "confidence_pct": confidence_pct,
-                "water_coverage_pct": structured.get("water_coverage_pct"),
-                "reference_depth_cm": structured.get("reference_depth_cm"),
-                "largest_water_region_pct": structured.get("largest_water_region_pct"),
-                "largest_water_region_aspect": structured.get("largest_water_region_aspect"),
-                "waterline_pct": structured.get("waterline_pct"),
-                "region_depth_cm": structured.get("region_depth_cm"),
-                "dense_depth_mean": structured.get("dense_depth_mean"),
-                "dense_depth_p90": structured.get("dense_depth_p90"),
-                "dense_depth_p95": structured.get("dense_depth_p95"),
-                "label_guide": result_payload.get("label_guide"),
-            }
-            try:
-                llm_judge_result = self.llm_judge.judge(prediction)
-                result_payload["llm_judge"] = llm_judge_result
-                if llm_judge_result.get("raw_response"):
-                    result_payload["llm_judge_raw_response"] = llm_judge_result["raw_response"]
-            except Exception as exc:
-                result_payload["llm_judge_error"] = str(exc)
+        if self.llm_judge is not None:
+            result_payload["llm_judge_enabled"] = bool(self.llm_judge.enabled)
+            if self.llm_judge.enabled:
+                structured = result_payload.get("structured_features", {}) or {}
+                prediction = {
+                    "depth_cm": depth_cm,
+                    "severity_label": result.severity_label,
+                    "action_trigger": result.action_trigger,
+                    "confidence_pct": confidence_pct,
+                    "water_coverage_pct": structured.get("water_coverage_pct"),
+                    "reference_depth_cm": structured.get("reference_depth_cm"),
+                    "reference_count": structured.get("reference_count"),
+                    "largest_water_region_pct": structured.get("largest_water_region_pct"),
+                    "largest_water_region_aspect": structured.get("largest_water_region_aspect"),
+                    "waterline_pct": structured.get("waterline_pct"),
+                    "region_depth_cm": structured.get("region_depth_cm"),
+                    "dense_depth_mean": structured.get("dense_depth_mean"),
+                    "dense_depth_p90": structured.get("dense_depth_p90"),
+                    "dense_depth_p95": structured.get("dense_depth_p95"),
+                    "visual_cues": result_payload.get("visual_cues", []),
+                    "label_guide": result_payload.get("label_guide"),
+                }
+                try:
+                    llm_judge_result = self.llm_judge.judge(prediction)
+                    result_payload["llm_judge"] = llm_judge_result
+                    if llm_judge_result.get("raw_response"):
+                        result_payload["llm_judge_raw_response"] = llm_judge_result["raw_response"]
+                except Exception as exc:
+                    result_payload["llm_judge_error"] = str(exc)
 
-            if llm_judge_result and llm_judge_result.get("prediction_correct") is False and self.llm_judge.apply_corrections:
-                corrected_depth = float(llm_judge_result.get("recommended_depth_cm", depth_cm))
-                depth_cm = corrected_depth
-                result_payload["corrected_depth_cm"] = corrected_depth
-                result_payload["corrected_severity_label"] = llm_judge_result.get("recommended_severity", result.severity_label)
-                result_payload["llm_judge_applied"] = True
+                if llm_judge_result and llm_judge_result.get("prediction_correct") is False and self.llm_judge.apply_corrections:
+                    corrected_depth = float(
+                        llm_judge_result.get(
+                            "final_depth_cm",
+                            llm_judge_result.get("recommended_depth_cm", depth_cm),
+                        )
+                    )
+                    depth_cm = corrected_depth
+                    result_payload["corrected_depth_cm"] = corrected_depth
+                    result_payload["corrected_severity_label"] = llm_judge_result.get(
+                        "final_severity",
+                        llm_judge_result.get("recommended_severity", result.severity_label),
+                    )
+                    result_payload["llm_judge_applied"] = True
 
-        if llm_judge_result is not None:
-            result_payload["llm_judge_result"] = llm_judge_result
+            else:
+                result_payload["llm_judge_error"] = "LLM judge disabled in config"
+
+            if llm_judge_result is not None:
+                result_payload["llm_judge_result"] = llm_judge_result
+                result_payload["llm_judge_final_depth_cm"] = float(
+                    llm_judge_result.get(
+                        "final_depth_cm",
+                        depth_cm if llm_judge_result.get("prediction_correct") else llm_judge_result.get("recommended_depth_cm", depth_cm),
+                    )
+                )
+                result_payload["llm_judge_final_severity"] = llm_judge_result.get(
+                    "final_severity",
+                    result.severity_label if llm_judge_result.get("prediction_correct") else llm_judge_result.get("recommended_severity", result.severity_label),
+                )
+                result_payload["llm_judge_decision_source"] = (
+                    "pipeline" if llm_judge_result.get("prediction_correct") else "judge"
+                )
+        else:
+            result_payload["llm_judge_error"] = "LLM judge unavailable; no validator instance was created"
 
         telemetry = self.repository.save_telemetry(
             TelemetryRecord(
