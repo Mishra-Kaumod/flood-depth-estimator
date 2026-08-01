@@ -138,7 +138,29 @@ python main.py object images/sample.jpg objects_output.jpg --storage=aws
 - `output_frames/frame_*.jpg` - Annotated frames (every 5 frames)
 - `output_frames/output_video.mp4` - Annotated video
 - `objects_detected.jpg` - Image with object bounding boxes
+### 4. Train / Fine-tune the model
 
+The repository contains a water-aware training script that focuses model learning on flooded regions, including partially flooded roads.
+
+```bash
+# Activate your Python environment first
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+
+# Train locally using the project config
+python src/train_water_aware.py --config config/config.yaml
+```
+
+By default the training config expects dataset folders under:
+- `flood_dataset/train`
+- `flood_dataset/val`
+- `flood_dataset/test`
+
+If you have image labels in a CSV manifest, keep the file at `labels.csv` and configure the dataset source in `config/config.yaml`.
+
+After training, the best model will be saved to:
+- `models/best_flood_model_water_aware.pth`
 ## System Architecture
 
 ### Pipeline Flow
@@ -258,6 +280,52 @@ severity_class, severity_name, severity_confidence, depth_band, depth_cm
 ### "ModuleNotFoundError: No module named 'torch'"
 ```bash
 pip install -r requirements.txt
+```
+
+## End-to-End Testing
+
+### 1. Activate the virtual environment
+```bash
+cd c:\Users\abhij\OneDrive\Desktop\WellLabs\flood_project_cleaned
+.\.venv\Scripts\Activate.ps1
+```
+
+### 2. Install dependencies
+```bash
+pip install -r requirements.txt
+pip install pytest
+```
+
+### 3. Run the Flask web app
+```bash
+python web_app.py
+```
+Open `http://127.0.0.1:5000/` in your browser and upload an image.
+
+### 4. Test the CLI pipeline
+```bash
+python main.py image test_images/sample.jpg --storage local
+```
+
+### 5. Test the API endpoint
+```bash
+curl -X POST http://127.0.0.1:5000/api/v1/estimate -F image=@test_images/sample.jpg
+```
+
+### 6. Run unit tests
+```bash
+python -m pytest test_imports.py test_web_module.py
+```
+
+## Legacy Archive
+
+The old CLI and legacy modules are now isolated in `archive/legacy_cli` and `archive/legacy_main.py`.
+Use these only when you need the original legacy behavior, not the new AWS-first pipeline.
+
+```bash
+python archive/legacy_main.py image test_images/sample.jpg --storage local
+```
+
 ```
 
 ### "Model file not found"

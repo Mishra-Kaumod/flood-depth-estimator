@@ -1,409 +1,334 @@
 """
-FLOOD DETECTION & DEPTH ESTIMATION SYSTEM
-Main Entry Point
+AWS-first CLI entrypoint for the flood depth estimator.
 
-This system provides four main capabilities:
-1. Detect water presence in images (WaterDetectionAnalyzer)
-2. Classify flood severity in images (SeverityPredictor)
-3. Process video frames for continuous monitoring (VideoFloodAnalyzer)
-4. Detect objects (vehicles, people) for anchor-based depth estimation (ObjectDetector)
-
-Storage options:
-- Local (DEFAULT): Read/write from local folders
-- AWS S3: Read/write from S3 bucket
+This file runs the new AWS/event-driven pipeline by default.
+The legacy CLI implementation is preserved in legacy_main.py.
 """
 
-import sys
-from unittest import result
-import cv2
-from pathlib import Path
-import tempfile
+import argparse
 import os
+import tempfile
+from pathlib import Path
+from typing import Any
 
-# Add modules to path
-sys.path.insert(0, str(Path(__file__).parent / "modules"))
+import cv2
+import numpy as np
+import pandas as pd
 
-from modules.flood_analyzer import FloodAnalyzer
-from modules.process_video import VideoFloodAnalyzer
-from modules.object_detection import ObjectDetector
-
-
-def get_storage_mode(args):
-    """
-    Extract storage mode from command line args.
-    
-    Args:
-        args: Command line arguments list
-        
-    Returns:
-        str: "local" or "aws" (default: "local")
-    """
-    for arg in args:
-        if arg.startswith("--storage="):
-            mode = arg.split("=")[1].lower()
-            if mode in ["local", "aws"]:
-                return mode
-    return "local"
+from src.api_service import FloodApiService
 
 
-def get_s3_handler(storage_mode, bucket_name=None):
-    """
-    Get S3 handler if storage mode is AWS.
-    
-    Args:
-        storage_mode: "local" or "aws"
-        bucket_name: S3 bucket name (optional)
-        
-    Returns:
-        S3Handler or None
-    """
+def get_s3_handler(bucket_name: str | None = None):
+    """Return the S3 handler for AWS storage."""
+    try:
+        from archive.legacy_cli.modules.s3_handler import S3Handler
+        return S3Handler(bucket_name=bucket_name)
+    except ImportError:
+        raise RuntimeError("boto3 is required for AWS mode. Install with: pip install boto3")
+
+
+def read_local_bytes(path: str) -> bytes:
+    return Path(path).read_bytes()
+
+
+def read_s3_bytes(s3_handler: Any, s3_key: str) -> bytes:
+    response = s3_handler.s3_client.get_object(Bucket=s3_handler.bucket_name, Key=s3_key)
+    return response["Body"].read()
+
+
+def summarize_event_result(result: dict[str, Any], image_name: str | None = None) -> None:
+    payload = result.get("result", {})
+    metadata = payload.get("metadata", {}) or {}
+    structured = metadata.get("structured_features", {}) or {}
+    trace = metadata.get("pipeline_trace", []) or []
+
+    depth_cm = float(payload.get("estimated_depth_meters", 0.0) * 100.0)
+    confidence_pct = float(payload.get("confidence_score", 0.0) * 100.0)
+    severity = payload.get("severity_label", "Unknown")
+    action = payload.get("action_trigger", "Unknown")
+    water_present = depth_cm > 0.0
+    water_coverage = structured.get("water_coverage_pct")
+    reference_count = int(structured.get("reference_count", 0))
+    reference_depth = structured.get("reference_depth_cm")
+
+    print("\n" + "=" * 60)
+    print("INFERENCE RESULT")
+    print(f"Camera: {payload.get('camera_id', 'unknown')}")
+    print(f"Image: {image_name or '<unknown>'}")
+    print(f"Water detected: {'Yes' if water_present else 'No'}")
+    print(f"Estimated flood depth: {depth_cm:.2f} cm")
+    print(f"Flood severity: {severity}")
+    print(f"Recommended action: {action}")
+    print(f"Confidence: {confidence_pct:.2f}%")
+    if water_coverage is not None:
+        print(f"Water coverage: {water_coverage:.2f}%")
+    if reference_count is not None:
+        print(f"Reference objects found: {reference_count}")
+    if reference_depth is not None and reference_depth > 0:
+        print(f"Reference-based depth: {reference_depth:.2f} cm")
+
+    if trace:
+        print("\nPipeline summary:")
+        for step in trace:
+            stage = step.get("stage", "unknown")
+            summary = step.get("summary", "")
+            print(f" - {stage}: {summary}")
+
+    reference_objects = payload.get("detected_reference_objects") or []
+    visual_cues = payload.get("visual_cues") or []
+    if reference_objects:
+        print("\nReference objects detected:")
+        print("  " + ", ".join(reference_objects))
+    if visual_cues:
+        print("\nVisual evidence cues:")
+        for cue in visual_cues:
+            print(f"  - {cue}")
+
+    llm_judge = payload.get("llm_judge") or payload.get("llm_judge_result") or metadata.get("llm_judge_result")
+    if llm_judge:
+        print("\nLLM Judge:")
+        print(f"  Prediction correct: {llm_judge.get('prediction_correct', llm_judge.get('plausible'))}")
+        print(f"  Recommended depth: {llm_judge.get('recommended_depth_cm')}")
+        print(f"  Recommended severity: {llm_judge.get('recommended_severity')}")
+        print(f"  Reason: {llm_judge.get('reason')}")
+        if llm_judge.get("parse_failed"):
+            print("  Raw response:")
+            print(f"    {llm_judge.get('raw_response')}")
+
+    print("\nStatus:", result.get("status", "unknown"))
+    print("=" * 60 + "\n")
+
+
+def process_image_cli(
+    image_path: str,
+    storage_mode: str,
+    camera_id: str,
+    latitude: float,
+    longitude: float,
+    location_name: str | None,
+    bucket_name: str | None,
+) -> None:
+    """Analyze a single image through the unified AWS-style pipeline."""
     if storage_mode == "aws":
-        try:
-            from modules.s3_handler import S3Handler
-            return S3Handler(bucket_name=bucket_name)
-        except ImportError:
-            print("Error: boto3 not installed. Install with: pip install boto3")
-            sys.exit(1)
-        except Exception as e:
-            print(f"Error initializing S3: {e}")
-            sys.exit(1)
-    return None
+        s3_handler = get_s3_handler(bucket_name=bucket_name)
+        image_bytes = read_s3_bytes(s3_handler, image_path)
+    else:
+        image_bytes = read_local_bytes(image_path)
+
+    service = FloodApiService()
+    response = service.process_camera_upload(
+        image_bytes=image_bytes,
+        filename=Path(image_path).name,
+        camera_id=camera_id,
+        latitude=latitude,
+        longitude=longitude,
+        location_name=location_name,
+        metadata={"source": "cli"},
+    )
+
+    summarize_event_result(response, image_name=Path(image_path).name)
 
 
-def process_single_image(image_path, model_path="severity_model.pth", storage_mode="local", s3_handler=None):
-    """
-    Analyze a single image for flood severity.
-    
-    Args:
-        image_path: Path to image file (local path or S3 key)
-        model_path: Path to trained model
-        storage_mode: "local" or "aws"
-        s3_handler: S3Handler instance (required if storage_mode is "aws")
-    """
-    print("\n" + "="*60)
-    print("SINGLE IMAGE ANALYSIS")
-    print(f"Storage Mode: {storage_mode.upper()}")
-    print("="*60)
-    
-    # Load the image as BGR for the shared still-image/video-frame pipeline.
+def process_video_cli(
+    video_path: str,
+    output_csv: str,
+    skip_frames: int,
+    storage_mode: str,
+    camera_id: str,
+    latitude: float,
+    longitude: float,
+    location_name: str | None,
+    bucket_name: str | None,
+) -> None:
+    """Process video frames through the unified AWS-style pipeline."""
+    local_video_path = video_path
+    s3_handler = None
+    temp_file = None
+
     if storage_mode == "aws":
-        if s3_handler is None:
-            print("Error: S3 handler not initialized")
-            return
-        
+        s3_handler = get_s3_handler(bucket_name=bucket_name)
+        temp_file = os.path.join(tempfile.gettempdir(), f"aws_video_{Path(video_path).stem}.mp4")
+        local_video_path = s3_handler.read_video_from_s3(video_path, temp_file)
+
+    cap = cv2.VideoCapture(str(local_video_path))
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open video {local_video_path}")
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    print(f"Processing video: {local_video_path} ({frame_count} frames, {fps:.2f} FPS)")
+
+    service = FloodApiService()
+    records: list[dict[str, Any]] = []
+    frame_index = 0
+    processed = 0
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        if frame_index % skip_frames != 0:
+            frame_index += 1
+            continue
+
+        processed += 1
+        success, encoded = cv2.imencode(".jpg", frame)
+        if not success:
+            frame_index += 1
+            continue
+
+        image_bytes = encoded.tobytes()
+        filename = f"{Path(video_path).stem}_frame_{frame_index:06d}.jpg"
+        response = service.process_camera_upload(
+            image_bytes=image_bytes,
+            filename=filename,
+            camera_id=camera_id,
+            latitude=latitude,
+            longitude=longitude,
+            location_name=location_name,
+            metadata={"source": "cli_video", "frame_number": frame_index},
+        )
+
+        result = response["result"]
+        records.append(
+            {
+                "frame_number": frame_index,
+                "image_name": filename,
+                "depth_cm": round(result["estimated_depth_meters"] * 100.0, 2),
+                "confidence": round(result["confidence_score"] * 100.0, 2),
+                "severity": result["severity_label"],
+                "action": result["action_trigger"],
+                "status": response["status"],
+            }
+        )
+
+        if processed % 10 == 0:
+            print(f"Processed {processed} frames...")
+
+        frame_index += 1
+
+    cap.release()
+
+    df = pd.DataFrame(records)
+    df.to_csv(output_csv, index=False)
+    print(f"Saved video analytics to {output_csv}")
+
+    if storage_mode == "aws" and s3_handler is not None:
+        s3_handler.write_csv_to_s3(df, output_csv)
+
+    if temp_file and os.path.exists(temp_file):
         try:
-            image = s3_handler.read_image_from_s3(image_path)
-        except Exception as e:
-            print(f"Error reading image from S3: {e}")
-            return
+            os.remove(temp_file)
+        except OSError:
+            pass
+
+
+def process_object_detection(
+    image_path: str,
+    output_image: str,
+    storage_mode: str,
+    bucket_name: str | None,
+) -> None:
+    """Run object detection on an image. This remains a helper command."""
+    from archive.legacy_cli.modules.object_detection import ObjectDetector
+
+    if storage_mode == "aws":
+        s3_handler = get_s3_handler(bucket_name=bucket_name)
+        image_bytes = read_s3_bytes(s3_handler, image_path)
+        image = cv2.imdecode(np.frombuffer(image_bytes, dtype="uint8"), cv2.IMREAD_COLOR)
     else:
         image = cv2.imread(image_path)
-        if image is None:
-            print(f"Error: Cannot read image from {image_path}")
-            return
 
-    result = FloodAnalyzer(model_path=model_path).analyze_bgr(image, image_path)
-    
-    if "error" in result:
-        print(f"Error: {result['error']}")
+    if image is None:
+        raise RuntimeError(f"Cannot read image from {image_path}")
 
-    print(f"Image: {result['image_path']}")
+    detector = ObjectDetector()
+    detections = detector.detect_objects(image)
+    annotated = detector.draw_detections(image, detections)
 
-    if not result['water_detected']:
-        print("Result: No water_detected")
-    elif "error" not in result:
-        print("water_detected: Yes")
-        print(f"Water  Level: {result['final_flood_level']}")
-        print(f"Estimated Depth: {result['depth_cm']} cm")
-        print("\nDEBUG")
-        print("Water %:", result["water_percentage"])
-        print("Water Confidence:", result["water_confidence"])
-        print("\nDepth Details:")
-        print(result.get("depth_details", {}))
-        print("\nMethod Votes:")
-        print(result["method_votes"])
-        
-    
-    print("="*60 + "\n")
-
-
-def process_video_file(video_path, output_csv="video_analysis.csv", 
-                       skip_frames=1, model_path="severity_model.pth",
-                       storage_mode="local", s3_handler=None):
-    """
-    Process a video file frame by frame.
-    
-    Args:
-        video_path: Path to video file (local path or S3 key)
-        output_csv: Output CSV filename
-        skip_frames: Process every Nth frame
-        model_path: Path to trained model
-        storage_mode: "local" or "aws"
-        s3_handler: S3Handler instance (required if storage_mode is "aws")
-    """
-    print("\n" + "="*60)
-    print("VIDEO PROCESSING")
-    print(f"Storage Mode: {storage_mode.upper()}")
-    print("="*60)
-    
-    # Download video if using S3
-    local_video_path = video_path
     if storage_mode == "aws":
-        if s3_handler is None:
-            print("Error: S3 handler not initialized")
-            return
-        
-        try:
-            temp_dir = tempfile.gettempdir()
-            temp_video_path = os.path.join(temp_dir, "temp_video.mp4")
-            local_video_path = s3_handler.read_video_from_s3(video_path, temp_video_path)
-        except Exception as e:
-            print(f"Error downloading video from S3: {e}")
-            return
-    
-    try:
-        analyzer = VideoFloodAnalyzer(model_path=model_path)
-        df = analyzer.process_video(
-            local_video_path,
-            output_csv=output_csv if storage_mode == "local" else "temp_video_analysis.csv",
-            skip_frames=skip_frames,
-            save_frames_dir="output_frames"
-        )
-        
-        if df is not None:
-            print("\nSummary Statistics:")
-            print(f"  Total frames processed: {len(df)}")
-            print(f"  Frames with water detected: {df['water_detected'].sum()}")
-            print(f"  Average water percentage: {df['water_percentage'].mean():.2f}%")
-            
-            severity_counts = df['severity_name'].value_counts()
-            if len(severity_counts) > 0:
-                print(f"  Severity distribution:")
-                for severity, count in severity_counts.items():
-                    print(f"    {severity}: {count} frames")
-            
-            # Upload results to S3 if needed
-            if storage_mode == "aws":
-                try:
-                    s3_handler.write_csv_to_s3(df, output_csv)
-                    os.remove("temp_video_analysis.csv")
-                except Exception as e:
-                    print(f"Warning: Could not upload CSV to S3: {e}")
-            
-            print(f"\n  CSV Results saved to: {output_csv}")
-    
-    finally:
-        # Clean up temporary video file
-        if storage_mode == "aws" and local_video_path != video_path:
-            try:
-                s3_handler.cleanup_temp_file(local_video_path)
-            except Exception as e:
-                print(f"Warning: Could not clean up temp file: {e}")
-
-
-def process_object_detection(image_path, output_image="objects_detected.jpg", 
-                             storage_mode="local", s3_handler=None):
-    """
-    Detect and visualize objects in an image using YOLO.
-    
-    Args:
-        image_path: Path to image file (local path or S3 key)
-        output_image: Path to save annotated image
-        storage_mode: "local" or "aws"
-        s3_handler: S3Handler instance (required if storage_mode is "aws")
-    """
-    print("\n" + "="*60)
-    print("OBJECT DETECTION")
-    print(f"Storage Mode: {storage_mode.upper()}")
-    print("="*60)
-    
-    try:
-        detector = ObjectDetector()
-        
-        # Load image based on storage mode
-        if storage_mode == "aws":
-            if s3_handler is None:
-                print("Error: S3 handler not initialized")
-                return
-            
-            try:
-                image = s3_handler.read_image_from_s3(image_path)
-            except Exception as e:
-                print(f"Error reading image from S3: {e}")
-                return
-        else:
-            # Read local image
-            image = cv2.imread(image_path)
-            if image is None:
-                print(f"Error: Cannot read image from {image_path}")
-                return
-        
-        print(f"Image: {image_path}")
-        print(f"Resolution: {image.shape[1]}x{image.shape[0]}")
-        
-        # Detect objects
-        detections = detector.detect_objects(image)
-        
-        if detections:
-            print(f"\nDetected {len(detections)} objects:")
-            for i, det in enumerate(detections, 1):
-                print(f"  {i}. {det['class']}: {det['confidence']:.2%} confidence")
-            
-            # Get inventory
-            inventory = detector.create_object_inventory(detections)
-            print(f"\nObject Inventory:")
-            for class_name, data in inventory['object_types'].items():
-                count = data['count']
-                avg_conf = data['avg_confidence']
-                print(f"  {class_name}: {count} ({avg_conf:.2%} avg confidence)")
-            
-            # Get largest object and estimate depth
-            largest = detector.get_largest_object(detections)
-            if largest:
-                depth_result = detector.estimate_depth_from_object(
-                    largest, image.shape[0]
-                )
-                if depth_result['depth_cm'] is not None:
-                    print(f"\nLargest Object Depth Estimate:")
-                    print(f"  Object: {largest['class']}")
-                    print(f"  Estimated Depth: {depth_result['depth_cm']} cm")
-                    print(f"  Reference: {depth_result['method']}")
-        else:
-            print("\nNo objects detected in image")
-        
-        # Draw and save/upload annotated image
-        annotated = detector.draw_detections(image, detections)
-        
-        if storage_mode == "aws":
-            try:
-                s3_handler.write_image_to_s3(annotated, output_image)
-            except Exception as e:
-                print(f"Error uploading annotated image to S3: {e}")
-        else:
-            cv2.imwrite(output_image, annotated)
-            print(f"\nAnnotated image saved to: {output_image}")
-        
-    except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
-
-
-
-def main():
-    """
-    Main entry point with command-line interface.
-    """
-    if len(sys.argv) < 2:
-        print("""
-╔════════════════════════════════════════════════════════════╗
-║   FLOOD DETECTION & DEPTH ESTIMATION SYSTEM v2.1          ║
-║   With YOLO & S3 Support                                  ║
-╚════════════════════════════════════════════════════════════╝
-
-Usage:
-  1. Analyze single image:
-     python main.py image <image_path> [--storage=local|aws]
-  
-  2. Process video:
-     python main.py video <video_path> [output_csv] [skip_frames] [--storage=local|aws]
-  
-  3. Detect objects (YOLO):
-     python main.py object <image_path> [output_image] [--storage=local|aws]
-
-Storage Options:
-  --storage=local  (DEFAULT) - Use local files
-  --storage=aws    - Use AWS S3 bucket
-
-Examples (Local):
-  python main.py image test_images/flood_image.jpg
-  python main.py video test_videos/flood_video.mp4
-  python main.py object test_images/flood_image.jpg
-
-Examples (AWS S3):
-  python main.py image images/flood_image.jpg --storage=aws
-  python main.py video videos/flood_video.mp4 results.csv 2 --storage=aws
-  python main.py object images/flood_image.jpg objects_output.jpg --storage=aws
-
-Features:
-  - Water surface detection (6-method ensemble)
-  - Flood severity classification (ResNet18)
-  - Depth estimation (3-method hybrid with YOLO)
-  - Object detection & anchor-based depth (YOLO)
-  - Multi-frame video processing with CSV export
-  - Local or AWS S3 storage
-  - GPU acceleration (optional)
-
-AWS Setup:
-  - Set AWS credentials: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
-  - Set S3 bucket: S3_BUCKET environment variable (or use default: flood-analysis)
-  - Requires: pip install boto3
-
-Requirements:
-  - severity_model.pth (trained model file)
-  - test_images/ folder (local mode) or S3 bucket (AWS mode)
-  - CUDA capable GPU (optional, will use CPU otherwise)
-
-Output:
-  - Single image: Console output
-  - Video: CSV file + annotated frames in output_frames/
-  - Objects: Annotated image with bounding boxes
-        """)
-        sys.exit(1)
-    
-    # Parse storage mode
-    storage_mode = get_storage_mode(sys.argv)
-    s3_handler = get_s3_handler(storage_mode)
-    
-    print(f"\n✓ Storage Mode: {storage_mode.upper()}")
-    if storage_mode == "aws" and s3_handler:
-        print(f"✓ S3 Bucket: {s3_handler.bucket_name}")
-    
-    mode = sys.argv[1].lower()
-    
-    if mode == "image" or mode == "img":
-        if len(sys.argv) < 3:
-            print("Error: Please provide image path")
-            print("Usage: python main.py image <image_path> [--storage=local|aws]")
-            sys.exit(1)
-        
-        image_path = sys.argv[2]
-        process_single_image(image_path, storage_mode=storage_mode, s3_handler=s3_handler)
-    
-    elif mode == "video" or mode == "vid":
-        if len(sys.argv) < 3:
-            print("Error: Please provide video path")
-            print("Usage: python main.py video <video_path> [output_csv] [skip_frames] [--storage=local|aws]")
-            sys.exit(1)
-        
-        video_path = sys.argv[2]
-        output_csv = sys.argv[3] if len(sys.argv) > 3 and not sys.argv[3].startswith("--") else "video_analysis.csv"
-        skip_frames_arg = sys.argv[4] if len(sys.argv) > 4 and not sys.argv[4].startswith("--") else "1"
-        
-        try:
-            skip_frames = int(skip_frames_arg)
-        except ValueError:
-            skip_frames = 1
-        
-        process_video_file(video_path, output_csv, skip_frames, 
-                          storage_mode=storage_mode, s3_handler=s3_handler)
-    
-    elif mode == "object" or mode == "obj":
-        if len(sys.argv) < 3:
-            print("Error: Please provide image path")
-            print("Usage: python main.py object <image_path> [output_image] [--storage=local|aws]")
-            sys.exit(1)
-        
-        image_path = sys.argv[2]
-        output_image = sys.argv[3] if len(sys.argv) > 3 and not sys.argv[3].startswith("--") else "objects_detected.jpg"
-        
-        process_object_detection(image_path, output_image,
-                               storage_mode=storage_mode, s3_handler=s3_handler)
-    
+        s3_handler.write_image_to_s3(annotated, output_image)
     else:
-        print(f"Error: Unknown mode '{mode}'")
-        print("Use 'image', 'video', or 'object'")
-        sys.exit(1)
+        cv2.imwrite(output_image, annotated)
+        print(f"Saved annotated image to {output_image}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="AWS-first flood depth estimator CLI"
+    )
+    parser.add_argument("mode", nargs="?", choices=["image", "video", "object", "web"], help="Operation mode")
+    parser.add_argument("path", nargs="?", help="Path to image or video file")
+    parser.add_argument("--storage", choices=["local", "aws"], default="aws", help="Storage mode")
+    parser.add_argument("--bucket", help="S3 bucket name when using AWS mode")
+    parser.add_argument("--camera-id", default="cli_camera", help="Camera ID for event ingestion")
+    parser.add_argument("--latitude", type=float, default=0.0, help="Camera latitude")
+    parser.add_argument("--longitude", type=float, default=0.0, help="Camera longitude")
+    parser.add_argument("--location-name", help="Camera location name")
+    parser.add_argument("--output", help="Output path for CSV or annotated image")
+    parser.add_argument("--skip-frames", type=int, default=1, help="Frame skip rate for video")
+    parser.add_argument("--app", action="store_true", help="Run the Flask web app")
+    parser.add_argument("--host", default="0.0.0.0", help="Host for the Flask app")
+    parser.add_argument("--port", type=int, default=5000, help="Port for the Flask app")
+    args = parser.parse_args()
+
+    if args.app:
+        from web_app import create_app
+
+        app = create_app()
+        app.run(host=args.host, port=args.port, debug=True)
+        return
+
+    if not args.mode:
+        parser.print_help()
+        return
+
+    storage_mode = args.storage
+    print(f"Using storage mode: {storage_mode}")
+
+    if args.mode == "image":
+        if not args.path:
+            raise SystemExit("image mode requires a path")
+        process_image_cli(
+            image_path=args.path,
+            storage_mode=storage_mode,
+            camera_id=args.camera_id,
+            latitude=args.latitude,
+            longitude=args.longitude,
+            location_name=args.location_name,
+            bucket_name=args.bucket,
+        )
+        return
+
+    if args.mode == "video":
+        if not args.path:
+            raise SystemExit("video mode requires a path")
+        process_video_cli(
+            video_path=args.path,
+            output_csv=args.output or "video_analysis.csv",
+            skip_frames=max(1, args.skip_frames),
+            storage_mode=storage_mode,
+            camera_id=args.camera_id,
+            latitude=args.latitude,
+            longitude=args.longitude,
+            location_name=args.location_name,
+            bucket_name=args.bucket,
+        )
+        return
+
+    if args.mode == "object":
+        if not args.path:
+            raise SystemExit("object mode requires a path")
+        process_object_detection(
+            image_path=args.path,
+            output_image=args.output or "objects_detected.jpg",
+            storage_mode=storage_mode,
+            bucket_name=args.bucket,
+        )
+        return
+
+    raise SystemExit(f"Unknown mode: {args.mode}")
 
 
 if __name__ == "__main__":
