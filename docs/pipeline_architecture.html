@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Flood Depth Estimator — Pipeline Architecture</title>
+<style>
+  :root {
+    --bg:#0f1117;--card:#1a1d2e;--border:#2a2d3e;
+    --blue:#4f8ef7;--green:#22d3a5;--amber:#f59e0b;
+    --red:#ef4444;--purple:#a855f7;--cyan:#06b6d4;
+    --text:#e2e8f0;--muted:#94a3b8;
+    --s1:#4f8ef7;--s2:#22d3a5;--s3:#a855f7;--s4:#f59e0b;--s5:#ef4444;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:13px;}
+  a{color:var(--blue);}
+  code{background:#1a1d2e;border-radius:3px;padding:1px 5px;font-family:monospace;font-size:11px;color:var(--cyan);}
+
+  /* header */
+  header{background:linear-gradient(135deg,#1a1d2e,#0f1117);border-bottom:1px solid var(--border);padding:16px 28px;display:flex;align-items:center;gap:14px;}
+  header h1{font-size:17px;font-weight:700;color:#fff;}
+  header p{color:var(--muted);font-size:11px;margin-top:3px;}
+
+  /* badges */
+  .badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700;letter-spacing:.4px;}
+  .bg{background:#064e3b;color:var(--green);}
+  .bb{background:#1e3a5f;color:var(--blue);}
+  .ba{background:#451a03;color:var(--amber);}
+  .br{background:#450a0a;color:var(--red);}
+  .bp{background:#3b0764;color:var(--purple);}
+  .bc{background:#083344;color:var(--cyan);}
+
+  /* tabs */
+  .tabs{display:flex;border-bottom:1px solid var(--border);padding:0 28px;background:#13162a;}
+  .tab{padding:11px 20px;cursor:pointer;color:var(--muted);font-size:12px;font-weight:600;border-bottom:2px solid transparent;transition:.2s;}
+  .tab:hover{color:var(--text);}
+  .tab.on{color:var(--blue);border-bottom-color:var(--blue);}
+  .pane{display:none;padding:22px 28px;}
+  .pane.on{display:block;}
+
+  /* pipeline stage */
+  .stage{display:grid;grid-template-columns:52px 1fr;margin-bottom:6px;}
+  .dot{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0;}
+  .vline{flex:1;width:2px;background:var(--border);margin:4px auto;min-height:16px;}
+  .sbody{padding:0 0 24px 12px;}
+  .sh{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+  .st{font-size:14px;font-weight:700;}
+  .sd{color:var(--muted);font-size:11px;margin-bottom:8px;}
+  .io{display:flex;gap:8px;align-items:center;font-size:11px;color:var(--muted);margin-bottom:10px;}
+  .iobox{background:#0f1117;border:1px solid var(--border);border-radius:5px;padding:3px 9px;font-family:monospace;font-size:10px;color:var(--text);}
+  .fg{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px;}
+  .fc{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 13px;}
+  .fc .fp{font-size:10px;color:var(--muted);font-family:monospace;margin-bottom:3px;}
+  .fc .fn{font-weight:700;font-size:12px;margin-bottom:3px;}
+  .fc .ff{font-family:monospace;font-size:10px;color:var(--cyan);margin-bottom:4px;line-height:1.5;}
+  .fc .fd{font-size:11px;color:var(--muted);line-height:1.5;}
+  .arrow{padding-left:64px;font-size:18px;color:var(--border);margin:-4px 0 4px;}
+
+  /* registry table */
+  .thead,.trow{display:grid;grid-template-columns:165px 110px 190px 70px 100px 1fr;}
+  .thead div,.trow div{padding:7px 9px;border-right:1px solid var(--border);}
+  .thead div:last-child,.trow div:last-child{border-right:none;}
+  .thead{background:var(--card);border:1px solid var(--border);border-radius:8px 8px 0 0;font-weight:700;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;}
+  .trow{border:1px solid var(--border);border-top:none;}
+  .trow:last-child{border-radius:0 0 8px 8px;}
+  .trow:nth-child(even){background:#13162a;}
+  .mono{font-family:monospace;font-size:10px;color:var(--cyan);line-height:1.6;}
+  .sds{display:flex;gap:3px;flex-wrap:wrap;}
+  .s{width:15px;height:15px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:800;}
+
+  /* audit */
+  .agrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .acard{background:var(--card);border-radius:9px;padding:14px;border:1px solid var(--border);}
+  .acard h3{font-size:12px;font-weight:700;margin-bottom:9px;display:flex;align-items:center;gap:6px;}
+  .aitem{display:flex;align-items:flex-start;gap:7px;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px;}
+  .aitem:last-child{border:none;}
+  .ap{font-family:monospace;color:var(--cyan);}
+  .ar{color:var(--muted);font-size:10px;}
+
+  section h2{font-size:14px;font-weight:700;margin-bottom:14px;color:#fff;display:flex;align-items:center;gap:8px;}
+  section h2::before{content:'';display:block;width:3px;height:16px;border-radius:2px;background:var(--blue);}
+  .entbox{background:linear-gradient(135deg,#1a1d2e,#13162a);border:1px solid var(--border);border-radius:9px;padding:14px 18px;margin-top:18px;}
+</style>
+</head>
+<body>
+<header>
+  <div style="font-size:26px">🌊</div>
+  <div>
+    <h1>Flood Depth Estimator — Model Architecture &amp; File Registry</h1>
+    <p>5-Stage ML Pipeline &nbsp;·&nbsp; 30 Active Files &nbsp;·&nbsp; SegFormer + YOLOv8 + DepthAnythingV2 + EfficientNet-B3</p>
+  </div>
+  <div style="margin-left:auto;display:flex;gap:7px">
+    <span class="badge bg">● LIVE</span>
+    <span class="badge bb">main</span>
+  </div>
+</header>
+
+<div class="tabs">
+  <div class="tab on"  onclick="show('flow',this)">🔄 Pipeline Flow</div>
+  <div class="tab"     onclick="show('reg',this)">📋 File Registry</div>
+  <div class="tab"     onclick="show('audit',this)">🔍 Code Audit</div>
+</div>
+
+<!-- ===== TAB 1: FLOW ===== -->
+<div id="pane-flow" class="pane on">
+  <section><h2>End-to-End Inference — Every Image Upload</h2>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:18px;">
+      Exact execution order, file → function → output at each stage.
+    </p>
+  </section>
+
+  <!-- Entry -->
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:11px 15px;margin-bottom:18px;display:flex;align-items:center;gap:11px;">
+    <span style="font-size:20px">📤</span>
+    <div>
+      <div style="font-weight:700;font-size:13px;">POST /predict &nbsp;&nbsp;→&nbsp;&nbsp; app.py</div>
+      <div style="font-size:11px;color:var(--muted);">
+        <code>_predict_single(image_bytes, location)</code> — decodes image, calls pipeline, builds JSON response, returns to browser
+      </div>
+    </div>
+  </div>
+
+  <!-- S1 -->
+  <div class="stage">
+    <div style="display:flex;flex-direction:column;align-items:center;">
+      <div class="dot" style="background:#1e3a5f;color:var(--s1);">1</div>
+      <div class="vline"></div>
+    </div>
+    <div class="sbody">
+      <div class="sh">
+        <span class="st" style="color:var(--s1);">Stage 1 — Water Detection &amp; Validation</span>
+        <span class="badge bb">SegFormer</span><span class="badge bc">HSV+CV2</span>
+      </div>
+      <div class="sd">Find water pixels. Reject false positives (dry roads, soil, texture artefacts).</div>
+      <div class="io">
+        <span class="iobox">RGB Image (PIL)</span>
+        <span>→</span>
+        <span class="iobox">water_mask · water_pct · water_confidence (0–1) · flags[]</span>
+      </div>
+      <div class="fg">
+        <div class="fc" style="border-color:var(--s1)">
+          <div class="fp">src/segformer_yolo_depthv2_pipeline.py</div>
+          <div class="fn" style="color:var(--s1)">SegFormerYoloDepthV2Pipeline</div>
+          <div class="ff">_segformer_water_mask(image_rgb)</div>
+          <div class="fd">Loads <code>nvidia/segformer-b2-finetuned</code> (HuggingFace). Semantic segmentation → coarse water mask. Hands off to WaterRegionDetector for HSV refinement + validation.</div>
+          <span class="badge bb">CORE</span>
+        </div>
+        <div class="fc" style="border-color:var(--cyan)">
+          <div class="fp">src/water_region_detector.py</div>
+          <div class="fn" style="color:var(--cyan)">WaterRegionDetector</div>
+          <div class="ff">detect_validated(image_rgb) → (mask, pct, conf, flags)</div>
+          <div class="fd">HSV range detection. 5 false-positive checks: A) Texture (Laplacian variance), B) Pixel scrub, C) Connectivity, D) Height prior (top 30% zeroed), E) Colour diversity. Returns confidence 0–1.</div>
+          <span class="badge bc">CORE</span>
+        </div>
+        <div class="fc" style="border-color:var(--s1)">
+          <div class="fp">src/segformer_yolo_depthv2_pipeline.py</div>
+          <div class="fn" style="color:var(--s1)">SegFormerYoloDepthV2Pipeline</div>
+          <div class="ff">_segformer_scene_comment(mask, pct, depth, conf, flags)</div>
+          <div class="fd">Fallback when no scale anchor. Generates plain-English scene description: water %, top/bottom distribution, depth cue. Returns <code>(str, dict)</code> for UI amber card.</div>
+          <span class="badge ba">FALLBACK</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+
+  <!-- S2 -->
+  <div class="stage">
+    <div style="display:flex;flex-direction:column;align-items:center;">
+      <div class="dot" style="background:#064e3b;color:var(--s2);">2</div>
+      <div class="vline"></div>
+    </div>
+    <div class="sbody">
+      <div class="sh">
+        <span class="st" style="color:var(--s2);">Stage 2 — Reference Object Detection (Scale Anchor)</span>
+        <span class="badge bg">YOLOv8n</span>
+      </div>
+      <div class="sd">Detect cars / persons / bikes / trucks. Measure how submerged they are to get a real-world depth anchor.</div>
+      <div class="io">
+        <span class="iobox">RGB Image + water_mask</span>
+        <span>→</span>
+        <span class="iobox">reference_depth_cm (float | None) · detected_objects[] · submersion_ratio</span>
+      </div>
+      <div class="fg">
+        <div class="fc" style="border-color:var(--s2)">
+          <div class="fp">yolov8n.pt</div>
+          <div class="fn" style="color:var(--s2)">YOLOv8n Weights (6.3 MB)</div>
+          <div class="ff">ultralytics.YOLO("yolov8n.pt").predict(img)</div>
+          <div class="fd">COCO-80 classes. Reference objects: car (h≈1.5m), person (h≈1.75m), bus (h≈3.5m), truck (h≈2.5m), motorcycle (h≈1.1m), bicycle (h≈1.0m). Auto-downloads if missing.</div>
+          <span class="badge bg">WEIGHT</span>
+        </div>
+        <div class="fc" style="border-color:var(--s2)">
+          <div class="fp">src/reference_depth_estimator.py</div>
+          <div class="fn" style="color:var(--s2)">ReferenceDepthEstimator</div>
+          <div class="ff">estimate(image_np, water_mask) → (depth_cm, objects[])</div>
+          <div class="fd">Clips each bbox against water mask. Computes <code>submersion_ratio = submerged_px / bbox_height</code>. Multiplies by known object height → depth_cm. Returns best anchor.</div>
+          <span class="badge bg">CORE</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+
+  <!-- S3 -->
+  <div class="stage">
+    <div style="display:flex;flex-direction:column;align-items:center;">
+      <div class="dot" style="background:#3b0764;color:var(--s3);">3</div>
+      <div class="vline"></div>
+    </div>
+    <div class="sbody">
+      <div class="sh">
+        <span class="st" style="color:var(--s3);">Stage 3 — Dense Depth Map (DepthAnythingV2)</span>
+        <span class="badge bp">Transformer</span>
+      </div>
+      <div class="sd">Per-pixel monocular depth estimation (0–1 proxy). Works even without reference objects.</div>
+      <div class="io">
+        <span class="iobox">RGB Image</span>
+        <span>→</span>
+        <span class="iobox">dense_depth_map (np.array H×W, 0–1)</span>
+      </div>
+      <div class="fg">
+        <div class="fc" style="border-color:var(--s3)">
+          <div class="fp">src/segformer_yolo_depthv2_pipeline.py</div>
+          <div class="fn" style="color:var(--s3)">SegFormerYoloDepthV2Pipeline</div>
+          <div class="ff">_depthanything_map(image_rgb) → depth_np</div>
+          <div class="fd">Loads <code>depth-anything/Depth-Anything-V2-Small-hf</code> via HuggingFace. <code>AutoModelForDepthEstimation</code>. Returns normalised depth map resized to original image dimensions.</div>
+          <span class="badge bp">CORE</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+
+  <!-- S4 -->
+  <div class="stage">
+    <div style="display:flex;flex-direction:column;align-items:center;">
+      <div class="dot" style="background:#451a03;color:var(--s4);">4</div>
+      <div class="vline"></div>
+    </div>
+    <div class="sbody">
+      <div class="sh">
+        <span class="st" style="color:var(--s4);">Stage 4 — Fusion Engine</span>
+        <span class="badge ba">Weighted Blend</span>
+      </div>
+      <div class="sd">Fuse reference anchor + dense depth + water coverage into a single depth estimate. Suppress if water is unreliable.</div>
+      <div class="io">
+        <span class="iobox">ref_depth_cm + dense_depth_map + water_pct + water_confidence</span>
+        <span>→</span>
+        <span class="iobox">fused_depth_cm (float | None) · confidence (0–1)</span>
+      </div>
+      <div class="fg">
+        <div class="fc" style="border-color:var(--s4)">
+          <div class="fp">src/segformer_yolo_depthv2_pipeline.py</div>
+          <div class="fn" style="color:var(--s4)">_fuse_depth_estimates(ref, dense, pct)</div>
+          <div class="ff">With anchor: depth = 0.65×ref + 0.35×dense<br>No anchor: depth = dense only (cap conf 0.55)<br>water_confidence &lt; 0.45 → depth = None (SUPPRESSED)</div>
+          <div class="fd">Decision: if water signal is unreliable (dry road, high texture), depth is withheld entirely. UI shows red DEPTH WITHHELD badge instead of a number.</div>
+          <span class="badge ba">CORE</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="arrow">↓</div>
+
+  <!-- S5 -->
+  <div class="stage">
+    <div style="display:flex;flex-direction:column;align-items:center;">
+      <div class="dot" style="background:#450a0a;color:var(--s5);">5</div>
+      <div class="vline" style="background:transparent"></div>
+    </div>
+    <div class="sbody">
+      <div class="sh">
+        <span class="st" style="color:var(--s5);">Stage 5 — Calibration, Severity &amp; Response</span>
+        <span class="badge br">EfficientNet-B3</span>
+        <span class="badge ba">Gemini (optional)</span>
+      </div>
+      <div class="sd">Map fused depth → severity bucket. Optionally blend Gemini API result. Return JSON to browser.</div>
+      <div class="io">
+        <span class="iobox">fused_depth_cm + image tensor</span>
+        <span>→</span>
+        <span class="iobox">severity · confidence · full JSON response</span>
+      </div>
+      <div class="fg">
+        <div class="fc" style="border-color:var(--s5)">
+          <div class="fp">src/segformer_yolo_depthv2_pipeline.py</div>
+          <div class="fn" style="color:var(--s5)">_calibration_severity_model(depth_cm, pct, conf)</div>
+          <div class="ff">Buckets: &lt;15cm→SAFE · 15–45cm→MODERATE<br>45–90cm→SEVERE · &gt;90cm→CRITICAL</div>
+          <div class="fd">Loads EfficientNet-B3 water-aware checkpoint for final classification cross-check. Returns severity label + confidence score.</div>
+          <span class="badge br">CORE</span>
+        </div>
+        <div class="fc" style="border-color:var(--s5)">
+          <div class="fp">models/best_flood_model_water_aware.pth</div>
+          <div class="fn" style="color:var(--s5)">EfficientNet-B3 Water-Aware</div>
+          <div class="ff">torch.load() → model.eval() → model(image_tensor)</div>
+          <div class="fd">51 MB. Only production model. Input: 224×224 RGB. Output: severity class + depth regression. Loaded once at server startup, reused for all requests.</div>
+          <span class="badge br">WEIGHT</span>
+        </div>
+        <div class="fc" style="border-color:var(--amber)">
+          <div class="fp">src/segformer_yolo_depthv2_pipeline.py</div>
+          <div class="fn" style="color:var(--amber)">_gemini_evaluate(img_b64, classical_result)</div>
+          <div class="ff">final = 0.75×gemini + 0.25×classical</div>
+          <div class="fd">Optional. Only active if <code>inference.gemini_api_key</code> is set in config.yaml. Sends image + classical result to Gemini Pro Vision. Stages 1–4 are always classical; Gemini is only a post-Stage-5 blender.</div>
+          <span class="badge ba">OPTIONAL</span>
+        </div>
+        <div class="fc">
+          <div class="fp">app.py</div>
+          <div class="fn">Response Builder</div>
+          <div class="ff">_predict_single() → jsonify(result_dict)</div>
+          <div class="fd">Adds enterprise fields: DLQ routing on failure, geospatial zone label, event contract wrapping, MC dropout confidence interval. Returns JSON to browser / API caller.</div>
+          <span class="badge bb">ENTRY</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Enterprise layer -->
+  <div class="entbox">
+    <div style="font-weight:700;font-size:12px;margin-bottom:11px;color:var(--muted);">⚙️ Enterprise / Infrastructure Layer — wraps all 5 stages</div>
+    <div class="fg">
+      <div class="fc"><div class="fp">src/pipeline.py</div><div class="fn">execute_event()</div><div class="ff">FloodPipeline.run(event)</div><div class="fd">Enterprise wrapper. Adds retry + observability + event contracts. Called by app.py for typed routing.</div></div>
+      <div class="fc"><div class="fp">src/event_contract.py</div><div class="fn">FloodEvent / FloodResultEvent</div><div class="ff">FloodEvent(image_b64, location, ...)</div><div class="fd">Pydantic v2 models. Validates all event fields at pipeline boundaries.</div></div>
+      <div class="fc"><div class="fp">src/middleware/retry.py</div><div class="fn">RetryPolicy</div><div class="ff">run_with_retry(fn, policy)</div><div class="fd">Exponential backoff (max 3 attempts) for transient failures (network, model load).</div></div>
+      <div class="fc"><div class="fp">src/middleware/observability.py</div><div class="fn">@observe_execution</div><div class="ff">observe_execution(stage_fn)</div><div class="fd">Decorator: logs stage name, timing, success/failure to structured logs.</div></div>
+      <div class="fc"><div class="fp">src/dlq.py</div><div class="fn">get_dead_letter_router()</div><div class="ff">dlq.publish(FloodFailureEvent)</div><div class="fd">On pipeline exception: routes to dead letter queue. Enables retry/audit of failures.</div></div>
+      <div class="fc"><div class="fp">src/aggregator.py</div><div class="fn">SlidingWindowAggregator</div><div class="ff">aggregator.ingest(sensor_payload)</div><div class="fd">60-second sliding window per location. Averages multi-sensor depth readings.</div></div>
+      <div class="fc"><div class="fp">src/geospatial_classifier.py</div><div class="fn">FloodIntensityClassifier</div><div class="ff">classify(lat, lon, depth_cm)</div><div class="fd">Maps lat/lon → district zone → zone-specific severity threshold.</div></div>
+      <div class="fc"><div class="fp">src/settings.py</div><div class="fn">load_settings_dict()</div><div class="ff">load_settings_dict("config/config.yaml")</div><div class="fd">Single config loader. Used by pipeline, aggregator, DLQ, geospatial.</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== TAB 2: FILE REGISTRY ===== -->
+<div id="pane-reg" class="pane">
+  <section><h2>Complete File Registry — All 30 Files</h2>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:14px;">Every file: folder · key function · pipeline stages it touches · role · what it does.</p>
+  </section>
+  <div style="overflow-x:auto;">
+    <div class="thead">
+      <div>File</div><div>Folder</div><div>Key Function(s)</div>
+      <div>Stages</div><div>Role</div><div>Purpose</div>
+    </div>
+
+    <!-- Row macro: file | folder | fns | stages-html | badge-html | desc -->
+
+    <div class="trow">
+      <div><strong>app.py</strong></div><div style="color:var(--muted)">/ root</div>
+      <div class="mono">_predict_single()<br>predict_batch()<br>Flask routes</div>
+      <div><div class="sds"><div class="s" style="background:#1e3a5f;color:var(--s1)">1</div><div class="s" style="background:#064e3b;color:var(--s2)">2</div><div class="s" style="background:#3b0764;color:var(--s3)">3</div><div class="s" style="background:#451a03;color:var(--s4)">4</div><div class="s" style="background:#450a0a;color:var(--s5)">5</div></div></div>
+      <div><span class="badge bb">ENTRY</span></div>
+      <div>Flask server. Receives POST /predict. Loads EfficientNet model at startup. Calls segformer pipeline. Builds full JSON response. Embeds UI HTML. Handles batch uploads, map rendering, DLQ routing on failure, geospatial enrichment.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>segformer_yolo_depthv2_pipeline.py</strong></div><div style="color:var(--muted)">src/</div>
+      <div class="mono">predict()<br>_segformer_water_mask()<br>_depthanything_map()<br>_fuse_depth_estimates()<br>_calibration_severity_model()<br>_segformer_scene_comment()</div>
+      <div><div class="sds"><div class="s" style="background:#1e3a5f;color:var(--s1)">1</div><div class="s" style="background:#3b0764;color:var(--s3)">3</div><div class="s" style="background:#451a03;color:var(--s4)">4</div><div class="s" style="background:#450a0a;color:var(--s5)">5</div></div></div>
+      <div><span class="badge bb">CORE</span></div>
+      <div>Heart of the pipeline (~800 lines). Orchestrates all 5 stages. Manages no-reference fallback (scene comment), depth suppression when water_confidence &lt; 0.45, Gemini blend. Returns result dict consumed by app.py.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>water_region_detector.py</strong></div><div style="color:var(--muted)">src/</div>
+      <div class="mono">detect_validated()<br>detect()<br>_validate_and_refine()</div>
+      <div><div class="sds"><div class="s" style="background:#1e3a5f;color:var(--s1)">1</div></div></div>
+      <div><span class="badge bc">CORE</span></div>
+      <div>HSV water detection. Returns 4-tuple (mask, pct, confidence, flags). 5-check FP validation: texture, pixel scrub, connectivity, height prior, colour diversity. Confidence scoring deducts per flag.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>reference_depth_estimator.py</strong></div><div style="color:var(--muted)">src/</div>
+      <div class="mono">estimate()<br>_measure_submersion()<br>_get_object_heights()</div>
+      <div><div class="sds"><div class="s" style="background:#064e3b;color:var(--s2)">2</div></div></div>
+      <div><span class="badge bg">CORE</span></div>
+      <div>Wraps YOLO output. For each reference object, clips bbox against water mask → submersion_ratio → multiply by known object height → depth_cm. Returns best calibrated anchor.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>yolov8n.pt</strong></div><div style="color:var(--muted)">/ root</div>
+      <div class="mono">YOLO("yolov8n.pt").predict()</div>
+      <div><div class="sds"><div class="s" style="background:#064e3b;color:var(--s2)">2</div></div></div>
+      <div><span class="badge bg">WEIGHT</span></div>
+      <div>6.3 MB YOLOv8 nano. COCO-80 classes. Used for: car, person, bus, truck, motorcycle, bicycle detection. Auto-downloads from Ultralytics if not present.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>best_flood_model_water_aware.pth</strong></div><div style="color:var(--muted)">models/</div>
+      <div class="mono">torch.load() → eval()<br>model.forward(tensor)</div>
+      <div><div class="sds"><div class="s" style="background:#450a0a;color:var(--s5)">5</div></div></div>
+      <div><span class="badge br">WEIGHT</span></div>
+      <div>51 MB EfficientNet-B3 + water-aware head. Only production model. Loaded once at server startup. Input: 224×224 RGB. Output: severity class + depth regression. Used for Stage 5 calibration.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>pipeline.py</strong></div><div style="color:var(--muted)">src/</div>
+      <div class="mono">execute_event()<br>FloodPipeline.run(event)</div>
+      <div><div class="sds"><div class="s" style="background:#1e3a5f;color:var(--s1)">1</div><div class="s" style="background:#064e3b;color:var(--s2)">2</div><div class="s" style="background:#3b0764;color:var(--s3)">3</div><div class="s" style="background:#451a03;color:var(--s4)">4</div><div class="s" style="background:#450a0a;color:var(--s5)">5</div></div></div>
+      <div><span class="badge bp">ENTERPRISE</span></div>
+      <div>Enterprise wrapper around segformer pipeline. Called by app.py via execute_event(). Adds retry, observability decorators, event contract validation, aggregator integration.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>event_contract.py</strong></div><div style="color:var(--muted)">src/</div>
+      <div class="mono">FloodEvent<br>FloodResultEvent<br>FloodFailureEvent</div>
+      <div><div class="sds"><div class="s" style="background:#450a0a;color:var(--s5)">5</div></div></div>
+      <div><span class="badge bp">ENTERPRISE</span></div>
+      <div>Pydantic v2 models. Validates image_b64, location, timestamp, severity fields. Shared contract used by pipeline.py, dlq.py, tasks.py.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>aggregator.py</strong></div><div style="color:var(--muted)">src/</div>
+      <div class="mono">SlidingWindowAggregator.ingest()<br>SensorPayload</div>
+      <div><div class="sds"><div class="s" style="background:#064e3b;color:var(--s2)">2</div><div class="s" style="background:#451a03;color:var(--s4)">4</div></div></div>
+      <div><span class="badge bp">ENTERPRISE</span></div>
+      <div>60-second sliding window per location. Averages depth readings from multiple sensors/images. Used by pipeline.py for multi-source fusion. In-memory state.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>dlq.py</strong></div><div style="color:var(--muted)">src/</div>
+      <div class="mono">get_dead_letter_router()<br>DeadLetterRouter.publish()</div>
+      <div><div class="sds"><span style="font-size:9px;color:var(--muted)">on fail</span></div></div>
+      <div><span class="badge bp">ENTERPRISE</span></div>
+      <div>Dead letter queue. On exception in _predict_single(): wraps in FloodFailureEvent, writes to dlq/ directory. Enables failure replay and audit.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>geospatial_classifier.py</strong></div><div style="color:var(--muted)">src/</div>
+      <div class="mono">FloodIntensityClassifier.classify()<br>load_zone_config()</div>
+      <div><div class="sds"><div class="s" style="background:#450a0a;color:var(--s5)">5</div></div></div>
+      <div><span class="badge ba">OPTIONAL</span></div>
+      <div>Maps GPS lat/lon → district zone → zone-specific severity threshold. Called inside try/except in app.py — non-fatal if no zone config loaded.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>middleware/observability.py</strong></div><div style="color:var(--muted)">src/middleware/</div>
+      <div class="mono">@observe_execution<br>log_stage_transition()</div>
+      <div><div class="sds"><div class="s" style="background:#1e3a5f;color:var(--s1)">1</div><div class="s" style="background:#064e3b;color:var(--s2)">2</div><div class="s" style="background:#3b0764;color:var(--s3)">3</div></div></div>
+      <div><span class="badge bp">INFRA</span></div>
+      <div>Decorator. Logs stage name, start time, end time, success/failure. Used by pipeline.py for structured observability. Non-fatal if removed.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>middleware/retry.py</strong></div><div style="color:var(--muted)">src/middleware/</div>
+      <div class="mono">run_with_retry()<br>RetryPolicy<br>is_transient_error()</div>
+      <div><div class="sds"><div class="s" style="background:#1e3a5f;color:var(--s1)">1</div><div class="s" style="background:#3b0764;color:var(--s3)">3</div></div></div>
+      <div><span class="badge bp">INFRA</span></div>
+      <div>Exponential backoff, max 3 attempts. Used for HuggingFace model downloads and transient network errors.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>settings.py</strong></div><div style="color:var(--muted)">src/</div>
+      <div class="mono">load_settings_dict()<br>get_inference_config()</div>
+      <div><div class="sds"><span style="font-size:9px;color:var(--muted)">all</span></div></div>
+      <div><span class="badge ba">CONFIG</span></div>
+      <div>Loads config/config.yaml. Returns runtime settings dict. Used by pipeline.py, aggregator.py, dlq.py, geospatial_classifier.py.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>config.yaml</strong></div><div style="color:var(--muted)">config/</div>
+      <div class="mono">— (YAML only)</div>
+      <div><div class="sds"><span style="font-size:9px;color:var(--muted)">all</span></div></div>
+      <div><span class="badge ba">CONFIG</span></div>
+      <div>Single source of truth. Keys: inference.pipeline_mode, inference.gemini_api_key, aggregator.window_seconds, dlq.path, logging.level. Read by settings.py at startup.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>scripts/mc_dropout.py</strong></div><div style="color:var(--muted)">scripts/</div>
+      <div class="mono">mc_dropout_confidence()<br>enable_dropout()</div>
+      <div><div class="sds"><div class="s" style="background:#450a0a;color:var(--s5)">5</div></div></div>
+      <div><span class="badge ba">OPTIONAL</span></div>
+      <div>Monte Carlo Dropout uncertainty. Runs model N times with dropout active → mean ± std confidence interval. Imported inside try/except in app.py — non-fatal if fails.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>src/flood_depth/segmentation_engine.py</strong></div><div style="color:var(--muted)">src/flood_depth/</div>
+      <div class="mono">SegmentationEngine.run()<br>segment_frame()</div>
+      <div><div class="sds"><span style="color:var(--red);font-size:9px">⚠ unused</span></div></div>
+      <div><span class="badge br">ORPHANED</span></div>
+      <div>⚠️ Not imported by any active file. OpenCV segmentation engine predating SegFormer integration. Candidate for archival. src/flood_depth/ folder can be removed after archival.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>compute_stats.py</strong></div><div style="color:var(--muted)">src/</div>
+      <div class="mono">compute_dataset_stats()<br>get_mean_std()</div>
+      <div><div class="sds"><span style="font-size:9px;color:var(--muted)">dev</span></div></div>
+      <div><span class="badge ba">DEV</span></div>
+      <div>Dataset mean/std for normalisation. Run once before training. Not used at inference time.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>dataset.py</strong></div><div style="color:var(--muted)">src/</div>
+      <div class="mono">FloodDataset<br>get_augmented_transforms()<br>create_data_loaders()</div>
+      <div><div class="sds"><span style="font-size:9px;color:var(--muted)">train</span></div></div>
+      <div><span class="badge ba">TRAIN</span></div>
+      <div>PyTorch Dataset. Augmentation (flip, crop, colour jitter), label loading, train/val split. Used only by train.py and train_water_aware.py.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>train_water_aware.py</strong></div><div style="color:var(--muted)">src/</div>
+      <div class="mono">WaterAwareTrainer.train()<br>build_water_aware_model()<br>fine_tune()</div>
+      <div><div class="sds"><span style="font-size:9px;color:var(--muted)">train</span></div></div>
+      <div><span class="badge bg">TRAIN ✓</span></div>
+      <div>Active training script. Produces <code>best_flood_model_water_aware.pth</code>. Run to improve: <code>python src/train_water_aware.py --config config/config.yaml --output models</code>. Supports fine-tuning from checkpoint.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>train.py</strong></div><div style="color:var(--muted)">src/</div>
+      <div class="mono">FloodTrainer.train()<br>build_model()</div>
+      <div><div class="sds"><span style="font-size:9px;color:var(--muted)">train</span></div></div>
+      <div><span class="badge ba">OLD</span></div>
+      <div>EfficientNet-B0 baseline training. Outputs archived best_flood_model.pth. Superseded. Kept for baseline comparison only.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>retrain_flood_classifier.py</strong></div><div style="color:var(--muted)">scripts/</div>
+      <div class="mono">retrain_from_feedback()<br>load_feedback_labels()</div>
+      <div><div class="sds"><span style="font-size:9px;color:var(--muted)">retrain</span></div></div>
+      <div><span class="badge bg">RETRAIN</span></div>
+      <div>Incremental retraining from user corrections. Loads labels from data/feedback/, fine-tunes model, saves new checkpoint. Run weekly.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>scripts/serve.py</strong></div><div style="color:var(--muted)">scripts/</div>
+      <div class="mono">FloodServer.predict()<br>LitServe API</div>
+      <div><div class="sds"><span style="font-size:9px;color:var(--muted)">alt</span></div></div>
+      <div><span class="badge ba">ALT</span></div>
+      <div>Alternative LitServe server on :8000. Not used by current app.py (Flask :5000). For high-throughput deployment option.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>scripts/tasks.py</strong></div><div style="color:var(--muted)">scripts/</div>
+      <div class="mono">process_flood_event.delay()<br>Celery app</div>
+      <div><div class="sds"><span style="font-size:9px;color:var(--muted)">async</span></div></div>
+      <div><span class="badge bp">ASYNC</span></div>
+      <div>Celery async task worker. Decouples HTTP response from inference. Redis broker. Calls execute_event() from pipeline.py. Start: <code>celery -A scripts.tasks worker</code></div>
+    </div>
+
+    <div class="trow">
+      <div><strong>Flood_Depth_Google_Colab.ipynb</strong></div><div style="color:var(--muted)">notebooks/</div>
+      <div class="mono">— Jupyter notebook</div>
+      <div><div class="sds"><span style="font-size:9px;color:var(--muted)">train</span></div></div>
+      <div><span class="badge ba">NOTEBOOK</span></div>
+      <div>Full GPU training on Google Colab. Installs deps, mounts Drive, runs train_water_aware.py with GPU. Share with team for training without local GPU.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>Dockerfile</strong></div><div style="color:var(--muted)">/ root</div>
+      <div class="mono">— Docker</div>
+      <div><div class="sds"><span style="font-size:9px;color:var(--muted)">all</span></div></div>
+      <div><span class="badge bb">INFRA</span></div>
+      <div>Python 3.11-slim. Installs requirements-production.txt. Copies src/, models/, config/, app.py. Exposes :5000. Entry: python app.py. Used by Railway deployment.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>deploy.yml</strong></div><div style="color:var(--muted)">.github/workflows/</div>
+      <div class="mono">— GitHub Actions</div>
+      <div><div class="sds"><span style="font-size:9px;color:var(--muted)">all</span></div></div>
+      <div><span class="badge bb">CI/CD</span></div>
+      <div>Triggers on push to main. 4 stages: lint → test → docker build → deploy to Railway. Blocks on any failure.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>model-readiness-gate.yml</strong></div><div style="color:var(--muted)">.github/workflows/</div>
+      <div class="mono">— GitHub Actions</div>
+      <div><div class="sds"><div class="s" style="background:#450a0a;color:var(--s5)">5</div></div></div>
+      <div><span class="badge bb">CI/CD</span></div>
+      <div>Quality gate. Loads best_flood_model_water_aware.pth, runs 5 test images, asserts accuracy &gt; threshold. Blocks deploy if model has regressed.</div>
+    </div>
+
+    <div class="trow">
+      <div><strong>requirements*.txt (×3)</strong></div><div style="color:var(--muted)">/ root</div>
+      <div class="mono">pip install -r ...</div>
+      <div><div class="sds"><span style="font-size:9px;color:var(--muted)">all</span></div></div>
+      <div><span class="badge bb">DEPS</span></div>
+      <div>requirements.txt (base) · requirements-local.txt (dev + torch CPU) · requirements-production.txt (lean). Use local.txt for development.</div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ===== TAB 3: AUDIT ===== -->
+<div id="pane-audit" class="pane">
+  <section><h2>Code Audit — File Classification</h2>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:18px;">
+      Classification of all 30 files. Green = production-critical. Amber = optional/dev. Red = orphaned (safe to archive).
+    </p>
+  </section>
+
+  <div class="agrid">
+
+    <div class="acard" style="border-color:var(--green)">
+      <h3><span style="color:var(--green)">✅</span> Production-Critical (15 files)</h3>
+      <div class="aitem"><span>📄</span><div><div class="ap">app.py</div><div class="ar">Flask server + UI entry point</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">src/segformer_yolo_depthv2_pipeline.py</div><div class="ar">5-stage pipeline orchestrator</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">src/water_region_detector.py</div><div class="ar">Stage 1: water detection + 5-check FP validation</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">src/reference_depth_estimator.py</div><div class="ar">Stage 2: YOLOv8 scale anchor</div></div></div>
+      <div class="aitem"><span>📦</span><div><div class="ap">models/best_flood_model_water_aware.pth</div><div class="ar">Stage 5: EfficientNet-B3 checkpoint</div></div></div>
+      <div class="aitem"><span>📦</span><div><div class="ap">yolov8n.pt</div><div class="ar">Stage 2: YOLO object detector</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">src/pipeline.py</div><div class="ar">Enterprise event wrapper</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">src/event_contract.py</div><div class="ar">Pydantic event models</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">src/middleware/retry.py</div><div class="ar">Retry on transient failures</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">src/middleware/observability.py</div><div class="ar">Structured logging decorator</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">src/aggregator.py</div><div class="ar">Sliding window sensor fusion</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">src/dlq.py</div><div class="ar">Dead letter queue on failure</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">src/settings.py</div><div class="ar">Config loader</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">config/config.yaml</div><div class="ar">Runtime configuration</div></div></div>
+      <div class="aitem"><span>🐳</span><div><div class="ap">Dockerfile</div><div class="ar">Container packaging + Railway deploy</div></div></div>
+    </div>
+
+    <div class="acard" style="border-color:var(--amber)">
+      <h3><span style="color:var(--amber)">⚙️</span> Optional / Conditional (4 files)</h3>
+      <div class="aitem"><span>📄</span><div><div class="ap">scripts/mc_dropout.py</div><div class="ar">Uncertainty bounds — try/except, non-fatal if missing</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">src/geospatial_classifier.py</div><div class="ar">Zone severity — optional, try/except in app.py</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">scripts/tasks.py</div><div class="ar">Celery async worker — only if Redis is configured</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">scripts/serve.py</div><div class="ar">LitServe alt server — not active in current deploy</div></div></div>
+    </div>
+
+    <div class="acard" style="border-color:var(--blue)">
+      <h3><span style="color:var(--blue)">🛠️</span> Development / Training Only (6 files)</h3>
+      <div class="aitem"><span>📄</span><div><div class="ap">src/train_water_aware.py</div><div class="ar">Active training — run this to improve model</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">src/dataset.py</div><div class="ar">PyTorch Dataset class for training</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">src/train.py</div><div class="ar">Old EfficientNet-B0 baseline — reference only</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">src/compute_stats.py</div><div class="ar">Dataset normalisation stats — run once before train</div></div></div>
+      <div class="aitem"><span>📓</span><div><div class="ap">notebooks/Flood_Depth_Google_Colab.ipynb</div><div class="ar">Colab GPU training notebook for team</div></div></div>
+      <div class="aitem"><span>📄</span><div><div class="ap">scripts/retrain_flood_classifier.py</div><div class="ar">Incremental retraining from feedback labels</div></div></div>
+    </div>
+
+    <div class="acard" style="border-color:var(--red)">
+      <h3><span style="color:var(--red)">⚠️</span> Orphaned — Archive Recommended (1 file)</h3>
+      <div class="aitem"><span>⚠️</span><div>
+        <div class="ap">src/flood_depth/segmentation_engine.py</div>
+        <div class="ar">Not imported by any active file. OpenCV segmentation predating SegFormer. No production code path reaches it.</div>
+      </div></div>
+      <div style="margin-top:10px;padding:9px;background:#450a0a22;border-radius:6px;font-size:11px;color:var(--muted);">
+        <strong>Action:</strong> Run the command below to archive it:<br>
+        <code>git mv src/flood_depth/segmentation_engine.py archived/</code><br>
+        <code>git commit -m "archive: orphaned segmentation_engine.py"</code><br><br>
+        After this, <code>src/flood_depth/</code> is empty and can be deleted.
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Summary stats -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px;">
+    <div style="background:var(--card);border:1px solid var(--green);border-radius:8px;padding:12px;text-align:center;">
+      <div style="font-size:26px;font-weight:800;color:var(--green)">15</div>
+      <div style="font-size:11px;color:var(--muted)">Production-critical</div>
+    </div>
+    <div style="background:var(--card);border:1px solid var(--amber);border-radius:8px;padding:12px;text-align:center;">
+      <div style="font-size:26px;font-weight:800;color:var(--amber)">4</div>
+      <div style="font-size:11px;color:var(--muted)">Optional / conditional</div>
+    </div>
+    <div style="background:var(--card);border:1px solid var(--blue);border-radius:8px;padding:12px;text-align:center;">
+      <div style="font-size:26px;font-weight:800;color:var(--blue)">6</div>
+      <div style="font-size:11px;color:var(--muted)">Dev / training only</div>
+    </div>
+    <div style="background:var(--card);border:1px solid var(--red);border-radius:8px;padding:12px;text-align:center;">
+      <div style="font-size:26px;font-weight:800;color:var(--red)">1</div>
+      <div style="font-size:11px;color:var(--muted)">Orphaned — archive</div>
+    </div>
+  </div>
+</div>
+
+<script>
+function show(id, el) {
+  document.querySelectorAll('.pane').forEach(p => p.classList.remove('on'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
+  document.getElementById('pane-' + id).classList.add('on');
+  el.classList.add('on');
+}
+</script>
+</body>
+</html>
