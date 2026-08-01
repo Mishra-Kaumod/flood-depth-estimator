@@ -1,4 +1,4 @@
-"""
+﻿"""
 Flood Depth Estimator — Rich Web UI
 3-section interface: image upload grid + live Bengaluru map + intensity results map
 """
@@ -775,7 +775,7 @@ def _predict_single(image: Image.Image) -> dict:
         ml_depth = ml_raw * 100.0 if ml_raw <= 1.5 else ml_raw
         depth_cm = float(np.clip(ml_depth, 0.0, 150.0))
         try:
-            from mc_dropout import mc_dropout_confidence
+            from scripts.mc_dropout import mc_dropout_confidence
             _, confidence = mc_dropout_confidence(_MODEL, tensor)
         except Exception:
             confidence = 0.78 if depth_cm > 1 else 0.55
