@@ -1,0 +1,87 @@
+name: Hardening Regression Guard
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1" # Weekly on Monday, 03:00 UTC
+  pull_request:
+    paths:
+      - "app.py"
+      - "src/segformer_yolo_depthv2_pipeline.py"
+      - "src/middleware/**"
+      - "evaluate_model_readiness.py"
+      - "create_labeled_manifest.py"
+      - ".github/workflows/deploy.yml"
+      - ".github/workflows/model-readiness-gate.yml"
+      - ".github/workflows/hardening-regression-guard.yml"
+
+jobs:
+  hardening-regression-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Verify hardening components still exist
+        run: |
+          set -euo pipefail
+
+          required_files=(
+            "src/middleware/circuit_breaker.py"
+            "src/middleware/budget_tracker.py"
+            "evaluate_model_readiness.py"
+            "create_labeled_manifest.py"
+            "scripts/shadow_canary_check.py"
+            ".github/workflows/deploy.yml"
+            ".github/workflows/model-readiness-gate.yml"
+          )
+
+          for f in "${required_files[@]}"; do
+            if [[ ! -f "$f" ]]; then
+              echo "::error file=$f::Missing required hardening file"
+              exit 1
+            fi
+          done
+
+          check_grep() {
+            local pattern="$1"
+            local file="$2"
+            if ! grep -qE "$pattern" "$file"; then
+              echo "::error file=$file::Missing required pattern: $pattern"
+              exit 1
+            fi
+          }
+
+          # API endpoints recovered in Step 1 must remain present.
+          check_grep '@app.get\("/predict/<job_id>"\)' "app.py"
+          check_grep '@app.get\("/metrics"\)' "app.py"
+
+          # Gemini hardening imports must remain wired.
+          check_grep 'from src\.middleware\.budget_tracker import' "src/segformer_yolo_depthv2_pipeline.py"
+          check_grep 'from src\.middleware\.circuit_breaker import' "src/segformer_yolo_depthv2_pipeline.py"
+
+          # Deploy workflow must keep gate + canary ordering.
+          check_grep '^  quality-gate:' ".github/workflows/deploy.yml"
+          check_grep '^  shadow-canary:' ".github/workflows/deploy.yml"
+          check_grep 'needs: quality-gate' ".github/workflows/deploy.yml"
+          check_grep 'needs: \[quality-gate, shadow-canary\]' ".github/workflows/deploy.yml"
+
+          # Readiness gate workflow must keep current-stack evaluator wiring.
+          check_grep 'pip install -r requirements-local\.txt' ".github/workflows/model-readiness-gate.yml"
+          check_grep 'python evaluate_model_readiness\.py' ".github/workflows/model-readiness-gate.yml"
+
+          # Deprecated baseline model must not return to active models/.
+          if [[ -f "models/best_flood_model.pth" ]]; then
+            echo "::error file=models/best_flood_model.pth::Deprecated baseline model reintroduced to models/"
+            exit 1
+          fi
+
+          if [[ ! -f "models/best_flood_model_water_aware.pth" ]]; then
+            echo "::error file=models/best_flood_model_water_aware.pth::Active production model missing from models/"
+            exit 1
+          fi
+
+          echo "Hardening regression guard passed."
