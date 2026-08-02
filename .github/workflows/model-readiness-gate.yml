@@ -42,6 +42,25 @@ jobs:
             --source test_images/evaluation_manifest_ai_seeded.csv \
             --output test_images/evaluation_manifest_labeled.csv
 
+      - name: Validate Gemini peak-season quota guardrail
+        run: |
+          python - <<'PY'
+          import yaml
+          cfg = yaml.safe_load(open("config/config.yaml", "r", encoding="utf-8"))
+          budget = cfg.get("inference", {}).get("gemini", {}).get("budget", {})
+          quota = int(budget.get("verified_quota_per_minute", 0))
+          peak = int(budget.get("peak_season_expected_concurrency", 0))
+          if quota <= 0:
+              raise SystemExit("verified_quota_per_minute must be configured > 0")
+          if peak <= 0:
+              raise SystemExit("peak_season_expected_concurrency must be configured > 0")
+          if quota < peak:
+              raise SystemExit(
+                  f"Gemini quota too low for configured peak concurrency: quota={quota} < peak={peak}"
+              )
+          print({"verified_quota_per_minute": quota, "peak_season_expected_concurrency": peak})
+          PY
+
       - name: Run readiness quality gate
         run: |
           python evaluate_model_readiness.py \

@@ -404,6 +404,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--version", default="v3")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--min-feedback-labels", type=int, default=50)
+    parser.add_argument("--skip-readiness-gate", action="store_true")
+    parser.add_argument("--promote", action="store_true", help="Promote candidate model only after gate passes.")
     return parser.parse_args()
 
 
@@ -426,6 +429,10 @@ def main() -> None:
 
     user_images = upload_user_images(user_dir)
     print(f"Uploaded user images: {len(user_images)}")
+    if len(user_images) < args.min_feedback_labels:
+        raise RuntimeError(
+            f"Need at least {args.min_feedback_labels} feedback-labeled images, got {len(user_images)}."
+        )
 
     setup_kaggle_credentials(args.kaggle_username, args.kaggle_key)
     kaggle_root = download_kaggle_dataset(args.kaggle_dataset, kaggle_raw)
@@ -481,13 +488,65 @@ def main() -> None:
 
     model_dir = repo_dir / "models"
     model_dir.mkdir(parents=True, exist_ok=True)
-    out_version = model_dir / f"best_flood_model_{args.version}.pth"
+    candidate_dir = model_dir / "candidate"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    out_version = candidate_dir / f"best_flood_model_{args.version}.pth"
+    out_candidate = candidate_dir / "best_flood_model_water_aware_candidate.pth"
     out_default = model_dir / "best_flood_model_water_aware.pth"
     torch.save(best, out_version)
-    shutil.copy2(out_version, out_default)
+    shutil.copy2(out_version, out_candidate)
+    print(f"Saved candidate: {out_version}")
+    print(f"Updated candidate alias: {out_candidate}")
 
-    print(f"Saved: {out_version}")
-    print(f"Updated default model: {out_default}")
+    gate_passed = True
+    if not args.skip_readiness_gate:
+        gate_cmd = [
+            "python",
+            "evaluate_model_readiness.py",
+            "--input-dir",
+            "test_images",
+            "--manifest",
+            "test_images/evaluation_manifest_labeled.csv",
+            "--enforce-gates",
+            "--min-labeled-flood",
+            "50",
+            "--min-labeled-depth",
+            "20",
+            "--min-barren",
+            "25",
+            "--min-f1",
+            "0.90",
+            "--max-depth-mae",
+            "15",
+            "--min-depth-labels-per-band",
+            "3",
+            "--max-mae-0-20",
+            "8",
+            "--max-mae-20-50",
+            "12",
+            "--max-mae-50-80",
+            "15",
+            "--max-mae-80-plus",
+            "20",
+            "--max-barren-fp-rate",
+            "0.05",
+            "--max-p95-latency",
+            "8",
+            "--max-contradictions",
+            "0",
+        ]
+        try:
+            run_cmd(gate_cmd, cwd=repo_dir)
+            print("Readiness gate passed for candidate model.")
+        except Exception as exc:
+            gate_passed = False
+            raise RuntimeError(f"Readiness gate failed for candidate model: {exc}") from exc
+
+    if args.promote and gate_passed:
+        shutil.copy2(out_candidate, out_default)
+        print(f"Promoted to production default: {out_default}")
+    else:
+        print("Candidate not auto-promoted (manual review required).")
 
     if IN_COLAB:
         files.download(str(out_version))

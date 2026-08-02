@@ -106,6 +106,30 @@ inference:
   # Leave blank to use classical fallbacks for all stages.
   # Override at runtime via GEMINI_API_KEY env var.
   gemini_api_key: ""
+  gemini:
+    timeout_seconds: 8
+    retry:
+      max_attempts: 2
+      base_delay_seconds: 0.3
+      max_delay_seconds: 2.0
+      jitter_seconds: 0.1
+    circuit_breaker:
+      failure_threshold: 5
+      failure_window_seconds: 300
+      cooldown_seconds: 180
+    budget:
+      # Record verified account tier values here; update from Gemini dashboard when tier changes.
+      verified_quota_per_minute: 60
+      peak_season_expected_concurrency: 25
+      hourly_call_cap: 1000
+      daily_call_cap: 8000
+      estimated_cost_per_call_usd: 0.0015
+      hourly_spend_cap_usd: 5.0
+      daily_spend_cap_usd: 40.0
+  security:
+    rate_limit:
+      max_requests_per_window: 60
+      window_seconds: 60
   use_mc_dropout_confidence: true
   mc_passes: 8
   
@@ -193,6 +217,21 @@ monitoring:
   # Alerts
   alert_on_val_loss_plateau: true
   alert_on_inference_latency_spike: true
+  alert_profiles:
+    peak_season:
+      months: [6, 7, 8, 9]
+      thresholds:
+        pipeline_p95_latency_ms: 8000
+        events_failed_rate: 0.08
+        gemini_fallback_rate: 0.45
+        depth_suppression_rate: 0.30
+    off_season:
+      months: [1, 2, 3, 4, 5, 10, 11, 12]
+      thresholds:
+        pipeline_p95_latency_ms: 5000
+        events_failed_rate: 0.03
+        gemini_fallback_rate: 0.25
+        depth_suppression_rate: 0.18
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ENVIRONMENT-SPECIFIC OVERRIDES
