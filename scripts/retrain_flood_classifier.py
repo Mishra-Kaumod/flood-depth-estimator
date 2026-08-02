@@ -406,7 +406,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--min-feedback-labels", type=int, default=50)
     parser.add_argument("--skip-readiness-gate", action="store_true")
-    parser.add_argument("--promote", action="store_true", help="Promote candidate model only after gate passes.")
+    parser.add_argument(
+        "--promote",
+        action="store_true",
+        help="Deprecated: auto-promotion is disabled; candidates require manual promotion.",
+    )
     return parser.parse_args()
 
 
@@ -492,7 +496,6 @@ def main() -> None:
     candidate_dir.mkdir(parents=True, exist_ok=True)
     out_version = candidate_dir / f"best_flood_model_{args.version}.pth"
     out_candidate = candidate_dir / "best_flood_model_water_aware_candidate.pth"
-    out_default = model_dir / "best_flood_model_water_aware.pth"
     torch.save(best, out_version)
     shutil.copy2(out_version, out_candidate)
     print(f"Saved candidate: {out_version}")
@@ -542,11 +545,13 @@ def main() -> None:
             gate_passed = False
             raise RuntimeError(f"Readiness gate failed for candidate model: {exc}") from exc
 
-    if args.promote and gate_passed:
-        shutil.copy2(out_candidate, out_default)
-        print(f"Promoted to production default: {out_default}")
-    else:
-        print("Candidate not auto-promoted (manual review required).")
+    if args.promote:
+        raise RuntimeError(
+            "--promote is no longer supported. Auto-promotion is disabled; "
+            "promote manually after canary + readiness review."
+        )
+
+    print("Candidate not auto-promoted (manual review required).")
 
     if IN_COLAB:
         files.download(str(out_version))

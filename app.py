@@ -83,12 +83,32 @@ def build_model(head_variant: str = "deep") -> nn.Module:
         )
     return m.to(DEVICE)
 
+
+def _assert_not_lfs_pointer(model_path: Path) -> None:
+    """
+    Fail fast on Git LFS pointer files to avoid opaque torch.load errors.
+    """
+    try:
+        size_bytes = model_path.stat().st_size
+        with open(model_path, "rb") as handle:
+            first_line = handle.readline(256).decode("utf-8", errors="ignore").strip()
+    except OSError as exc:
+        raise RuntimeError(f"Unable to inspect model file at {model_path}: {exc}") from exc
+
+    if size_bytes < 1024 or first_line.startswith("version https://git-lfs.github.com/spec/v1"):
+        raise RuntimeError(
+            f"Model file at {model_path} appears to be a Git LFS pointer, not real weights. "
+            "Run `git lfs pull` to fetch model binaries, then restart the service."
+        )
+
+
 def load_model() -> nn.Module:
     if not MODEL_PATH.exists():
         logger.warning(f"Model file not found at {MODEL_PATH}. Using random weights.")
         model = build_model()
         model.eval()
         return model
+    _assert_not_lfs_pointer(MODEL_PATH)
     checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
     state_dict = checkpoint.get("model_state_dict", checkpoint)
     model = build_model(head_variant="deep")
@@ -137,6 +157,7 @@ def _is_collapsed() -> bool:
     if not MODEL_PATH.exists():
         return False
     try:
+        _assert_not_lfs_pointer(MODEL_PATH)
         ck = torch.load(MODEL_PATH, map_location="cpu", weights_only=False)
         vl = ck.get("best_val_loss", ck.get("val_loss", 1.0)) if isinstance(ck, dict) else 1.0
         return isinstance(vl, float) and vl < 1e-5
