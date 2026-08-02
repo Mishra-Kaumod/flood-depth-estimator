@@ -1,13 +1,16 @@
 name: Model Readiness Gate
+# Rewritten from the Django-era evaluator to the Flask SegFormer pipeline on 2026-08-02; keep this workflow active.
 
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - "evaluate_model_readiness.py"
-      - "flood_api/**"
-      - "core_logic.py"
+      - "create_labeled_manifest.py"
+      - "src/**"
+      - "app.py"
       - "test_images/**"
+      - "requirements-local.txt"
       - ".github/workflows/model-readiness-gate.yml"
 
 jobs:
@@ -30,7 +33,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements_v2.txt
+          pip install -r requirements-local.txt
+          pip install "opencv-python-headless>=4.9.0.80"
 
       - name: Build enterprise labeled manifest
         run: |
