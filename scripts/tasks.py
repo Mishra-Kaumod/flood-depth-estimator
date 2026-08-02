@@ -5,6 +5,7 @@ Celery queue adapter for the shared flood event pipeline.
 from __future__ import annotations
 
 import logging
+import os
 
 from celery import Celery
 
@@ -15,17 +16,25 @@ from src.pipeline import execute_event
 
 logger = logging.getLogger(__name__)
 
-REDIS_URL = "redis://localhost:6379/0"
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
 celery_app = Celery("flood_tasks", broker=REDIS_URL, backend=REDIS_URL)
 celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
-    task_routes={"tasks.infer_flood_depth": {"queue": "flood_inference"}},
+    task_routes={
+        "scripts.tasks.infer_flood_depth": {"queue": "flood_inference"},
+        "tasks.infer_flood_depth": {"queue": "flood_inference"},
+    },
     task_soft_time_limit=25,
     task_time_limit=30,
     worker_prefetch_multiplier=1,
+    broker_connection_retry_on_startup=False,
+    broker_connection_max_retries=1,
+    result_backend_transport_options={
+        "retry_policy": {"max_retries": 1, "interval_start": 0, "interval_step": 0.2, "interval_max": 0.5}
+    },
 )
 
 

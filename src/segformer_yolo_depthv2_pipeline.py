@@ -18,6 +18,7 @@ import logging
 import os
 import pickle
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -25,7 +26,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from src.middleware.budget_tracker import ApiBudgetConfig, ApiBudgetTracker
+from src.middleware.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
+from src.middleware.observability import METRICS
+from src.middleware.retry import RetryPolicy, run_with_retry
 from src.reference_depth_estimator import ReferenceDepthEstimator
+from src.settings import load_settings_dict
 from src.water_region_detector import WaterRegionDetector
 
 logger = logging.getLogger(__name__)
@@ -107,8 +113,39 @@ class SegformerYoloDepthV2Pipeline:
         self._yolo_backend = "contour-proxy"
         self._load_yolo_if_available()
         # Gemini — stages 3-5 only
+        settings = load_settings_dict()
+        inference_cfg = settings.get("inference", {})
+        gemini_cfg = inference_cfg.get("gemini", {})
+        retry_cfg = gemini_cfg.get("retry", {})
+        circuit_cfg = gemini_cfg.get("circuit_breaker", {})
+        budget_cfg = gemini_cfg.get("budget", {})
+
         self._gemini_model = None
         self._gemini_key: Optional[str] = gemini_api_key or os.environ.get("GEMINI_API_KEY")
+        self._gemini_timeout_seconds = float(gemini_cfg.get("timeout_seconds", 8.0))
+        self._gemini_retry_policy = RetryPolicy(
+            max_attempts=int(retry_cfg.get("max_attempts", 2)),
+            base_delay_seconds=float(retry_cfg.get("base_delay_seconds", 0.3)),
+            max_delay_seconds=float(retry_cfg.get("max_delay_seconds", 2.0)),
+            jitter_seconds=float(retry_cfg.get("jitter_seconds", 0.1)),
+        )
+        self._gemini_circuit_breaker = CircuitBreaker(
+            CircuitBreakerConfig(
+                failure_threshold=int(circuit_cfg.get("failure_threshold", 5)),
+                failure_window_seconds=int(circuit_cfg.get("failure_window_seconds", 300)),
+                cooldown_seconds=int(circuit_cfg.get("cooldown_seconds", 180)),
+            )
+        )
+        self._gemini_budget = ApiBudgetTracker(
+            ApiBudgetConfig(
+                hourly_call_cap=int(budget_cfg.get("hourly_call_cap", 0)),
+                daily_call_cap=int(budget_cfg.get("daily_call_cap", 0)),
+                hourly_spend_cap_usd=float(budget_cfg.get("hourly_spend_cap_usd", 0.0)),
+                daily_spend_cap_usd=float(budget_cfg.get("daily_spend_cap_usd", 0.0)),
+                estimated_cost_per_call_usd=float(budget_cfg.get("estimated_cost_per_call_usd", 0.0)),
+            )
+        )
+        self._gemini_quota_per_minute = int(budget_cfg.get("verified_quota_per_minute", 0))
         if self._gemini_key:
             self._init_gemini()
 
@@ -122,6 +159,61 @@ class SegformerYoloDepthV2Pipeline:
         except Exception as exc:  # pragma: no cover
             logger.warning("Gemini init failed (%s). Stages 3-5 will use fallback.", exc)
             self._gemini_model = None
+
+    def _gemini_generate_content(self, content: Any, stage_name: str) -> Optional[str]:
+        if not self._gemini_model:
+            return None
+
+        if not self._gemini_circuit_breaker.allow_request():
+            METRICS.increment("gemini_circuit_breaker_open_total")
+            METRICS.increment("gemini_fallback_total")
+            return None
+
+        def call_once(_attempt: int):
+            can_call, reason = self._gemini_budget.try_consume()
+            if not can_call:
+                METRICS.increment("gemini_budget_block_total")
+                raise RuntimeError(f"Gemini budget limit reached: {reason}")
+            METRICS.increment("gemini_call_total")
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(self._gemini_model.generate_content, content)
+                try:
+                    resp = future.result(timeout=self._gemini_timeout_seconds)
+                except FutureTimeoutError as exc:
+                    METRICS.increment("gemini_timeout_total")
+                    raise TimeoutError(
+                        f"Gemini {stage_name} call exceeded {self._gemini_timeout_seconds:.1f}s timeout"
+                    ) from exc
+            return resp
+
+        try:
+            response = run_with_retry(
+                operation=call_once,
+                policy=self._gemini_retry_policy,
+                on_retry=lambda _attempt, _delay, _exc: METRICS.increment("gemini_retry_total"),
+            )
+            self._gemini_circuit_breaker.record_success()
+            METRICS.increment("gemini_success_total")
+            text = getattr(response, "text", "")
+            return text if isinstance(text, str) else None
+        except Exception as exc:
+            self._gemini_circuit_breaker.record_failure()
+            METRICS.increment("gemini_fallback_total")
+            logger.warning("Gemini %s call failed, falling back to classical path: %s", stage_name, exc)
+            return None
+
+    @staticmethod
+    def _extract_json_object(response_text: str) -> Optional[Dict[str, Any]]:
+        if not response_text:
+            return None
+        match = re.search(r"\{.*?\}", response_text.strip(), re.DOTALL)
+        if not match:
+            return None
+        try:
+            parsed = json.loads(match.group())
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
 
     def _load_yolo_if_available(self) -> None:
         if not self.yolo_weights_path.exists():
@@ -477,10 +569,10 @@ class SegformerYoloDepthV2Pipeline:
                 '"dense_depth_proxy_0_to_1": 0.29, "references_found": ["car at ~35cm"], '
                 '"confidence": 0.75}'
             )
-            resp = self._gemini_model.generate_content([prompt, pil_img])
-            match = re.search(r"\{.*?\}", resp.text.strip(), re.DOTALL)
-            if match:
-                return json.loads(match.group())
+            response_text = self._gemini_generate_content([prompt, pil_img], stage_name="stage-3")
+            payload = self._extract_json_object(response_text or "")
+            if payload is not None:
+                return payload
         except Exception as exc:
             logger.warning("Gemini stage-3 dense-depth call failed: %s", exc)
         return None
@@ -507,10 +599,10 @@ class SegformerYoloDepthV2Pipeline:
                 "Combine the image and sensor data. Respond ONLY with JSON (no markdown): "
                 '{"fused_depth_cm": 45.0, "confidence": 0.82, "key_signal": "car bumper submerged ~35cm"}'
             )
-            resp = self._gemini_model.generate_content([prompt, pil_img])
-            match = re.search(r"\{.*?\}", resp.text.strip(), re.DOTALL)
-            if match:
-                return json.loads(match.group())
+            response_text = self._gemini_generate_content([prompt, pil_img], stage_name="stage-4")
+            payload = self._extract_json_object(response_text or "")
+            if payload is not None:
+                return payload
         except Exception as exc:
             logger.warning("Gemini stage-4 fusion call failed: %s", exc)
         return None
@@ -538,10 +630,10 @@ class SegformerYoloDepthV2Pipeline:
                 '{"bucket_level": "MEDIUM", "calibrated_depth_cm": 45.0, "confidence": 0.85, '
                 '"next_action": "Issue Municipal Warning", "rationale": "one-line reason"}'
             )
-            resp = self._gemini_model.generate_content(prompt)
-            match = re.search(r"\{.*?\}", resp.text.strip(), re.DOTALL)
-            if match:
-                return json.loads(match.group())
+            response_text = self._gemini_generate_content(prompt, stage_name="stage-5")
+            payload = self._extract_json_object(response_text or "")
+            if payload is not None:
+                return payload
         except Exception as exc:
             logger.warning("Gemini stage-5 calibration call failed: %s", exc)
         return None
@@ -555,6 +647,7 @@ class SegformerYoloDepthV2Pipeline:
             raise ValueError("predict expects an RGB image array with shape (H, W, 3)")
 
         trace: List[Dict[str, str]] = []
+        METRICS.increment("pipeline_predictions_total")
 
         water_mask, water_coverage_pct, water_confidence, water_flags = (
             self._segformer_water_mask(image_rgb)
@@ -747,6 +840,7 @@ class SegformerYoloDepthV2Pipeline:
             # surface a numeric depth/severity estimate at all.
             if water_confidence < 0.45:
                 water_detection_unreliable = True
+                METRICS.increment("depth_suppressed_total")
                 provisional_depth_cm = float(depth_cm)
                 suppressed_depth_reason = (
                     "Water mask quality is too low for a reliable depth estimate. "
@@ -772,6 +866,9 @@ class SegformerYoloDepthV2Pipeline:
             "suppressed_depth_reason": suppressed_depth_reason,
             "provisional_depth_cm": provisional_depth_cm,
             "gemini_enhanced": self._gemini_model is not None,
+            "gemini_quota_per_minute": self._gemini_quota_per_minute,
+            "gemini_circuit_breaker_state": self._gemini_circuit_breaker.state(),
+            "gemini_budget_state": self._gemini_budget.snapshot(),
             "visual_cues": visual_cues,
             "label_guide": reference_estimate.get("label_guide", ""),
             "waterline_pct": reference_estimate.get("waterline_pct", 0.0),

@@ -112,7 +112,7 @@ class UnifiedEventProcessor:
         confidence = min(max(depth_normalized * 1.1, 0.0), 1.0)
         if self.use_mc_dropout_confidence:
             try:
-                from mc_dropout import mc_dropout_confidence
+                from scripts.mc_dropout import mc_dropout_confidence
 
                 mean_val, confidence = mc_dropout_confidence(
                     self.model,
@@ -133,7 +133,12 @@ class UnifiedEventProcessor:
 
         if self.pipeline_mode == "segformer_yolov8_depthv2_fusion":
             staged = self.segformer_yolo_depth_pipeline.predict(np.array(image))
-            depth_cm = float(staged["depth_cm"])
+            depth_value = staged.get("depth_cm")
+            if depth_value is None:
+                depth_value = staged.get("provisional_depth_cm", 0.0)
+                metadata["depth_suppressed"] = True
+                metadata["suppressed_depth_reason"] = staged.get("suppressed_depth_reason", "")
+            depth_cm = float(depth_value or 0.0)
             confidence = float(staged["confidence"])
             method = str(staged.get("method", "segformer_yolov8_depthv2_fusion"))
             action = str(staged.get("action_trigger", "Monitor"))

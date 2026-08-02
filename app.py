@@ -4,10 +4,14 @@ Flood Depth Estimator — Rich Web UI
 """
 
 import base64
+import collections
 import io
 import json
 import logging
 import os
+import threading
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -15,10 +19,12 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 from PIL import Image
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, Response, jsonify, render_template_string, request
 
+from src.middleware.observability import METRICS, render_prometheus_metrics
 from src.reference_depth_estimator import ReferenceDepthEstimator
 from src.segformer_yolo_depthv2_pipeline import get_segformer_yolo_depthv2_pipeline
+from src.settings import load_settings_dict
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -141,6 +147,98 @@ _MODEL_COLLAPSED = _is_collapsed()
 if _MODEL_COLLAPSED:
     logger.warning("🔀 ML model is collapsed → predictions will use reference_object_cv fallback")
 logger.info(f"Model ready on {DEVICE}")
+
+_SETTINGS = load_settings_dict()
+_INFERENCE_CFG = _SETTINGS.get("inference", {})
+_SECURITY_CFG = _INFERENCE_CFG.get("security", {})
+_RATE_LIMIT_CFG = _SECURITY_CFG.get("rate_limit", {})
+_MONITORING_CFG = _SETTINGS.get("monitoring", {})
+_ALERT_PROFILES = _MONITORING_CFG.get("alert_profiles", {})
+
+
+class SlidingWindowRateLimiter:
+    def __init__(self, max_requests: int, window_seconds: int):
+        self.max_requests = max(1, int(max_requests))
+        self.window_seconds = max(1, int(window_seconds))
+        self._events = collections.defaultdict(collections.deque)
+        self._lock = threading.Lock()
+
+    def allow(self, key: str) -> tuple[bool, int]:
+        now = time.time()
+        with self._lock:
+            events = self._events[key]
+            window_start = now - self.window_seconds
+            while events and events[0] < window_start:
+                events.popleft()
+            if len(events) >= self.max_requests:
+                retry_after = int(max(1, self.window_seconds - (now - events[0])))
+                return False, retry_after
+            events.append(now)
+            return True, 0
+
+
+_PREDICT_RATE_LIMITER = SlidingWindowRateLimiter(
+    max_requests=int(_RATE_LIMIT_CFG.get("max_requests_per_window", 60)),
+    window_seconds=int(_RATE_LIMIT_CFG.get("window_seconds", 60)),
+)
+
+_IMAGE_SIGNATURES = {
+    "jpeg": [b"\xff\xd8\xff"],
+    "png": [b"\x89PNG\r\n\x1a\n"],
+    "gif": [b"GIF87a", b"GIF89a"],
+    "bmp": [b"BM"],
+    "tiff": [b"II*\x00", b"MM\x00*"],
+}
+_ALLOWED_MIMES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/bmp",
+    "image/tiff",
+}
+
+
+def _detected_image_format(raw: bytes) -> str | None:
+    if len(raw) < 12:
+        return None
+    for fmt, signatures in _IMAGE_SIGNATURES.items():
+        if any(raw.startswith(sig) for sig in signatures):
+            return fmt
+    if raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def _validate_image_upload(raw: bytes, mime_type: str | None) -> tuple[bool, str]:
+    fmt = _detected_image_format(raw)
+    if fmt is None:
+        return False, "Unsupported or invalid image file signature."
+    mime = (mime_type or "").strip().lower()
+    if mime and mime not in _ALLOWED_MIMES:
+        return False, f"Unsupported MIME type: {mime_type}"
+    return True, fmt
+
+
+def _client_rate_key() -> str:
+    api_key = request.headers.get("X-API-Key", "").strip()
+    if api_key:
+        return f"api_key:{api_key}"
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return f"ip:{forwarded.split(',')[0].strip()}"
+    return f"ip:{request.remote_addr or 'unknown'}"
+
+
+def _active_alert_profile() -> tuple[str, dict]:
+    peak = _ALERT_PROFILES.get("peak_season", {})
+    off = _ALERT_PROFILES.get("off_season", {})
+    peak_months = peak.get("months", [6, 7, 8, 9])
+    month = datetime.now(timezone.utc).month
+    if month in peak_months:
+        return "peak_season", peak
+    return "off_season", off
 
 # ─────────────────────────────────────────────────────────
 # HTML Template
@@ -839,7 +937,11 @@ def predict_batch():
         name = (names[i] if i < len(names) and names[i] else file.filename) or f"Image {i+1}"
 
         try:
-            image = Image.open(io.BytesIO(file.read())).convert("RGB")
+            raw = file.read()
+            ok, detail = _validate_image_upload(raw, file.mimetype)
+            if not ok:
+                raise ValueError(detail)
+            image = Image.open(io.BytesIO(raw)).convert("RGB")
             pred = _predict_single(image)
             if pred.get("no_reference_warning"):
                 if pred.get("water_detection_unreliable"):
@@ -865,16 +967,105 @@ def predict_batch():
 
 @app.post("/predict")
 def predict():
-    """Single-image prediction (kept for compatibility)."""
+    """
+    Async-by-default prediction endpoint.
+    Enqueues Celery job and returns a job_id immediately.
+    Use ?sync=1 for direct synchronous execution.
+    """
+    rate_key = _client_rate_key()
+    allowed, retry_after = _PREDICT_RATE_LIMITER.allow(rate_key)
+    if not allowed:
+        return (
+            jsonify(
+                {
+                    "error": "Rate limit exceeded for /predict",
+                    "retry_after_seconds": retry_after,
+                }
+            ),
+            429,
+        )
+
     if "image" not in request.files:
         return jsonify({"error": "No image field"}), 400
     file = request.files["image"]
+    raw = file.read()
+    ok, detail = _validate_image_upload(raw, file.mimetype)
+    if not ok:
+        return jsonify({"error": detail}), 400
+
+    if request.args.get("sync", "").strip().lower() in {"1", "true", "yes"}:
+        try:
+            image = Image.open(io.BytesIO(raw)).convert("RGB")
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
+        pred = _predict_single(image)
+        return jsonify({**pred, "device": str(DEVICE), "mode": "sync"})
+
     try:
-        image = Image.open(io.BytesIO(file.read())).convert("RGB")
+        from scripts.tasks import celery_app, infer_flood_depth
+        from src.event_contract import FloodEvent
+
+        lat = float(request.form.get("lat") or request.form.get("latitude") or 12.9716)
+        lng = float(request.form.get("lng") or request.form.get("longitude") or 77.5946)
+        camera_id = (request.form.get("camera_id") or "predict_upload").strip()
+        event = FloodEvent(
+            source="api",
+            camera_id=camera_id,
+            latitude=lat,
+            longitude=lng,
+            image_b64=base64.b64encode(raw).decode("utf-8"),
+            metadata={
+                "filename": file.filename or "",
+                "mime_type": file.mimetype or "",
+                "client_ip": request.remote_addr,
+                "endpoint": "/predict",
+            },
+        )
+        task = infer_flood_depth.apply_async(args=[event.to_task_payload()], retry=False)
+        return (
+            jsonify(
+                {
+                    "status": "queued",
+                    "job_id": task.id,
+                    "poll_url": f"/predict/{task.id}",
+                    "event_id": event.event_id,
+                    "trace_id": event.trace_id,
+                    "schema_version": event.schema_version,
+                    "mode": "async",
+                }
+            ),
+            202,
+        )
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
-    pred = _predict_single(image)
-    return jsonify({**pred, "device": str(DEVICE)})
+        logger.warning("Async queue unavailable, falling back to sync /predict: %s", e)
+        try:
+            image = Image.open(io.BytesIO(raw)).convert("RGB")
+        except Exception as inner:
+            return jsonify({"error": str(inner)}), 400
+        pred = _predict_single(image)
+        return jsonify({**pred, "device": str(DEVICE), "mode": "sync_fallback"})
+
+
+@app.get("/predict/<job_id>")
+def predict_status(job_id: str):
+    try:
+        from scripts.tasks import celery_app
+        from celery.result import AsyncResult
+    except Exception as exc:
+        return jsonify({"error": f"Celery unavailable: {exc}"}), 503
+
+    result = AsyncResult(job_id, app=celery_app)
+    state = (result.state or "").upper()
+    if state in {"PENDING", "RECEIVED", "STARTED", "RETRY"}:
+        return jsonify({"job_id": job_id, "status": "processing", "state": state}), 202
+    if state == "SUCCESS":
+        payload = result.result
+        if isinstance(payload, dict):
+            return jsonify({"job_id": job_id, "status": "done", "state": state, "result": payload}), 200
+        return jsonify({"job_id": job_id, "status": "done", "state": state, "result": str(payload)}), 200
+    if state == "FAILURE":
+        return jsonify({"job_id": job_id, "status": "error", "state": state, "error": str(result.result)}), 500
+    return jsonify({"job_id": job_id, "status": "unknown", "state": state}), 200
 
 
 @app.get("/health")
@@ -892,6 +1083,7 @@ def health():
         gemini_active = _pipe._gemini_model is not None
     else:
         gemini_active = False
+    alert_profile_name, _alert_cfg = _active_alert_profile()
     return jsonify({
         "status": "ok",
         "model": "SegFormer→YOLOv8→DepthAnythingV2→Fusion" if pipeline_active else str(MODEL_PATH.name),
@@ -901,7 +1093,38 @@ def health():
         "active_method": active_method,
         "gemini_enhanced_stages_3_5": gemini_active,
         "reference_cv_available": True,
+        "active_alert_profile": alert_profile_name,
     })
+
+
+@app.get("/metrics")
+def metrics():
+    counters = METRICS.snapshot().get("counters", {})
+    gemini_calls = float(counters.get("gemini_call_total", 0))
+    gemini_fallbacks = float(counters.get("gemini_fallback_total", 0))
+    gemini_circuit_opens = float(counters.get("gemini_circuit_breaker_open_total", 0))
+    predictions = float(counters.get("pipeline_predictions_total", 0))
+    suppressions = float(counters.get("depth_suppressed_total", 0))
+    if gemini_calls > 0:
+        METRICS.set_gauge("gemini_fallback_rate", gemini_fallbacks / gemini_calls)
+        METRICS.set_gauge("gemini_circuit_breaker_open_rate", gemini_circuit_opens / gemini_calls)
+    if predictions > 0:
+        METRICS.set_gauge("depth_suppression_rate", suppressions / predictions)
+
+    alert_profile_name, profile = _active_alert_profile()
+    thresholds = profile.get("thresholds", {}) if isinstance(profile, dict) else {}
+    METRICS.set_gauge("alert_profile_peak_active", 1.0 if alert_profile_name == "peak_season" else 0.0)
+    if "pipeline_p95_latency_ms" in thresholds:
+        METRICS.set_gauge("alert_threshold_pipeline_p95_latency_ms", float(thresholds["pipeline_p95_latency_ms"]))
+    if "events_failed_rate" in thresholds:
+        METRICS.set_gauge("alert_threshold_events_failed_rate", float(thresholds["events_failed_rate"]))
+    if "gemini_fallback_rate" in thresholds:
+        METRICS.set_gauge("alert_threshold_gemini_fallback_rate", float(thresholds["gemini_fallback_rate"]))
+    if "depth_suppression_rate" in thresholds:
+        METRICS.set_gauge("alert_threshold_depth_suppression_rate", float(thresholds["depth_suppression_rate"]))
+
+    payload = render_prometheus_metrics()
+    return Response(payload, mimetype="text/plain; version=0.0.4; charset=utf-8")
 
 
 
@@ -938,8 +1161,8 @@ def ingest():
         return jsonify({"error": "Validation failed", "detail": exc.errors()}), 422
 
     try:
-        from tasks import infer_flood_depth
-        task = infer_flood_depth.apply_async(args=[payload.to_task_payload()])
+        from scripts.tasks import infer_flood_depth
+        task = infer_flood_depth.apply_async(args=[payload.to_task_payload()], retry=False)
         return jsonify({
             "task_id": task.id,
             "status": "queued",
