@@ -27,7 +27,6 @@ fastapi>=0.95.0  # Optional, for REST wrapper
 
 # Monitoring & Logging
 python-json-logger>=2.0.0
-tensorboard>=2.11.0
 
 # Development & Testing
 pytest>=7.0.0

@@ -125,8 +125,10 @@ def main() -> None:
     manifest_path = (repo_root / args.manifest).resolve()
 
     if not cand_model_path.exists():
-        print(f"Candidate checkpoint not found at {cand_model_path}; skipping shadow canary.")
-        return
+        raise SystemExit(
+            f"Candidate checkpoint missing: {cand_model_path}. "
+            "Generate it via scripts/retrain_flood_classifier.py before running shadow canary."
+        )
     if not prod_model_path.exists():
         raise SystemExit(f"Production checkpoint missing: {prod_model_path}")
     if not manifest_path.exists():

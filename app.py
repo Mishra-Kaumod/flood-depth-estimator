@@ -95,7 +95,7 @@ def _assert_not_lfs_pointer(model_path: Path) -> None:
     except OSError as exc:
         raise RuntimeError(f"Unable to inspect model file at {model_path}: {exc}") from exc
 
-    if size_bytes < 1024 or first_line.startswith("version https://git-lfs.github.com/spec/v1"):
+    if size_bytes < 1024 and first_line.startswith("version https://git-lfs.github.com/spec/v1"):
         raise RuntimeError(
             f"Model file at {model_path} appears to be a Git LFS pointer, not real weights. "
             "Run `git lfs pull` to fetch model binaries, then restart the service."

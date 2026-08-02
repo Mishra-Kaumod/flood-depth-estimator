@@ -498,6 +498,8 @@ def main() -> None:
     out_candidate = candidate_dir / "best_flood_model_water_aware_candidate.pth"
     torch.save(best, out_version)
     shutil.copy2(out_version, out_candidate)
+    if not out_candidate.exists():
+        raise RuntimeError(f"Candidate alias was not created at {out_candidate}")
     print(f"Saved candidate: {out_version}")
     print(f"Updated candidate alias: {out_candidate}")
 
