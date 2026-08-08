@@ -50,6 +50,9 @@ def summarize_event_result(result: dict[str, Any], image_name: str | None = None
     water_coverage = structured.get("water_coverage_pct")
     reference_count = int(structured.get("reference_count", 0))
     reference_depth = structured.get("reference_depth_cm")
+    near_water = structured.get("near_water_coverage_pct")
+    mid_water = structured.get("mid_water_coverage_pct")
+    far_water = structured.get("far_water_coverage_pct")
 
     print("\n" + "=" * 60)
     print("INFERENCE RESULT")
@@ -66,6 +69,19 @@ def summarize_event_result(result: dict[str, Any], image_name: str | None = None
         print(f"Reference objects found: {reference_count}")
     if reference_depth is not None and reference_depth > 0:
         print(f"Reference-based depth: {reference_depth:.2f} cm")
+    if near_water is not None:
+        print(f"Near-field water: {near_water:.2f}%")
+    if mid_water is not None:
+        print(f"Mid-field water: {mid_water:.2f}%")
+    if far_water is not None:
+        print(f"Far-field water: {far_water:.2f}%")
+    print(f"Immediate risk: {bool(structured.get('immediate_risk', False))}")
+    print(f"Far water only: {bool(structured.get('far_water_only', False))}")
+    print(f"Mask quality warning: {bool(structured.get('mask_quality_warning', False))}")
+    if payload.get("review_required"):
+        print("Review required: Yes")
+        if payload.get("review_reason"):
+            print(f"Review reason: {payload.get('review_reason')}")
 
     if trace:
         print("\nPipeline summary:")

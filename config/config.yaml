@@ -131,7 +131,7 @@ inference:
   output_format: "json"
   confidence_threshold: 0.5
   llm_judge:
-    enabled: true
+    enabled: false
     provider: "google"
     model: "gemini-flash-latest"
     endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"

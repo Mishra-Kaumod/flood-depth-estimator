@@ -426,6 +426,50 @@ class SegformerYoloDepthV2Pipeline:
         estimate = max(min_depth, estimate)
         return float(np.clip(estimate, 0.0, 180.0))
 
+    def _water_zone_features(self, water_mask: np.ndarray) -> Dict[str, float | bool]:
+        h, w = water_mask.shape[:2]
+        if h == 0 or w == 0:
+            return {
+                "near_water_coverage_pct": 0.0,
+                "mid_water_coverage_pct": 0.0,
+                "far_water_coverage_pct": 0.0,
+                "water_touches_bottom": False,
+                "far_water_only": False,
+                "far_dominant_water": False,
+                "broad_mask_warning": False,
+                "immediate_risk": False,
+                "mask_quality_warning": True,
+            }
+
+        water = water_mask > 0
+        far = water[: int(h * 0.25), :]
+        mid = water[int(h * 0.25): int(h * 0.60), :]
+        near = water[int(h * 0.60):, :]
+        bottom_band = water[int(h * 0.92):, :]
+
+        far_pct = float(far.mean() * 100.0) if far.size else 0.0
+        mid_pct = float(mid.mean() * 100.0) if mid.size else 0.0
+        near_pct = float(near.mean() * 100.0) if near.size else 0.0
+        bottom_pct = float(bottom_band.mean() * 100.0) if bottom_band.size else 0.0
+
+        water_touches_bottom = bottom_pct >= 3.0
+        far_water_only = far_pct >= 5.0 and near_pct < 5.0 and mid_pct < 10.0
+        far_dominant_water = far_pct >= near_pct + 30.0 and near_pct < 45.0
+        broad_mask_warning = near_pct >= 55.0 and mid_pct >= 45.0 and far_pct >= 45.0
+        immediate_risk = (near_pct >= 12.0 or (water_touches_bottom and mid_pct >= 15.0)) and not far_dominant_water
+        mask_quality_warning = broad_mask_warning or (near_pct >= 85.0 and mid_pct >= 85.0) or (far_pct + mid_pct + near_pct < 1.0)
+
+        return {
+            "near_water_coverage_pct": round(near_pct, 4),
+            "mid_water_coverage_pct": round(mid_pct, 4),
+            "far_water_coverage_pct": round(far_pct, 4),
+            "water_touches_bottom": water_touches_bottom,
+            "far_water_only": far_water_only,
+            "far_dominant_water": far_dominant_water,
+            "broad_mask_warning": broad_mask_warning,
+            "immediate_risk": immediate_risk,
+            "mask_quality_warning": mask_quality_warning,
+        }
     def _fusion_engine(
         self,
         water_mask: np.ndarray,
@@ -467,6 +511,8 @@ class SegformerYoloDepthV2Pipeline:
             dense_depth_cm=dense_depth_cm,
         )
 
+        zone_features = self._water_zone_features(water_mask)
+
         features = {
             "water_coverage_pct": round(float(water_coverage_pct), 4),
             "reference_count": float(len(references)),
@@ -482,6 +528,7 @@ class SegformerYoloDepthV2Pipeline:
             "largest_water_region_aspect": largest_region_aspect,
             "waterline_pct": round(waterline_pct, 2),
             "region_depth_cm": round(region_depth_cm, 2),
+            **zone_features,
         }
         return features
 
@@ -512,11 +559,11 @@ class SegformerYoloDepthV2Pipeline:
             # road being waist-deep. Keep Depth Anything as a supporting signal,
             # then cap by scene coverage and submersion strength.
             depth_cm = (0.65 * reference_depth_cm) + (0.35 * dense_depth_cm)
-            if coverage < 0.75 and max_reference_submersion < 0.85:
+            if coverage < 0.75 and max_reference_submersion < 0.70:
                 depth_cm = min(depth_cm, 45.0)
             elif coverage < 0.85 and max_reference_submersion < 0.90:
                 depth_cm = min(depth_cm, 65.0)
-            if max_reference_submersion < 0.80 and coverage < 0.70:
+            if max_reference_submersion < 0.70 and coverage < 0.70:
                 depth_cm = min(depth_cm, 55.0)
             if max_reference_submersion < 0.70 and coverage < 0.65:
                 depth_cm = min(depth_cm, 45.0)
@@ -538,14 +585,48 @@ class SegformerYoloDepthV2Pipeline:
             else:
                 depth_cm = 3.0
 
+        near_pct = features.get("near_water_coverage_pct", 0.0) / 100.0
+        mid_pct = features.get("mid_water_coverage_pct", 0.0) / 100.0
+        far_water_only = bool(features.get("far_water_only", False))
+        far_dominant_water = bool(features.get("far_dominant_water", False))
+        broad_mask_warning = bool(features.get("broad_mask_warning", False))
+        immediate_risk = bool(features.get("immediate_risk", False))
+        water_touches_bottom = bool(features.get("water_touches_bottom", False))
+        strong_vehicle_submersion = reference_count >= 2 and max_reference_submersion >= 0.70
+        useful_reference_evidence = reference_count >= 1 and max_reference_submersion >= 0.45
+        weak_reference_evidence = not useful_reference_evidence
+
+        # For CCTV/apartment feeds, image position is not reliable enough to be
+        # a hard decision rule. Far/near gates only cap depth when there is no
+        # useful object-submersion evidence.
+        if far_water_only and weak_reference_evidence:
+            depth_cm = min(depth_cm, 15.0)
+        elif far_dominant_water and weak_reference_evidence:
+            depth_cm = min(depth_cm, 20.0)
+        elif broad_mask_warning:
+            if near_pct >= 0.70 and max_reference_submersion >= 0.85:
+                depth_cm = min(depth_cm, 40.0)
+            else:
+                depth_cm = min(depth_cm, 25.0)
+        elif not immediate_risk and near_pct < 0.05 and weak_reference_evidence:
+            depth_cm = min(depth_cm, 20.0)
+        elif near_pct < 0.12 and mid_pct < 0.20 and max_reference_submersion < 0.60:
+            depth_cm = min(depth_cm, 30.0)
+        elif near_pct < 0.25 and max_reference_submersion < 0.60:
+            depth_cm = min(depth_cm, 45.0)
+
         depth_cm = float(np.clip(depth_cm, 0.0, 180.0))
         confidence = float(np.clip(0.35 + (coverage * 0.35) + (min(reference_count, 1.0) * 0.30), 0.2, 0.98))
+        if bool(features.get("mask_quality_warning", False)):
+            confidence = min(confidence, 0.72)
 
-        if self._is_waterlogged(depth_cm, coverage, max_reference_submersion):
-            action = "Monitor"
-        elif depth_cm >= 100.0:
+        if (far_water_only and weak_reference_evidence) or (far_dominant_water and weak_reference_evidence) or self._is_waterlogged(depth_cm, coverage, max_reference_submersion):
+            action = "Monitor" if depth_cm < 10.0 else "Advisory Monitoring"
+        elif not immediate_risk and depth_cm < 30.0:
+            action = "Advisory Monitoring"
+        elif depth_cm >= 100.0 and immediate_risk and water_touches_bottom:
             action = "Deploy Emergency Diversion"
-        elif depth_cm >= 60.0:
+        elif depth_cm >= 60.0 and (immediate_risk or strong_vehicle_submersion):
             action = "Activate Traffic Management"
         elif depth_cm >= 30.0:
             action = "Issue Municipal Warning"
@@ -607,6 +688,7 @@ class SegformerYoloDepthV2Pipeline:
                 "status": "ok",
                 "summary": (
                     f"coverage={features['water_coverage_pct']:.2f}% "
+                    f"near={features['near_water_coverage_pct']:.2f}% "
                     f"refs={int(features['reference_count'])} p90={features['dense_depth_p90']:.3f}"
                 ),
             }

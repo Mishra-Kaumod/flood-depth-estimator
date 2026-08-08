@@ -94,6 +94,12 @@ class FloodApiService:
                     "dense_depth_mean": structured.get("dense_depth_mean"),
                     "dense_depth_p90": structured.get("dense_depth_p90"),
                     "dense_depth_p95": structured.get("dense_depth_p95"),
+                    "near_water_coverage_pct": structured.get("near_water_coverage_pct"),
+                    "mid_water_coverage_pct": structured.get("mid_water_coverage_pct"),
+                    "far_water_coverage_pct": structured.get("far_water_coverage_pct"),
+                    "far_water_only": structured.get("far_water_only"),
+                    "immediate_risk": structured.get("immediate_risk"),
+                    "mask_quality_warning": structured.get("mask_quality_warning"),
                     "visual_cues": result_payload.get("visual_cues", []),
                     "label_guide": result_payload.get("label_guide"),
                 }
@@ -108,6 +114,28 @@ class FloodApiService:
                         result_payload["llm_judge_raw_response"] = llm_judge_result["raw_response"]
                 except Exception as exc:
                     result_payload["llm_judge_error"] = str(exc)
+
+                if llm_judge_result and not llm_judge_result.get("parse_failed"):
+                    judge_depth = self._first_number(
+                        llm_judge_result.get("final_depth_cm"),
+                        llm_judge_result.get("recommended_depth_cm"),
+                        depth_cm,
+                    )
+                    judge_severity = self._first_text(
+                        llm_judge_result.get("final_severity"),
+                        llm_judge_result.get("recommended_severity"),
+                        result.severity_label,
+                    )
+                    depth_delta = abs(judge_depth - depth_cm)
+                    severity_disagrees = judge_severity.upper() != str(result.severity_label).upper()
+                    strong_disagreement = depth_delta >= 20.0 or severity_disagrees
+                    result_payload["review_required"] = bool(
+                        llm_judge_result.get("prediction_correct") is False and strong_disagreement
+                    )
+                    result_payload["review_reason"] = llm_judge_result.get("reason") if result_payload["review_required"] else None
+                    result_payload["operational_decision_source"] = "pipeline"
+                    if result_payload["review_required"]:
+                        result_payload["operational_note"] = "LLM reviewer disagreed; pipeline output retained for operation pending human review."
 
                 if llm_judge_result and llm_judge_result.get("prediction_correct") is False and self.llm_judge.apply_corrections:
                     corrected_depth = float(

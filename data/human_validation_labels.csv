@@ -1,0 +1,5 @@
+image_name,human_depth_cm,human_severity,near_field_risk,far_water_only,review_required,reason
+image_18.jpg,65,ALERT,true,false,false,cars heavily submerged; water reaches wheel/hood area
+image_233.jpg,40,WARNING,true,false,false,water reaches mid-wheel/lower bumper on multiple vehicles
+image_273.jpg,20,ADVISORY,false,false,false,partial shallow water near car tires; road still visible
+image_433.jpg,20,ADVISORY,false,true,false,water mostly far from camera; near field mostly road/board
