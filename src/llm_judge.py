@@ -8,6 +8,8 @@ recommend corrections for flood depth outputs.
 from __future__ import annotations
 
 import json
+import base64
+import mimetypes
 import os
 import urllib.error
 import urllib.request
@@ -27,7 +29,7 @@ class LLMJudge:
         self.model = str(config.get("model", DEFAULT_MODEL))
         self.endpoint = str(config.get("endpoint", DEFAULT_ENDPOINT))
         self.temperature = float(config.get("temperature", 0.0))
-        self.max_output_tokens = int(config.get("max_output_tokens", 256))
+        self.max_output_tokens = int(config.get("max_output_tokens", 2048))
         self.apply_corrections = bool(config.get("apply_corrections", False))
 
         self.api_key = config.get("google_api_key") or os.getenv("GOOGLE_API_KEY")
@@ -39,11 +41,20 @@ class LLMJudge:
         if self.enabled and self.provider != "google":
             raise ValueError("Only Google provider is supported by this LLM judge module")
 
-    def judge(self, prediction: Dict[str, Any]) -> Dict[str, Any]:
+    def judge(
+        self,
+        prediction: Dict[str, Any],
+        image_bytes: bytes | None = None,
+        filename: str | None = None,
+    ) -> Dict[str, Any]:
         if not self.enabled:
             return {"enabled": False}
 
-        request_payload = self._build_payload(prediction)
+        request_payload = self._build_payload(
+            prediction,
+            image_bytes=image_bytes,
+            filename=filename,
+        )
         response_text = self._call_google_api(request_payload)
         parsed = self._parse_json_response(response_text)
 
@@ -65,55 +76,71 @@ class LLMJudge:
         parsed["parse_failed"] = False
         return parsed
 
-    def _build_payload(self, prediction: Dict[str, Any]) -> Dict[str, Any]:
-        prompt = self._build_prompt(prediction)
+    def _build_payload(
+        self,
+        prediction: Dict[str, Any],
+        image_bytes: bytes | None = None,
+        filename: str | None = None,
+    ) -> Dict[str, Any]:
+        prompt = self._build_prompt(prediction, has_image=bool(image_bytes))
+        parts: list[dict[str, Any]] = [{"text": prompt}]
+        if image_bytes:
+            parts.append(
+                {
+                    "inline_data": {
+                        "mime_type": self._guess_mime_type(filename),
+                        "data": base64.b64encode(image_bytes).decode("ascii"),
+                    }
+                }
+            )
         return {
             "contents": [
                 {
-                    "parts": [
-                        {
-                            "text": prompt,
-                        }
-                    ]
+                    "parts": parts,
                 }
-            ]
+            ],
+            "generationConfig": {
+                "temperature": self.temperature,
+                "maxOutputTokens": self.max_output_tokens,
+                "responseMimeType": "application/json",
+            },
         }
 
-    def _build_prompt(self, prediction: Dict[str, Any]) -> str:
-        fields = [
-            f"Estimated depth (cm): {prediction.get('depth_cm', 'unknown')}",
-            f"Severity label: {prediction.get('severity_label', 'unknown')}",
-            f"Action trigger: {prediction.get('action_trigger', 'unknown')}",
-            f"Confidence %: {prediction.get('confidence_pct', 'unknown')}",
-            f"Water coverage %: {prediction.get('water_coverage_pct', 'unknown')}",
-            f"Reference depth cm: {prediction.get('reference_depth_cm', 'unknown')}",
-            f"Reference count: {prediction.get('reference_count', 'unknown')}",
-            f"Largest water region %: {prediction.get('largest_water_region_pct', 'unknown')}",
-            f"Dense depth p90: {prediction.get('dense_depth_p90', 'unknown')}",
-            f"Dense depth p95: {prediction.get('dense_depth_p95', 'unknown')}",
-            f"Region depth cm: {prediction.get('region_depth_cm', 'unknown')}",
-            f"Waterline pct: {prediction.get('waterline_pct', 'unknown')}",
-        ]
-        prompt_text = (
-            "You are a flood inference validation assistant. "
-            "You do NOT see the original image. You only receive structured pipeline evidence from the computer vision model. "
-            "Review the predicted flood depth and severity and compare them to the available scene evidence provided below. "
-            "The evidence includes water coverage, reference-depth statistics, region-based depth estimates, and visual cues extracted by the pipeline. "
-            "If the evidence clearly shows visible water, do not label the prediction as a false positive simply because the predicted depth is high. "
-            "If the evidence shows no visible water, explain that clearly. "
-            "If the evidence supports visible waterlogging but not a flood event, you may set recommended_severity and final_severity to \"WATERLOGGED\" or \"NO_FLOOD\" and explain that clearly. "
-            "Return ONLY a single JSON object with the exact keys: prediction_correct, recommended_depth_cm, recommended_severity, final_depth_cm, final_severity, evidence_summary, reason. "
-            "Use double quotes and do not include any explanation outside the JSON object. "
-            "Always provide final_depth_cm and final_severity as the final recommendation. "
-            "If you are uncertain, set prediction_correct to true and keep recommended_depth_cm and final_depth_cm equal to the predicted value.\n\n"
-            "Prediction details:\n"
-            + "\n".join(fields)
-            + "\n\nVisual cues:\n"
-            + "\n".join(str(cue) for cue in prediction.get("visual_cues", []))
-            + "\n\nRespond only with valid JSON."
-        )
-        return prompt_text
+    def _guess_mime_type(self, filename: str | None) -> str:
+        if filename:
+            mime_type, _ = mimetypes.guess_type(filename)
+            if mime_type and mime_type.startswith("image/"):
+                return mime_type
+        return "image/jpeg"
 
+    def _build_prompt(self, prediction: Dict[str, Any], has_image: bool = False) -> str:
+        compact = {
+            "predicted_depth_cm": prediction.get("depth_cm"),
+            "predicted_severity": prediction.get("severity_label"),
+            "action": prediction.get("action_trigger"),
+            "confidence_pct": prediction.get("confidence_pct"),
+            "water_coverage_pct": prediction.get("water_coverage_pct"),
+            "reference_depth_cm": prediction.get("reference_depth_cm"),
+            "reference_count": prediction.get("reference_count"),
+            "waterline_pct": prediction.get("waterline_pct"),
+            "dense_depth_p90": prediction.get("dense_depth_p90"),
+            "visual_cues": prediction.get("visual_cues", [])[:6],
+        }
+        image_instruction = (
+            "Inspect the attached image and compare it with these CV numbers."
+            if has_image
+            else "Use only these CV numbers; no image is attached."
+        )
+        return (
+            "You are a flood-depth reviewer. "
+            + image_instruction
+            + " Decide whether the predicted flood depth/severity matches a human visual review. "
+            "Return ONLY minified JSON with these exact keys: "
+            "prediction_correct, recommended_depth_cm, recommended_severity, final_depth_cm, final_severity, reason. "
+            "Use short values. prediction_correct must be true or false. Depth fields must be numbers in cm. "
+            "If unsure, keep the pipeline prediction. Evidence: "
+            + json.dumps(compact, separators=(",", ":"), default=str)
+        )
     def _call_google_api(self, payload: Dict[str, Any]) -> str:
         url = self.endpoint
         if "{model}" in url:

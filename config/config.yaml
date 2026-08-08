@@ -102,6 +102,11 @@ inference:
   device: "cpu"  # "cpu" or "cuda"
   precision: "float32"  # "float32" or "float16" for quantization
   pipeline_mode: "segformer_yolov8_depthv2_fusion"
+  depth_model:
+    enabled: true
+    backend: "depth_anything_v2"  # depth_anything_v2 | proxy
+    model_name: "depth-anything/Depth-Anything-V2-Small-hf"
+    device: -1  # -1 CPU, 0 first CUDA GPU
   use_mc_dropout_confidence: true
   mc_passes: 8
   
@@ -132,7 +137,7 @@ inference:
     endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
     google_api_key: ""
     temperature: 0.0
-    max_output_tokens: 256
+    max_output_tokens: 2048
     apply_corrections: false
   health_check_interval: 30  # seconds
   ready_timeout: 60  # seconds on startup

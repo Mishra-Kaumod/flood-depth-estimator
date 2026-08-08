@@ -19,8 +19,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+from PIL import Image
 
 from src.reference_depth_estimator import ReferenceDepthEstimator
+from src.settings import load_settings_dict
 from src.water_region_detector import WaterRegionDetector
 
 try:
@@ -79,8 +81,12 @@ class SegformerYoloDepthV2Pipeline:
         self._yolo_model = None
         self._yolo_backend = "contour-proxy"
         self.object_detector = None
+        self._depth_estimator = None
+        self._depth_backend = "dense-depth-proxy"
+        self._depth_model_name = "depth-anything/Depth-Anything-V2-Small-hf"
         self._load_yolo_if_available()
         self._load_object_detector_if_available()
+        self._load_depth_anything_if_available()
 
     def _load_yolo_if_available(self) -> None:
         if not self.yolo_weights_path.exists():
@@ -113,6 +119,42 @@ class SegformerYoloDepthV2Pipeline:
             logger.info("Improved object detector unavailable, falling back to contour proxy: %s", exc)
             self.object_detector = None
 
+    def _load_depth_anything_if_available(self) -> None:
+        try:
+            cfg = load_settings_dict().get("inference", {}).get("depth_model", {})
+        except Exception as exc:
+            logger.info("Depth model config unavailable, using proxy depth map: %s", exc)
+            cfg = {}
+
+        if not bool(cfg.get("enabled", True)):
+            return
+
+        backend = str(cfg.get("backend", "depth_anything_v2")).lower()
+        if backend in {"proxy", "none", "dense-depth-proxy"}:
+            return
+        if backend not in {"depth_anything", "depth_anything_v2", "hf_depth_estimation"}:
+            logger.warning("Unknown depth_model backend '%s', using proxy depth map", backend)
+            return
+
+        self._depth_model_name = str(
+            cfg.get("model_name", "depth-anything/Depth-Anything-V2-Small-hf")
+        )
+        device = int(cfg.get("device", -1))
+
+        try:
+            from transformers import pipeline
+
+            self._depth_estimator = pipeline(
+                task="depth-estimation",
+                model=self._depth_model_name,
+                device=device,
+            )
+            self._depth_backend = f"depth-anything-v2:{self._depth_model_name}"
+            logger.info("Loaded Depth Anything V2 backend: %s", self._depth_model_name)
+        except Exception as exc:
+            logger.warning("Depth Anything V2 unavailable, using proxy depth map: %s", exc)
+            self._depth_estimator = None
+            self._depth_backend = "dense-depth-proxy"
     def _segformer_water_mask(self, image_rgb: np.ndarray) -> Tuple[np.ndarray, float]:
         # SegFormer-aligned stage boundary. Current backend is a lightweight detector.
         water_mask, water_coverage = self.water_detector.detect(image_rgb)
@@ -273,9 +315,48 @@ class SegformerYoloDepthV2Pipeline:
 
     def _depth_anything_v2_dense_map(self, image_rgb: np.ndarray, water_mask: np.ndarray) -> np.ndarray:
         """
-        Depth Anything V2 stage-compatible dense map.
-        Uses a deterministic proxy map to keep the stage executable in constrained envs.
+        Return a normalized monocular depth map.
+
+        Uses a real pretrained Depth Anything V2 model when available. If the
+        model cannot be loaded or inference fails, falls back to the old proxy.
         """
+        if self._depth_estimator is not None:
+            try:
+                return self._depth_anything_model_map(image_rgb, water_mask)
+            except Exception as exc:
+                logger.warning("Depth Anything V2 inference failed, using proxy depth map: %s", exc)
+        return self._proxy_dense_depth_map(image_rgb, water_mask)
+
+    def _depth_anything_model_map(self, image_rgb: np.ndarray, water_mask: np.ndarray) -> np.ndarray:
+        h, w = image_rgb.shape[:2]
+        image = Image.fromarray(image_rgb.astype(np.uint8), mode="RGB")
+        output = self._depth_estimator(image)
+        depth = output.get("depth") if isinstance(output, dict) else None
+        if depth is None:
+            raise RuntimeError("Depth Anything V2 did not return a depth map")
+
+        if isinstance(depth, Image.Image):
+            depth = depth.resize((w, h), Image.Resampling.BICUBIC)
+            depth_arr = np.asarray(depth).astype(np.float32)
+        else:
+            depth_arr = np.asarray(depth, dtype=np.float32)
+            if depth_arr.shape[:2] != (h, w):
+                depth_arr = cv2.resize(depth_arr, (w, h), interpolation=cv2.INTER_CUBIC)
+
+        if depth_arr.ndim == 3:
+            depth_arr = depth_arr[..., 0]
+
+        depth_min = float(np.min(depth_arr))
+        depth_max = float(np.max(depth_arr))
+        if depth_max - depth_min > 1e-6:
+            depth_arr = (depth_arr - depth_min) / (depth_max - depth_min)
+        else:
+            depth_arr = np.zeros((h, w), dtype=np.float32)
+
+        depth_map = np.where(water_mask > 0, depth_arr, depth_arr * 0.35)
+        return depth_map.astype(np.float32)
+
+    def _proxy_dense_depth_map(self, image_rgb: np.ndarray, water_mask: np.ndarray) -> np.ndarray:
         h, w = image_rgb.shape[:2]
         gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
         smooth = cv2.GaussianBlur(gray, (0, 0), 1.2)
@@ -291,7 +372,6 @@ class SegformerYoloDepthV2Pipeline:
         dense = np.clip(dense, 0.0, 1.0)
         depth_map = np.where(water_mask > 0, dense, dense * 0.35)
         return depth_map.astype(np.float32)
-
     def _water_regions(self, water_mask: np.ndarray) -> List[dict]:
         contours, _ = cv2.findContours(water_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         h, w = water_mask.shape[:2]
@@ -427,15 +507,23 @@ class SegformerYoloDepthV2Pipeline:
         if coverage < 0.02:
             depth_cm = 0.0
         elif reference_count > 0 and reference_depth_cm > 0:
+            # Reference-object estimates can overstate depth in partial-road scenes:
+            # one bounding box crossing a water patch is not the same as the whole
+            # road being waist-deep. Keep Depth Anything as a supporting signal,
+            # then cap by scene coverage and submersion strength.
             depth_cm = (0.65 * reference_depth_cm) + (0.35 * dense_depth_cm)
-            if max_reference_submersion < 0.80 and coverage < 0.70:
-                depth_cm = min(depth_cm, 80.0)
-            if max_reference_submersion < 0.70 and coverage < 0.65:
+            if coverage < 0.75 and max_reference_submersion < 0.85:
+                depth_cm = min(depth_cm, 45.0)
+            elif coverage < 0.85 and max_reference_submersion < 0.90:
                 depth_cm = min(depth_cm, 65.0)
+            if max_reference_submersion < 0.80 and coverage < 0.70:
+                depth_cm = min(depth_cm, 55.0)
+            if max_reference_submersion < 0.70 and coverage < 0.65:
+                depth_cm = min(depth_cm, 45.0)
             if max_reference_submersion < 0.60 and coverage < 0.55:
-                depth_cm = min(depth_cm, 50.0)
+                depth_cm = min(depth_cm, 35.0)
             if max_reference_submersion < 0.50 and coverage < 0.50:
-                depth_cm = min(depth_cm, 40.0)
+                depth_cm = min(depth_cm, 25.0)
         elif region_depth_cm > 0:
             depth_cm = max(region_depth_cm, min(dense_depth_cm * 0.8, 40.0))
         else:
@@ -498,7 +586,7 @@ class SegformerYoloDepthV2Pipeline:
         trace.append(
             {
                 "stage": "Depth Anything V2",
-                "backend": "dense-depth-proxy",
+                "backend": self._depth_backend,
                 "status": "ok",
                 "summary": f"dense_p90={float(np.percentile(dense_depth_map, 90)):.3f}",
             }

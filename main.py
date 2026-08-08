@@ -90,15 +90,19 @@ def summarize_event_result(result: dict[str, Any], image_name: str | None = None
         print(f"  Prediction correct: {llm_judge.get('prediction_correct', llm_judge.get('plausible'))}")
         print(f"  Recommended depth: {llm_judge.get('recommended_depth_cm')}")
         print(f"  Recommended severity: {llm_judge.get('recommended_severity')}")
-        print(f"  Final depth: {llm_judge.get('final_depth_cm', llm_judge.get('recommended_depth_cm'))}")
-        print(f"  Final severity: {llm_judge.get('final_severity', llm_judge.get('recommended_severity'))}")
-        if llm_judge.get("llm_judge_decision_source"):
-            print(f"  Decision source: {llm_judge.get('llm_judge_decision_source')}")
+        print(f"  Final depth: {payload.get('llm_judge_final_depth_cm', llm_judge.get('final_depth_cm', llm_judge.get('recommended_depth_cm')))}")
+        print(f"  Final severity: {payload.get('llm_judge_final_severity', llm_judge.get('final_severity', llm_judge.get('recommended_severity')))}")
+        decision_source = payload.get("llm_judge_decision_source") or llm_judge.get("llm_judge_decision_source")
+        if decision_source:
+            print(f"  Decision source: {decision_source}")
         print(f"  Reason: {llm_judge.get('reason')}")
         if llm_judge.get("parse_failed"):
             print("  Raw response:")
             print(f"    {llm_judge.get('raw_response')}")
-
+    elif payload.get("llm_judge_error"):
+        print("\nLLM Judge:")
+        print("  Status: unavailable")
+        print(f"  Error: {payload.get('llm_judge_error')}")
     print("\nStatus:", result.get("status", "unknown"))
     print("=" * 60 + "\n")
 

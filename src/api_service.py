@@ -26,6 +26,7 @@ class FloodApiService:
         self.aggregator = SlidingWindowAggregator()
         self.temporal_analyzer = TemporalFloodAnalyzer(self.repository)
         self.config = load_settings_dict()
+        self.llm_judge_error = None
         self.llm_judge = self._build_llm_judge()
 
     def _build_llm_judge(self) -> LLMJudge | None:
@@ -34,6 +35,7 @@ class FloodApiService:
             return LLMJudge(judge_cfg)
         except Exception as exc:
             # Do not fail the entire service if judge config is invalid.
+            self.llm_judge_error = str(exc)
             return None
 
     def process_camera_upload(
@@ -96,7 +98,11 @@ class FloodApiService:
                     "label_guide": result_payload.get("label_guide"),
                 }
                 try:
-                    llm_judge_result = self.llm_judge.judge(prediction)
+                    llm_judge_result = self.llm_judge.judge(
+                        prediction,
+                        image_bytes=image_bytes,
+                        filename=filename,
+                    )
                     result_payload["llm_judge"] = llm_judge_result
                     if llm_judge_result.get("raw_response"):
                         result_payload["llm_judge_raw_response"] = llm_judge_result["raw_response"]
@@ -123,21 +129,25 @@ class FloodApiService:
 
             if llm_judge_result is not None:
                 result_payload["llm_judge_result"] = llm_judge_result
-                result_payload["llm_judge_final_depth_cm"] = float(
-                    llm_judge_result.get(
-                        "final_depth_cm",
-                        depth_cm if llm_judge_result.get("prediction_correct") else llm_judge_result.get("recommended_depth_cm", depth_cm),
-                    )
+                judge_depth = self._first_number(
+                    llm_judge_result.get("final_depth_cm"),
+                    depth_cm if llm_judge_result.get("prediction_correct") else None,
+                    llm_judge_result.get("recommended_depth_cm"),
+                    depth_cm,
                 )
-                result_payload["llm_judge_final_severity"] = llm_judge_result.get(
-                    "final_severity",
-                    result.severity_label if llm_judge_result.get("prediction_correct") else llm_judge_result.get("recommended_severity", result.severity_label),
+                judge_severity = self._first_text(
+                    llm_judge_result.get("final_severity"),
+                    result.severity_label if llm_judge_result.get("prediction_correct") else None,
+                    llm_judge_result.get("recommended_severity"),
+                    result.severity_label,
                 )
+                result_payload["llm_judge_final_depth_cm"] = judge_depth
+                result_payload["llm_judge_final_severity"] = judge_severity
                 result_payload["llm_judge_decision_source"] = (
                     "pipeline" if llm_judge_result.get("prediction_correct") else "judge"
                 )
         else:
-            result_payload["llm_judge_error"] = "LLM judge unavailable; no validator instance was created"
+            result_payload["llm_judge_error"] = self.llm_judge_error or "LLM judge unavailable; no validator instance was created"
 
         telemetry = self.repository.save_telemetry(
             TelemetryRecord(
@@ -223,6 +233,24 @@ class FloodApiService:
             state["burst"] = burst.model_dump()
         return state
 
+    def _first_number(self, *values: Any) -> float:
+        for value in values:
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    def _first_text(self, *values: Any) -> str:
+        for value in values:
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return "unknown"
     def _reference_objects_from_metadata(self, metadata: dict[str, Any]) -> list[str]:
         features = metadata.get("structured_features", {})
         objects = features.get("reference_objects") or features.get("objects") or []
