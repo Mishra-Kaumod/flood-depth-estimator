@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 from PIL import Image
-from flask import Flask, Response, jsonify, render_template_string, request
+from flask import Flask, Response, jsonify, render_template, request
 
 from src.middleware.observability import METRICS, render_prometheus_metrics
 from src.reference_depth_estimator import ReferenceDepthEstimator
@@ -31,11 +31,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_PATH = Path(__file__).parent / "models" / "best_flood_model_water_aware.pth"
 ENV_MODEL_PATH = os.environ.get("MODEL_PATH")
-EXTERNAL_MODEL_PATH = Path(r"E:\flood_model_v6.1.pth")
-MODEL_PATH = Path(ENV_MODEL_PATH) if ENV_MODEL_PATH else (
-    EXTERNAL_MODEL_PATH if EXTERNAL_MODEL_PATH.exists() else DEFAULT_MODEL_PATH
-)
-EXTERNAL_MODEL_ACTIVE = MODEL_PATH == EXTERNAL_MODEL_PATH
+MODEL_PATH = Path(ENV_MODEL_PATH) if ENV_MODEL_PATH else DEFAULT_MODEL_PATH
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 PIPELINE_MODE = os.environ.get("FLOOD_PIPELINE_MODE", "segformer_yolov8_depthv2_fusion").strip().lower()
 
@@ -137,37 +133,29 @@ def load_model() -> nn.Module:
     return model
 
 def depth_to_severity(depth_cm: float) -> dict:
-    if depth_cm < 5:
-        return {"level": "SAFE",     "label": "No significant flooding",       "color": "#16a34a", "stage": 1}
-    elif depth_cm < 20:
-        return {"level": "LOW",      "label": "Minor flooding",                 "color": "#ca8a04", "stage": 2}
-    elif depth_cm < 50:
-        return {"level": "MEDIUM",   "label": "Moderate flooding",              "color": "#ea580c", "stage": 3}
-    elif depth_cm < 80:
-        return {"level": "HIGH",     "label": "High flood — avoid travel",      "color": "#dc2626", "stage": 4}
-    else:
-        return {"level": "CRITICAL", "label": "Severe / dangerous flooding",    "color": "#7f1d1d", "stage": 5}
+    try:
+        from src.geospatial_classifier import classify_depth_dict
+        return classify_depth_dict(depth_cm)
+    except Exception:
+        # Fallback to legacy mapping if classifier unavailable
+        if depth_cm < 5:
+            return {"level": "SAFE",     "label": "No significant flooding",       "color": "#16a34a", "stage": 1}
+        elif depth_cm < 20:
+            return {"level": "LOW",      "label": "Minor flooding",                 "color": "#ca8a04", "stage": 2}
+        elif depth_cm < 50:
+            return {"level": "MEDIUM",   "label": "Moderate flooding",              "color": "#ea580c", "stage": 3}
+        elif depth_cm < 80:
+            return {"level": "HIGH",     "label": "High flood — avoid travel",      "color": "#dc2626", "stage": 4}
+        else:
+            return {"level": "CRITICAL", "label": "Severe / dangerous flooding",    "color": "#7f1d1d", "stage": 5}
 
-_MODEL = load_model()
-_REFERENCE_ESTIMATOR = ReferenceDepthEstimator()
+# Do not load the old EfficientNet or Reference estimator at import time in serving.
+# The SegFormer→YOLO→DepthV2 pipeline is the canonical inference path.
 _SEGFORMER_YOLO_DEPTH_PIPELINE = get_segformer_yolo_depthv2_pipeline()
 
-# Detect label collapse once at startup
-def _is_collapsed() -> bool:
-    if not MODEL_PATH.exists():
-        return False
-    try:
-        _assert_not_lfs_pointer(MODEL_PATH)
-        ck = torch.load(MODEL_PATH, map_location="cpu", weights_only=False)
-        vl = ck.get("best_val_loss", ck.get("val_loss", 1.0)) if isinstance(ck, dict) else 1.0
-        return isinstance(vl, float) and vl < 1e-5
-    except Exception:
-        return False
-
-_MODEL_COLLAPSED = _is_collapsed()
-if _MODEL_COLLAPSED:
-    logger.warning("🔀 ML model is collapsed → predictions will use reference_object_cv fallback")
-logger.info(f"Model ready on {DEVICE}")
+# Serving uses the SegFormer→YOLO→DepthV2 pipeline as canonical inference.
+_MODEL_COLLAPSED = False
+logger.info(f"Model ready on {DEVICE} (SegFormer pipeline active)")
 
 _SETTINGS = load_settings_dict()
 _INFERENCE_CFG = _SETTINGS.get("inference", {})
@@ -862,86 +850,38 @@ app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100 MB for batch
 
 @app.get("/")
 def index():
-    return render_template_string(HTML, areas=json.dumps(BENGALURU_AREAS))
+    return render_template("index.html", areas=json.dumps(BENGALURU_AREAS))
 
 
 def _predict_single(image: Image.Image) -> dict:
     """
     Run depth prediction on a PIL Image.
-    Uses the reference CV estimator when the ML model is collapsed.
-    When the ML model is healthy, blends ML output (70%) with reference CV (30%)
-    to incorporate physical reference-object cues alongside learned features.
-    """
-    if PIPELINE_MODE == "segformer_yolov8_depthv2_fusion":
-        img_arr = np.array(image)
-        result = _SEGFORMER_YOLO_DEPTH_PIPELINE.predict(img_arr)
-        return result  # no_reference_warning=True when no YOLO objects found (still estimates)
-    if _MODEL_COLLAPSED:
-        img_arr = np.array(image)
-        ref_result = _REFERENCE_ESTIMATOR.estimate(img_arr)
-        depth_cm = ref_result["depth_cm"]
-        confidence = ref_result["confidence"]
-        method = "reference_object_cv"
-        visual_cues = ref_result.get("visual_cues", [])
-        label_guide = ref_result.get("label_guide", "")
-        waterline_pct = ref_result.get("waterline_pct", 0)
-        water_coverage = ref_result.get("water_coverage", 0)
-    elif EXTERNAL_MODEL_ACTIVE:
-        with torch.no_grad():
-            tensor = TRANSFORM(image).unsqueeze(0).to(DEVICE)
-            ml_raw = float(_MODEL(tensor).squeeze().item())
-        # v6.1 may emit normalized depth (0..1) or direct cm; infer by range.
-        ml_depth = ml_raw * 100.0 if ml_raw <= 1.5 else ml_raw
-        depth_cm = float(np.clip(ml_depth, 0.0, 150.0))
-        try:
-            from scripts.mc_dropout import mc_dropout_confidence
-            _, confidence = mc_dropout_confidence(_MODEL, tensor)
-        except Exception:
-            confidence = 0.78 if depth_cm > 1 else 0.55
-        method = "ml_only"
-        visual_cues = []
-        label_guide = ""
-        waterline_pct = 0
-        water_coverage = 0
-    else:
-        img_arr = np.array(image)
-        ref_result = _REFERENCE_ESTIMATOR.estimate(img_arr)
-        with torch.no_grad():
-            tensor = TRANSFORM(image).unsqueeze(0).to(DEVICE)
-            depth_norm = float(_MODEL(tensor).squeeze().item())
-        ml_depth = depth_norm * 100.0
-        ref_depth = ref_result.get("depth_cm", np.nan)
-        ref_conf = ref_result.get("confidence", 0.0)
-        ref_valid = isinstance(ref_depth, (int, float)) and np.isfinite(ref_depth) and 0 <= ref_depth <= 150
-        if ref_valid:
-            # Blend: 70% ML + 30% reference CV
-            depth_cm = 0.70 * ml_depth + 0.30 * float(ref_depth)
-            confidence = round(min(depth_norm * 1.25, 0.85) * 0.7 + float(ref_conf) * 0.3, 4)
-            method = "ml_blend"
-            visual_cues = ref_result.get("visual_cues", [])
-            label_guide = ref_result.get("label_guide", "")
-            waterline_pct = ref_result.get("waterline_pct", 0)
-            water_coverage = ref_result.get("water_coverage", 0)
-        else:
-            depth_cm = ml_depth
-            confidence = round(min(max(depth_norm, 0.0), 1.0), 4)
-            method = "ml_only"
-            visual_cues = []
-            label_guide = ""
-            waterline_pct = 0
-            water_coverage = 0
 
-    depth_cm = round(depth_cm, 2)
-    return {
-        "depth_cm": depth_cm,
-        "confidence": round(confidence, 4),
-        "severity": depth_to_severity(depth_cm),
-        "method": method,
-        "visual_cues": visual_cues,
-        "label_guide": label_guide,
-        "waterline_pct": waterline_pct,
-        "water_coverage": water_coverage,
-    }
+    SegFormer→YOLO→DepthV2 pipeline is the canonical inference path. Use its
+    output (depth_cm, confidence, severity, action_trigger) as the single
+    source of truth for all routes.
+    """
+    img_arr = np.array(image)
+    result = _SEGFORMER_YOLO_DEPTH_PIPELINE.predict(img_arr)
+
+    # Ensure severity is a serializable dict (some callers expect a plain dict)
+    sev = result.get("severity")
+    if sev is not None and not isinstance(sev, dict):
+        try:
+            band = sev
+            level_map = {1: "SAFE", 2: "LOW", 3: "MEDIUM", 4: "HIGH", 5: "CRITICAL"}
+            label_text = getattr(band, "description", None) or getattr(band, "label", "")
+            result["severity"] = {
+                "level": level_map.get(getattr(band, "severity", 0), "UNKNOWN"),
+                "label": label_text,
+                "color": getattr(band, "hex_color", ""),
+                "stage": getattr(band, "severity", None),
+            }
+        except Exception:
+            # leave as-is if conversion fails
+            pass
+
+    return result
 
 
 @app.post("/predict-batch")
@@ -1097,7 +1037,7 @@ def health():
     if pipeline_active:
         active_method = "segformer_yolov8_depthv2_fusion"
     else:
-        active_method = "reference_object_cv" if _MODEL_COLLAPSED else ("ml_only" if EXTERNAL_MODEL_ACTIVE else "ml_blend")
+        active_method = "ml_fallback"
     if pipeline_active:
         from src.segformer_yolo_depthv2_pipeline import get_segformer_yolo_depthv2_pipeline
         _pipe = get_segformer_yolo_depthv2_pipeline()

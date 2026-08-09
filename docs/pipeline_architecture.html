@@ -6,35 +6,40 @@
   <title>Flood Depth Estimator — Model Architecture &amp; File Registry</title>
   <style>
     :root {
-      --bg: #0f1117;
-      --card: #171b2b;
-      --line: #2b3148;
-      --text: #e2e8f0;
-      --muted: #94a3b8;
-      --blue: #60a5fa;
-      --green: #34d399;
-      --amber: #f59e0b;
-      --red: #ef4444;
-      --purple: #a78bfa;
-      --cyan: #22d3ee;
+      --bg: #f8fbff;
+      --card: #ffffff;
+      --line: #cfe0f5;
+      --text: #123b6d;
+      --muted: #54759c;
+      --blue: #1d4ed8;
+      --blue-strong: #0f3ea9;
+      --blue-soft: #eaf3ff;
+      --green: #2563eb;
+      --amber: #3b82f6;
+      --red: #1e40af;
+      --purple: #2563eb;
+      --cyan: #0f5cc0;
+      --shadow: 0 10px 24px rgba(29, 78, 216, 0.08);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
       background: var(--bg);
       color: var(--text);
-      line-height: 1.45;
+      line-height: 1.5;
       padding: 20px;
     }
     .wrap { max-width: 1180px; margin: 0 auto; }
     header {
-      background: linear-gradient(135deg, #1a2033, #111726);
+      background: linear-gradient(135deg, #ffffff, #eef6ff);
       border: 1px solid var(--line);
       border-radius: 12px;
-      padding: 18px;
+      box-shadow: var(--shadow);
+      padding: 20px;
       margin-bottom: 14px;
     }
-    h1 { font-size: 20px; margin-bottom: 6px; }
+    h1 { font-size: 20px; margin-bottom: 6px; color: var(--blue-strong); }
+    h2, h3 { color: var(--blue-strong); }
     .sub { color: var(--muted); font-size: 13px; }
     .chips { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
     .chip {
@@ -42,8 +47,8 @@
       border-radius: 999px;
       padding: 4px 9px;
       border: 1px solid var(--line);
-      color: var(--muted);
-      background: #101726;
+      color: var(--blue-strong);
+      background: var(--blue-soft);
     }
     .tabs {
       display: flex;
@@ -53,27 +58,36 @@
     }
     .tab {
       border: 1px solid var(--line);
-      background: #101726;
+      background: #ffffff;
       color: var(--muted);
       border-radius: 8px;
       padding: 8px 12px;
       cursor: pointer;
       font-size: 12px;
       font-weight: 600;
+      transition: all 0.18s ease;
     }
-    .tab.active { color: var(--blue); border-color: var(--blue); }
+    .tab:hover { background: var(--blue-soft); color: var(--blue); }
+    .tab.active {
+      color: #ffffff;
+      border-color: var(--blue);
+      background: linear-gradient(135deg, var(--blue), var(--blue-strong));
+    }
     .pane { display: none; }
     .pane.active { display: block; }
     .card {
       background: var(--card);
       border: 1px solid var(--line);
       border-radius: 12px;
+      box-shadow: var(--shadow);
       padding: 14px;
       margin-bottom: 12px;
     }
     .stage {
       border-left: 4px solid var(--line);
-      padding: 10px 0 10px 12px;
+      background: linear-gradient(90deg, rgba(234, 243, 255, 0.65), rgba(255, 255, 255, 0));
+      border-radius: 8px;
+      padding: 10px 10px 10px 12px;
       margin: 10px 0;
     }
     .s1 { border-color: var(--blue); }
@@ -97,11 +111,14 @@
       vertical-align: top;
     }
     th {
-      background: #0f1625;
-      color: var(--muted);
+      background: #edf5ff;
+      color: var(--blue-strong);
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: .04em;
+    }
+    tr:nth-child(even) td {
+      background: #f9fcff;
     }
     .badge {
       display: inline-block;
@@ -109,16 +126,17 @@
       border-radius: 999px;
       font-size: 10px;
       border: 1px solid var(--line);
-      color: var(--muted);
+      color: var(--blue-strong);
       margin-right: 5px;
       margin-bottom: 4px;
       white-space: nowrap;
+      background: var(--blue-soft);
     }
-    .b-api { color: var(--blue); border-color: #2e4f7f; }
-    .b-core { color: var(--green); border-color: #2f6b59; }
-    .b-ops { color: var(--amber); border-color: #735423; }
-    .b-obs { color: var(--purple); border-color: #5f4b8c; }
-    .b-sec { color: var(--red); border-color: #7f2f37; }
+    .b-api { color: var(--blue); border-color: #93c5fd; }
+    .b-core { color: #1e40af; border-color: #93c5fd; }
+    .b-ops { color: #1d4ed8; border-color: #bfdbfe; }
+    .b-obs { color: #2563eb; border-color: #bfdbfe; }
+    .b-sec { color: #0f3ea9; border-color: #93c5fd; }
     ul { padding-left: 18px; }
     li { margin: 4px 0; }
     .grid {
@@ -126,6 +144,7 @@
       gap: 12px;
       grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
     }
+    a { color: var(--blue); }
   </style>
 </head>
 <body>

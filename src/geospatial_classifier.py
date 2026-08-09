@@ -273,3 +273,50 @@ def classify_depth(depth_cm: float) -> IntensityBand:
 def depth_to_color(depth_cm: float) -> str:
     """Return hex colour string for a given depth — one-liner for quick use."""
     return _DEFAULT_CLF.classify(depth_cm).hex_color
+
+
+def classify_depth_dict(depth_cm: float) -> dict:
+    """Return a plain dict compatible with app/pipeline severity dict shape.
+
+    Output format: { 'level': 'SAFE'|'LOW'|'MEDIUM'|'HIGH'|'CRITICAL',
+                     'label': str, 'color': '#rrggbb', 'stage': int }
+    """
+    b = _DEFAULT_CLF.classify(depth_cm)
+    level_map = {1: 'SAFE', 2: 'LOW', 3: 'MEDIUM', 4: 'HIGH', 5: 'CRITICAL'}
+    label_text = (b.description.split('.')[0] if getattr(b, 'description', None) else b.label) or b.label
+    return {
+        'level': level_map.get(b.severity, 'UNKNOWN'),
+        'label': label_text,
+        'color': b.hex_color,
+        'stage': b.severity,
+    }
+
+
+def severity_anchor_depth(level: str) -> Optional[float]:
+    """Return a numeric anchor depth (cm) for a semantic severity level.
+
+    Anchors are computed from configured band thresholds (config/config.yaml).
+    """
+    normalized = str(level).strip().upper()
+    idx_map = {'SAFE': 0, 'LOW': 1, 'MEDIUM': 2, 'HIGH': 3, 'CRITICAL': 4}
+    if normalized not in idx_map:
+        return None
+    idx = idx_map[normalized]
+    # _BAND_CM holds [advisory_cm, warning_cm, alert_cm, critical_cm]
+    try:
+        thresholds = list(map(float, _BAND_CM))
+    except Exception:
+        thresholds = [10.0, 30.0, 60.0, 100.0]
+
+    if idx == 0:
+        lower = 0.0
+        upper = thresholds[0]
+        return (lower + upper) / 2.0
+    if idx < len(thresholds):
+        lower = thresholds[idx - 1]
+        upper = thresholds[idx]
+        return (float(lower) + float(upper)) / 2.0
+    # CRITICAL (no upper bound) → extend by half previous band width
+    lower = thresholds[-1]
+    prev = thresholds[-2] if len(thresholds) >= 2 else (lower - 20.0)
+    return float(lower) + (float(lower) - float(prev)) / 2.0

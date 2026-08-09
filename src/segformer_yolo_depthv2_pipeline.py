@@ -33,6 +33,8 @@ from src.middleware.retry import RetryPolicy, run_with_retry
 from src.reference_depth_estimator import ReferenceDepthEstimator
 from src.settings import load_settings_dict
 from src.water_region_detector import WaterRegionDetector
+# Centralized severity helpers (canonical source-of-truth)
+from src.geospatial_classifier import classify_depth_dict, severity_anchor_depth
 
 logger = logging.getLogger(__name__)
 
@@ -47,15 +49,20 @@ class ReferenceObject:
 
 
 def _depth_to_severity(depth_cm: float) -> Dict[str, Any]:
-    if depth_cm < 5:
-        return {"level": "SAFE", "label": "No significant flooding", "color": "#16a34a", "stage": 1}
-    if depth_cm < 20:
-        return {"level": "LOW", "label": "Minor flooding", "color": "#ca8a04", "stage": 2}
-    if depth_cm < 50:
-        return {"level": "MEDIUM", "label": "Moderate flooding", "color": "#ea580c", "stage": 3}
-    if depth_cm < 80:
-        return {"level": "HIGH", "label": "High flood — avoid travel", "color": "#dc2626", "stage": 4}
-    return {"level": "CRITICAL", "label": "Severe / dangerous flooding", "color": "#7f1d1d", "stage": 5}
+    try:
+        # Use centralized classifier to ensure a single source of truth
+        return classify_depth_dict(depth_cm)
+    except Exception:
+        # Fallback to legacy mapping
+        if depth_cm < 5:
+            return {"level": "SAFE", "label": "No significant flooding", "color": "#16a34a", "stage": 1}
+        if depth_cm < 20:
+            return {"level": "LOW", "label": "Minor flooding", "color": "#ca8a04", "stage": 2}
+        if depth_cm < 50:
+            return {"level": "MEDIUM", "label": "Moderate flooding", "color": "#ea580c", "stage": 3}
+        if depth_cm < 80:
+            return {"level": "HIGH", "label": "High flood — avoid travel", "color": "#dc2626", "stage": 4}
+        return {"level": "CRITICAL", "label": "Severe / dangerous flooding", "color": "#7f1d1d", "stage": 5}
 
 
 _SEVERITY_LEVELS = ["SAFE", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
@@ -76,6 +83,12 @@ def _severity_level_to_index(level: str) -> Optional[int]:
 
 
 def _severity_anchor_depth(level: str) -> Optional[float]:
+    try:
+        val = severity_anchor_depth(level)
+        if val is not None:
+            return val
+    except Exception:
+        pass
     normalized = str(level).strip().upper()
     return _SEVERITY_ANCHOR_DEPTH_CM.get(normalized)
 
