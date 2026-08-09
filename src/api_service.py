@@ -13,6 +13,7 @@ from typing import Any
 
 from src.aggregator import SensorPayload, SlidingWindowAggregator
 from src.event_contract import FloodEvent
+from src.geospatial_classifier import FloodIntensityClassifier
 from src.llm_judge import LLMJudge
 from src.pipeline import execute_event
 from src.settings import load_settings_dict
@@ -25,6 +26,7 @@ class FloodApiService:
         self.repository = repository or FloodRepository()
         self.aggregator = SlidingWindowAggregator()
         self.temporal_analyzer = TemporalFloodAnalyzer(self.repository)
+        self.classifier = FloodIntensityClassifier()
         self.config = load_settings_dict()
         self.llm_judge_error = None
         self.llm_judge = self._build_llm_judge()
@@ -78,7 +80,7 @@ class FloodApiService:
         if self.llm_judge is not None:
             result_payload["llm_judge_enabled"] = bool(self.llm_judge.enabled)
             if self.llm_judge.enabled:
-                structured = result_payload.get("structured_features", {}) or {}
+                structured = result_payload.get("metadata", {}).get("structured_features", {}) or {}
                 prediction = {
                     "depth_cm": depth_cm,
                     "severity_label": result.severity_label,
@@ -177,6 +179,23 @@ class FloodApiService:
         else:
             result_payload["llm_judge_error"] = self.llm_judge_error or "LLM judge unavailable; no validator instance was created"
 
+        final_decision_source = "pipeline"
+        if result_payload.get("llm_judge_applied"):
+            final_decision_source = "llm_judge"
+        elif result_payload.get("review_required"):
+            final_decision_source = "pipeline_review_required"
+
+        final_decision = self._build_final_decision(depth_cm, final_decision_source)
+        result_payload["final_decision"] = final_decision
+        result_payload["decision_source"] = final_decision_source
+        result_payload["estimated_depth_meters"] = final_decision["estimated_depth_meters"]
+        result_payload["severity"] = final_decision["severity"]
+        result_payload["severity_label"] = final_decision["severity_label"]
+        result_payload["color_code"] = final_decision["color_code"]
+        result_payload["action_trigger"] = final_decision["action_trigger"]
+        result_payload["water_present"] = final_decision["water_present"]
+        result_payload["pipeline_evidence"] = self._pipeline_evidence(result_payload)
+
         telemetry = self.repository.save_telemetry(
             TelemetryRecord(
                 id=None,
@@ -190,7 +209,7 @@ class FloodApiService:
                 detected_reference_objects=reference_objects,
                 num_reference_objects=len(reference_objects),
                 is_water_confirmed=depth_cm > 0 and confidence_pct >= 40.0,
-                safety_risk_assessment=f"{result.severity_label} - {result.action_trigger}",
+                safety_risk_assessment=f"{result_payload['severity_label']} - {result_payload['action_trigger']}",
                 metadata={
                     "event": event.model_dump(mode="json"),
                     "result": result_payload,
@@ -260,6 +279,38 @@ class FloodApiService:
         if burst is not None:
             state["burst"] = burst.model_dump()
         return state
+
+    def _build_final_decision(self, depth_cm: float, decision_source: str) -> dict[str, Any]:
+        depth_cm = max(0.0, float(depth_cm or 0.0))
+        band = self.classifier.classify(depth_cm)
+        return {
+            "estimated_depth_cm": round(depth_cm, 2),
+            "estimated_depth_meters": round(depth_cm / 100.0, 4),
+            "severity": band.severity,
+            "severity_label": band.label,
+            "color_code": band.hex_color,
+            "action_trigger": band.next_action,
+            "decision_source": decision_source,
+            "water_present": depth_cm > 0.0,
+        }
+
+    def _pipeline_evidence(self, result_payload: dict[str, Any]) -> dict[str, Any]:
+        metadata = result_payload.get("metadata", {}) or {}
+        structured = metadata.get("structured_features", {}) or {}
+        return {
+            "confidence_pct": round(float(result_payload.get("confidence_score", 0.0)) * 100.0, 2),
+            "water_coverage_pct": structured.get("water_coverage_pct"),
+            "near_water_coverage_pct": structured.get("near_water_coverage_pct"),
+            "mid_water_coverage_pct": structured.get("mid_water_coverage_pct"),
+            "far_water_coverage_pct": structured.get("far_water_coverage_pct"),
+            "reference_count": structured.get("reference_count"),
+            "reference_depth_cm": structured.get("reference_depth_cm"),
+            "max_reference_submersion": structured.get("max_reference_submersion"),
+            "immediate_risk": structured.get("immediate_risk"),
+            "far_water_only": structured.get("far_water_only"),
+            "mask_quality_warning": structured.get("mask_quality_warning"),
+            "visual_cues": result_payload.get("visual_cues", []),
+        }
 
     def _first_number(self, *values: Any) -> float:
         for value in values:

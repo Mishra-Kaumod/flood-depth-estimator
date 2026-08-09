@@ -131,14 +131,14 @@ inference:
   output_format: "json"
   confidence_threshold: 0.5
   llm_judge:
-    enabled: false
+    enabled: True
     provider: "google"
     model: "gemini-flash-latest"
     endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
     google_api_key: ""
     temperature: 0.0
     max_output_tokens: 2048
-    apply_corrections: false
+    apply_corrections: true
   health_check_interval: 30  # seconds
   ready_timeout: 60  # seconds on startup
 

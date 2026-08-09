@@ -6,6 +6,7 @@ The legacy CLI implementation is preserved in legacy_main.py.
 """
 
 import argparse
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -36,17 +37,89 @@ def read_s3_bytes(s3_handler: Any, s3_key: str) -> bytes:
     return response["Body"].read()
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def write_final_prediction_record(result: dict[str, Any], image_name: str | None = None) -> str:
+    payload = result.get("result", {}) or {}
+    metadata = payload.get("metadata", {}) or {}
+    structured = metadata.get("structured_features", {}) or {}
+    final_decision = payload.get("final_decision", {}) or {}
+    llm_judge = payload.get("llm_judge") or payload.get("llm_judge_result") or {}
+    evidence = payload.get("pipeline_evidence") or {}
+
+    depth_cm = _safe_float(
+        final_decision.get("estimated_depth_cm"),
+        _safe_float(payload.get("estimated_depth_meters")) * 100.0,
+    )
+    row = {
+        "timestamp": payload.get("processed_at") or payload.get("timestamp"),
+        "image_name": image_name or payload.get("image_name"),
+        "camera_id": payload.get("camera_id"),
+        "latitude": payload.get("latitude"),
+        "longitude": payload.get("longitude"),
+        "water_present": bool(payload.get("water_present", depth_cm > 0.0)),
+        "depth_cm": round(depth_cm, 2),
+        "severity": final_decision.get("severity_label") or payload.get("severity_label"),
+        "severity_score": final_decision.get("severity") or payload.get("severity"),
+        "action": final_decision.get("action_trigger") or payload.get("action_trigger"),
+        "decision_source": final_decision.get("decision_source") or payload.get("decision_source", "pipeline"),
+        "confidence_pct": round(_safe_float(payload.get("confidence_score")) * 100.0, 2),
+        "water_coverage_pct": structured.get("water_coverage_pct"),
+        "near_water_coverage_pct": structured.get("near_water_coverage_pct"),
+        "mid_water_coverage_pct": structured.get("mid_water_coverage_pct"),
+        "far_water_coverage_pct": structured.get("far_water_coverage_pct"),
+        "reference_count": structured.get("reference_count"),
+        "reference_depth_cm": structured.get("reference_depth_cm"),
+        "max_reference_submersion": structured.get("max_reference_submersion"),
+        "immediate_risk": structured.get("immediate_risk"),
+        "far_water_only": structured.get("far_water_only"),
+        "mask_quality_warning": structured.get("mask_quality_warning"),
+        "review_required": bool(payload.get("review_required", False)),
+        "review_reason": payload.get("review_reason"),
+        "llm_status": "available" if llm_judge else "unavailable",
+        "llm_prediction_correct": llm_judge.get("prediction_correct") if llm_judge else None,
+        "llm_recommended_depth_cm": llm_judge.get("recommended_depth_cm") if llm_judge else None,
+        "llm_recommended_severity": llm_judge.get("recommended_severity") if llm_judge else None,
+        "llm_reason": llm_judge.get("reason") if llm_judge else payload.get("llm_judge_error"),
+        "pipeline_evidence_json": json.dumps(evidence, default=str),
+        "llm_judge_json": json.dumps(llm_judge, default=str),
+    }
+
+    parquet_path = Path(__file__).resolve().parent / "data" / "final_predictions.parquet"
+    parquet_path.parent.mkdir(parents=True, exist_ok=True)
+    frame = pd.DataFrame([row])
+
+    try:
+        if parquet_path.exists():
+            existing = pd.read_parquet(parquet_path)
+            frame = pd.concat([existing, frame], ignore_index=True)
+        frame.to_parquet(parquet_path, index=False)
+        return str(parquet_path)
+    except Exception as exc:
+        csv_path = parquet_path.with_suffix(".csv")
+        frame.to_csv(csv_path, mode="a", index=False, header=not csv_path.exists())
+        return f"{csv_path} (CSV fallback; install pyarrow for Parquet)"
+
+
 def summarize_event_result(result: dict[str, Any], image_name: str | None = None) -> None:
     payload = result.get("result", {})
     metadata = payload.get("metadata", {}) or {}
     structured = metadata.get("structured_features", {}) or {}
     trace = metadata.get("pipeline_trace", []) or []
 
-    depth_cm = float(payload.get("estimated_depth_meters", 0.0) * 100.0)
+    final_decision = payload.get("final_decision", {}) or {}
+    depth_cm = _safe_float(final_decision.get("estimated_depth_cm"), _safe_float(payload.get("estimated_depth_meters")) * 100.0)
     confidence_pct = float(payload.get("confidence_score", 0.0) * 100.0)
-    severity = payload.get("severity_label", "Unknown")
-    action = payload.get("action_trigger", "Unknown")
-    water_present = depth_cm > 0.0
+    severity = final_decision.get("severity_label") or payload.get("severity_label", "Unknown")
+    action = final_decision.get("action_trigger") or payload.get("action_trigger", "Unknown")
+    water_present = bool(payload.get("water_present", depth_cm > 0.0))
     water_coverage = structured.get("water_coverage_pct")
     reference_count = int(structured.get("reference_count", 0))
     reference_depth = structured.get("reference_depth_cm")
@@ -62,6 +135,8 @@ def summarize_event_result(result: dict[str, Any], image_name: str | None = None
     print(f"Estimated flood depth: {depth_cm:.2f} cm")
     print(f"Flood severity: {severity}")
     print(f"Recommended action: {action}")
+    if final_decision.get("decision_source") or payload.get("decision_source"):
+        print(f"Decision source: {final_decision.get('decision_source') or payload.get('decision_source')}")
     print(f"Confidence: {confidence_pct:.2f}%")
     if water_coverage is not None:
         print(f"Water coverage: {water_coverage:.2f}%")
@@ -119,6 +194,8 @@ def summarize_event_result(result: dict[str, Any], image_name: str | None = None
         print("\nLLM Judge:")
         print("  Status: unavailable")
         print(f"  Error: {payload.get('llm_judge_error')}")
+    saved_output = write_final_prediction_record(result, image_name=image_name)
+    print(f"\nSaved final output: {saved_output}")
     print("\nStatus:", result.get("status", "unknown"))
     print("=" * 60 + "\n")
 

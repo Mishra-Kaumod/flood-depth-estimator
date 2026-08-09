@@ -550,6 +550,19 @@ class SegformerYoloDepthV2Pipeline:
         waterline_pct = features.get("waterline_pct", 0.0) / 100.0
         region_depth_cm = features.get("region_depth_cm", 0.0)
         max_reference_submersion = features.get("max_reference_submersion", 0.0)
+        near_pct = features.get("near_water_coverage_pct", 0.0) / 100.0
+        mid_pct = features.get("mid_water_coverage_pct", 0.0) / 100.0
+        far_pct = features.get("far_water_coverage_pct", 0.0) / 100.0
+        roadwide_water_evidence = coverage >= 0.60 and near_pct >= 0.35 and mid_pct >= 0.45
+        multi_vehicle_bumper_evidence = (
+            reference_count >= 2
+            and max_reference_submersion >= 0.65
+            and coverage >= 0.50
+            and near_pct >= 0.30
+            and mid_pct >= 0.40
+        )
+        strong_reference_water_evidence = roadwide_water_evidence or multi_vehicle_bumper_evidence
+        single_strong_vehicle_evidence = reference_count >= 1 and max_reference_submersion >= 0.65 and strong_reference_water_evidence
 
         if coverage < 0.02:
             depth_cm = 0.0
@@ -560,13 +573,13 @@ class SegformerYoloDepthV2Pipeline:
             # then cap by scene coverage and submersion strength.
             depth_cm = (0.65 * reference_depth_cm) + (0.35 * dense_depth_cm)
             if coverage < 0.75 and max_reference_submersion < 0.70:
-                depth_cm = min(depth_cm, 45.0)
+                depth_cm = min(depth_cm, 65.0 if single_strong_vehicle_evidence else 45.0)
             elif coverage < 0.85 and max_reference_submersion < 0.90:
                 depth_cm = min(depth_cm, 65.0)
             if max_reference_submersion < 0.70 and coverage < 0.70:
-                depth_cm = min(depth_cm, 55.0)
+                depth_cm = min(depth_cm, 65.0 if single_strong_vehicle_evidence else 55.0)
             if max_reference_submersion < 0.70 and coverage < 0.65:
-                depth_cm = min(depth_cm, 45.0)
+                depth_cm = min(depth_cm, 65.0 if single_strong_vehicle_evidence else 45.0)
             if max_reference_submersion < 0.60 and coverage < 0.55:
                 depth_cm = min(depth_cm, 35.0)
             if max_reference_submersion < 0.50 and coverage < 0.50:
@@ -585,14 +598,12 @@ class SegformerYoloDepthV2Pipeline:
             else:
                 depth_cm = 3.0
 
-        near_pct = features.get("near_water_coverage_pct", 0.0) / 100.0
-        mid_pct = features.get("mid_water_coverage_pct", 0.0) / 100.0
         far_water_only = bool(features.get("far_water_only", False))
         far_dominant_water = bool(features.get("far_dominant_water", False))
         broad_mask_warning = bool(features.get("broad_mask_warning", False))
         immediate_risk = bool(features.get("immediate_risk", False))
         water_touches_bottom = bool(features.get("water_touches_bottom", False))
-        strong_vehicle_submersion = reference_count >= 2 and max_reference_submersion >= 0.70
+        strong_vehicle_submersion = multi_vehicle_bumper_evidence or (reference_count >= 2 and max_reference_submersion >= 0.70) or single_strong_vehicle_evidence
         useful_reference_evidence = reference_count >= 1 and max_reference_submersion >= 0.45
         weak_reference_evidence = not useful_reference_evidence
 

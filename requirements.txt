@@ -14,3 +14,4 @@ PyYAML>=6.0.0
 redis>=5.0.0
 celery>=5.3.0
 transformers==4.40.0
+pyarrow>=15.0.0
