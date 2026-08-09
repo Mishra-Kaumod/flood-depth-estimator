@@ -81,6 +81,7 @@ def write_final_prediction_record(result: dict[str, Any], image_name: str | None
         "immediate_risk": structured.get("immediate_risk"),
         "far_water_only": structured.get("far_water_only"),
         "mask_quality_warning": structured.get("mask_quality_warning"),
+        "full_road_water_no_reference": structured.get("full_road_water_no_reference"),
         "review_required": bool(payload.get("review_required", False)),
         "review_reason": payload.get("review_reason"),
         "llm_status": "available" if llm_judge else "unavailable",
@@ -153,6 +154,8 @@ def summarize_event_result(result: dict[str, Any], image_name: str | None = None
     print(f"Immediate risk: {bool(structured.get('immediate_risk', False))}")
     print(f"Far water only: {bool(structured.get('far_water_only', False))}")
     print(f"Mask quality warning: {bool(structured.get('mask_quality_warning', False))}")
+    if structured.get("full_road_water_no_reference"):
+        print("Full-road water without reference object: True")
     if payload.get("review_required"):
         print("Review required: Yes")
         if payload.get("review_reason"):

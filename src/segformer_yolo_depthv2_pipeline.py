@@ -603,6 +603,17 @@ class SegformerYoloDepthV2Pipeline:
         broad_mask_warning = bool(features.get("broad_mask_warning", False))
         immediate_risk = bool(features.get("immediate_risk", False))
         water_touches_bottom = bool(features.get("water_touches_bottom", False))
+        full_road_water_no_reference = (
+            reference_count < 1
+            and coverage >= 0.70
+            and near_pct >= 0.70
+            and mid_pct >= 0.60
+            and immediate_risk
+        )
+        if full_road_water_no_reference:
+            features["full_road_water_no_reference"] = True
+            features["review_required"] = True
+            features["review_reason"] = "Road surface is broadly covered by water, but no reference object was detected for exact depth."
         strong_vehicle_submersion = multi_vehicle_bumper_evidence or (reference_count >= 2 and max_reference_submersion >= 0.70) or single_strong_vehicle_evidence
         useful_reference_evidence = reference_count >= 1 and max_reference_submersion >= 0.45
         weak_reference_evidence = not useful_reference_evidence
@@ -615,7 +626,10 @@ class SegformerYoloDepthV2Pipeline:
         elif far_dominant_water and weak_reference_evidence:
             depth_cm = min(depth_cm, 20.0)
         elif broad_mask_warning:
-            if near_pct >= 0.70 and max_reference_submersion >= 0.85:
+            if full_road_water_no_reference:
+                depth_cm = max(depth_cm, 45.0)
+                depth_cm = min(depth_cm, 50.0)
+            elif near_pct >= 0.70 and max_reference_submersion >= 0.85:
                 depth_cm = min(depth_cm, 40.0)
             else:
                 depth_cm = min(depth_cm, 25.0)
@@ -722,6 +736,8 @@ class SegformerYoloDepthV2Pipeline:
             for obj in top_refs
         ]
         stage_cues = [f"{step['stage']}: {step['summary']}" for step in trace]
+        if features.get("full_road_water_no_reference"):
+            stage_cues.append("Road coverage gate: full-road water with no reference object; depth kept conservative and marked for review")
         visual_cues = stage_cues + ref_cues
 
         return {

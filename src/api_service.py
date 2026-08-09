@@ -75,6 +75,11 @@ class FloodApiService:
         reference_objects = self._reference_objects_from_metadata(result.metadata)
         result_payload["detected_reference_objects"] = reference_objects
         result_payload["visual_cues"] = result.metadata.get("visual_cues", [])
+        structured_features = result.metadata.get("structured_features", {}) or {}
+        if structured_features.get("review_required"):
+            result_payload["review_required"] = True
+            result_payload["review_reason"] = structured_features.get("review_reason")
+            result_payload["operational_decision_source"] = "pipeline_review_required"
 
         llm_judge_result = None
         if self.llm_judge is not None:
@@ -309,6 +314,9 @@ class FloodApiService:
             "immediate_risk": structured.get("immediate_risk"),
             "far_water_only": structured.get("far_water_only"),
             "mask_quality_warning": structured.get("mask_quality_warning"),
+            "full_road_water_no_reference": structured.get("full_road_water_no_reference"),
+            "review_required": structured.get("review_required"),
+            "review_reason": structured.get("review_reason"),
             "visual_cues": result_payload.get("visual_cues", []),
         }
 
