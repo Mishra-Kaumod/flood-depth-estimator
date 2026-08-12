@@ -448,34 +448,7 @@ function showResults(results) {
       }).join('');
       const flagsHtml = flags.length ? `<div style="margin-top:3px">${flagPills}</div>` : '';
 
-      const detailHtml = (d.water_pct !== undefined) ? `
-        <div style="margin-top:6px;padding:6px 8px;background:#fef3c7;border-radius:6px;border:1px solid #fcd34d">
-          <div style="font-size:.67rem;font-weight:700;color:#92400e;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px">Scene Analysis (SegFormer + DepthV2)</div>
-          <table style="width:100%;border-collapse:collapse;font-size:.68rem;color:#78350f">
-            <tr>
-              <td style="padding:2px 4px 2px 0;white-space:nowrap">💧 Water coverage</td>
-              <td style="padding:2px 4px">${waterBar}</td>
-              <td style="padding:2px 0;text-align:right;white-space:nowrap"><b>${d.water_pct}%</b> ${wLabel}</td>
-            </tr>
-            <tr>
-              <td style="padding:2px 4px 2px 0;white-space:nowrap">📍 Distribution</td>
-              <td style="padding:2px 4px"><span style="font-size:.9em">${posIcon}</span> <span style="font-size:.67rem;color:#92400e">bot ${botPct} · top ${topPct}</span></td>
-              <td style="padding:2px 0;text-align:right;white-space:nowrap">${posLabel}</td>
-            </tr>
-            <tr>
-              <td style="padding:2px 4px 2px 0;white-space:nowrap">📏 Depth signal</td>
-              <td style="padding:2px 4px">${depthBar}</td>
-              <td style="padding:2px 0;text-align:right;white-space:nowrap"><b>${dLabel}</b> (p90 ${d.depth_p90})</td>
-            </tr>
-            <tr style="border-top:1px solid #fcd34d">
-              <td style="padding:3px 4px 2px 0;white-space:nowrap">🔬 Water signal</td>
-              <td style="padding:3px 4px">${wqBar}</td>
-              <td style="padding:3px 0;text-align:right;white-space:nowrap" style="color:${wqColor}"><b>${wqLabel}</b></td>
-            </tr>
-          </table>
-          ${flagsHtml}
-          <div style="font-size:.64rem;color:#a16207;margin-top:4px;line-height:1.4">⚠️ No real-world scale anchor · add a car, person or motorbike for a calibrated reading</div>
-        </div>` : '';
+      const detailHtml = '';
 
       // Hard-stop display when water signal is unreliable.
       const hasNumericDepth = (typeof r.depth_cm === 'number') && isFinite(r.depth_cm);
