@@ -29,7 +29,8 @@ from src.settings import load_settings_dict
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_PATH = Path(__file__).parent / "models" / "best_flood_model_water_aware.pth"
+# Default to a local Windows absolute path for testing; can be overridden with the MODEL_PATH env var
+DEFAULT_MODEL_PATH = Path(r"D:\best_flood_model_water_aware1508.pth")
 ENV_MODEL_PATH = os.environ.get("MODEL_PATH")
 MODEL_PATH = Path(ENV_MODEL_PATH) if ENV_MODEL_PATH else DEFAULT_MODEL_PATH
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
