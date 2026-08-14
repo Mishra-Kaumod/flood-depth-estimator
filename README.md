@@ -83,7 +83,7 @@ flood-depth-estimator/
 │   ├── PRODUCTION_ARCHITECTURE.md      # Full production deployment architecture
 │   ├── TRAINING_ROADMAP.md             # Planned ML improvements
 │   ├── AFTER_TRAINING_CHECKLIST.md     # Post-training steps
-│   ├── architecture.html               # Visual 5-stage architecture diagram
+│   ├── pipeline_architecture.html      # Canonical architecture and file-registry dashboard
 │   └── dashboard.html                  # Ops monitoring dashboard
 │
 ├── .github/workflows/

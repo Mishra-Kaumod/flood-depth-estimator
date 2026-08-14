@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flood Depth Estimator — Model Architecture &amp; File Registry</title>
+  <style>
+    :root {
+      --bg: #f8fbff;
+      --card: #ffffff;
+      --line: #cfe0f5;
+      --text: #123b6d;
+      --muted: #54759c;
+      --blue: #1d4ed8;
+      --blue-strong: #0f3ea9;
+      --blue-soft: #eaf3ff;
+      --green: #2563eb;
+      --amber: #3b82f6;
+      --red: #1e40af;
+      --purple: #2563eb;
+      --cyan: #0f5cc0;
+      --shadow: 0 10px 24px rgba(29, 78, 216, 0.08);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 20px;
+    }
+    .wrap { max-width: 1180px; margin: 0 auto; }
+    header {
+      background: linear-gradient(135deg, #ffffff, #eef6ff);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 20px;
+      margin-bottom: 14px;
+    }
+    h1 { font-size: 20px; margin-bottom: 6px; color: var(--blue-strong); }
+    h2, h3 { color: var(--blue-strong); }
+    .sub { color: var(--muted); font-size: 13px; }
+    .chips { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .chip {
+      font-size: 11px;
+      border-radius: 999px;
+      padding: 4px 9px;
+      border: 1px solid var(--line);
+      color: var(--blue-strong);
+      background: var(--blue-soft);
+    }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+    .tab {
+      border: 1px solid var(--line);
+      background: #ffffff;
+      color: var(--muted);
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      transition: all 0.18s ease;
+    }
+    .tab:hover { background: var(--blue-soft); color: var(--blue); }
+    .tab.active {
+      color: #ffffff;
+      border-color: var(--blue);
+      background: linear-gradient(135deg, var(--blue), var(--blue-strong));
+    }
+    .pane { display: none; }
+    .pane.active { display: block; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+    .stage {
+      border-left: 4px solid var(--line);
+      background: linear-gradient(90deg, rgba(234, 243, 255, 0.65), rgba(255, 255, 255, 0));
+      border-radius: 8px;
+      padding: 10px 10px 10px 12px;
+      margin: 10px 0;
+    }
+    .s1 { border-color: var(--blue); }
+    .s2 { border-color: var(--green); }
+    .s3 { border-color: var(--purple); }
+    .s4 { border-color: var(--amber); }
+    .s5 { border-color: var(--red); }
+    .stage h3 { font-size: 14px; margin-bottom: 5px; }
+    .mono { font-family: Consolas, "Courier New", monospace; color: var(--cyan); font-size: 12px; }
+    .muted { color: var(--muted); font-size: 12px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 12px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 9px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #edf5ff;
+      color: var(--blue-strong);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    tr:nth-child(even) td {
+      background: #f9fcff;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      border: 1px solid var(--line);
+      color: var(--blue-strong);
+      margin-right: 5px;
+      margin-bottom: 4px;
+      white-space: nowrap;
+      background: var(--blue-soft);
+    }
+    .b-api { color: var(--blue); border-color: #93c5fd; }
+    .b-core { color: #1e40af; border-color: #93c5fd; }
+    .b-ops { color: #1d4ed8; border-color: #bfdbfe; }
+    .b-obs { color: #2563eb; border-color: #bfdbfe; }
+    .b-sec { color: #0f3ea9; border-color: #93c5fd; }
+    ul { padding-left: 18px; }
+    li { margin: 4px 0; }
+    .grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    }
+    a { color: var(--blue); }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Flood Depth Estimator — Model Architecture &amp; File Registry</h1>
+    <p class="sub">
+      Canonical architecture dashboard for the current Flask + SegFormer/YOLO/DepthV2 + Celery stack.
+    </p>
+    <div class="chips">
+      <span class="chip">Entry: <span class="mono">app.py:/predict</span></span>
+      <span class="chip">Async Queue: <span class="mono">scripts/tasks.py</span></span>
+      <span class="chip">Core: <span class="mono">src/segformer_yolo_depthv2_pipeline.py</span></span>
+      <span class="chip">Metrics: <span class="mono">/metrics</span></span>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <button class="tab active" data-pane="flow">Pipeline Flow</button>
+    <button class="tab" data-pane="registry">File Registry</button>
+    <button class="tab" data-pane="deps">Dependency Map</button>
+    <button class="tab" data-pane="kt">KT Deep Dive</button>
+    <button class="tab" data-pane="leadership">Leadership View</button>
+  </div>
+
+  <section id="flow" class="pane active">
+    <div class="card">
+      <h2>End-to-end request flow</h2>
+      <p class="muted">Upload → guardrails → async queue/sync path → staged model inference → calibrated response → metrics</p>
+
+      <div class="stage s1">
+        <h3>Execution paths</h3>
+        <div class="muted"><strong>Async default:</strong> <span class="mono">POST /predict</span> enqueues Celery job and returns <span class="mono">job_id</span>; client polls <span class="mono">GET /predict/&lt;job_id&gt;</span>.</div>
+        <div class="muted"><strong>Sync override:</strong> <span class="mono">POST /predict?sync=1</span> runs inline via <span class="mono">_predict_single()</span>.</div>
+        <div class="muted"><strong>Fallback:</strong> if queue backend is unavailable, API falls back to sync mode with <span class="mono">mode=sync_fallback</span>.</div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Step</th>
+            <th>File</th>
+            <th>Dependency</th>
+            <th>Function / endpoint</th>
+            <th>Input</th>
+            <th>Output</th>
+            <th>Failure behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1. Request ingress</td>
+            <td class="mono">app.py</td>
+            <td>Flask, PIL, stdlib</td>
+            <td class="mono">POST /predict</td>
+            <td>multipart image + optional lat/lng/camera_id</td>
+            <td>Accepted request context</td>
+            <td>400 if no image</td>
+          </tr>
+          <tr>
+            <td>2. Upload security checks</td>
+            <td class="mono">app.py</td>
+            <td>_validate_image_upload, _client_rate_key, SlidingWindowRateLimiter</td>
+            <td class="mono">_validate_image_upload(raw, mimetype)</td>
+            <td>raw bytes + MIME + client identity</td>
+            <td>validated image bytes</td>
+            <td>429 on rate limit, 400 on invalid signature/MIME</td>
+          </tr>
+          <tr>
+            <td>3. Async dispatch</td>
+            <td class="mono">app.py → scripts/tasks.py</td>
+            <td>Celery, Redis, src.event_contract</td>
+            <td class="mono">infer_flood_depth.apply_async(...)</td>
+            <td>FloodEvent payload (JSON-safe dict)</td>
+            <td>202 + job_id + poll_url</td>
+            <td>On broker/backend error: sync fallback path</td>
+          </tr>
+          <tr>
+            <td>4. Job polling</td>
+            <td class="mono">app.py</td>
+            <td>celery.result.AsyncResult</td>
+            <td class="mono">GET /predict/&lt;job_id&gt;</td>
+            <td>job_id</td>
+            <td>processing/done/error state</td>
+            <td>503 when Celery unavailable</td>
+          </tr>
+          <tr>
+            <td>5. Queue worker adapter</td>
+            <td class="mono">scripts/tasks.py</td>
+            <td>src.pipeline.execute_event, src.middleware.retry, src.dlq</td>
+            <td class="mono">infer_flood_depth(self, event_payload)</td>
+            <td>validated event payload</td>
+            <td>FloodResultEvent JSON</td>
+            <td>Transient retry, then DLQ on permanent failure</td>
+          </tr>
+          <tr>
+            <td>6. Unified event execution</td>
+            <td class="mono">src/pipeline.py</td>
+            <td>observe_execution, run_with_retry, settings</td>
+            <td class="mono">execute_event(event)</td>
+            <td>FloodEvent</td>
+            <td>FloodResultEvent with metadata</td>
+            <td>Propagates exception after policy retries</td>
+          </tr>
+          <tr>
+            <td>7. Sync inference entry</td>
+            <td class="mono">app.py</td>
+            <td>numpy, PIL</td>
+            <td class="mono">_predict_single(image)</td>
+            <td>PIL RGB image</td>
+            <td>prediction dict</td>
+            <td>Exceptions returned as API errors</td>
+          </tr>
+          <tr>
+            <td>8. Stage 1 water detection</td>
+            <td class="mono">src/segformer_yolo_depthv2_pipeline.py + src/water_region_detector.py</td>
+            <td>OpenCV, NumPy</td>
+            <td class="mono">_segformer_water_mask() → detect_validated()</td>
+            <td>image_rgb</td>
+            <td>water_mask, coverage_pct, confidence, flags</td>
+            <td>Low-confidence signal triggers depth suppression logic later</td>
+          </tr>
+          <tr>
+            <td>9. Stage 2 reference anchors</td>
+            <td class="mono">src/segformer_yolo_depthv2_pipeline.py + src/reference_depth_estimator.py</td>
+            <td>ultralytics YOLO (optional), contour proxy fallback</td>
+            <td class="mono">_yolov8_reference_stage(), estimate()</td>
+            <td>image_rgb + water_mask</td>
+            <td>reference objects, submersion ratios, ref depth cues</td>
+            <td>No anchor does not fail; returns low-confidence path</td>
+          </tr>
+          <tr>
+            <td>10. Stage 3 dense depth</td>
+            <td class="mono">src/segformer_yolo_depthv2_pipeline.py</td>
+            <td>Classical depth proxy + optional Gemini</td>
+            <td class="mono">_depth_anything_v2_dense_map(), _gemini_dense_depth()</td>
+            <td>image_rgb + water_mask</td>
+            <td>dense_depth_map + optional Gemini depth hints</td>
+            <td>Gemini timeout/fail ⇒ classical depth proxy only</td>
+          </tr>
+          <tr>
+            <td>11. Stage 4 fusion</td>
+            <td class="mono">src/segformer_yolo_depthv2_pipeline.py</td>
+            <td>Feature engineering + optional Gemini fusion</td>
+            <td class="mono">_fusion_engine(), _gemini_fusion()</td>
+            <td>coverage + refs + depth statistics</td>
+            <td>structured_features + fused depth estimate</td>
+            <td>Gemini fail ⇒ deterministic feature fusion only</td>
+          </tr>
+          <tr>
+            <td>12. Stage 5 calibration</td>
+            <td class="mono">src/segformer_yolo_depthv2_pipeline.py</td>
+            <td>Severity model + optional Gemini evaluator</td>
+            <td class="mono">_calibration_severity_model(), _gemini_calibration()</td>
+            <td>fused depth + confidence + features</td>
+            <td>depth_cm, severity, confidence, action_trigger</td>
+            <td>Gemini fail ⇒ classical calibration retained</td>
+          </tr>
+          <tr>
+            <td>13. Gemini resilience controls</td>
+            <td class="mono">src/middleware/retry.py, circuit_breaker.py, budget_tracker.py</td>
+            <td>RetryPolicy, CircuitBreaker, ApiBudgetTracker</td>
+            <td class="mono">run_with_retry(), allow_request(), try_consume()</td>
+            <td>Gemini call attempts</td>
+            <td>success/fallback decision</td>
+            <td>On limits/failures forces classical-only path</td>
+          </tr>
+          <tr>
+            <td>14. API response shaping</td>
+            <td class="mono">app.py</td>
+            <td>depth_to_severity + pipeline result dict</td>
+            <td class="mono">_predict_single return + /predict payload</td>
+            <td>model output + trace + metadata</td>
+            <td>JSON with depth, confidence, severity, trace</td>
+            <td>If water unreliable, numeric depth can be suppressed</td>
+          </tr>
+          <tr>
+            <td>15. Telemetry endpoints</td>
+            <td class="mono">app.py + src/middleware/observability.py</td>
+            <td>METRICS, render_prometheus_metrics</td>
+            <td class="mono">GET /health, GET /metrics</td>
+            <td>runtime counters/histograms/gauges</td>
+            <td>health JSON + Prometheus text</td>
+            <td>Degraded dependencies reflected in status/metrics</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="registry" class="pane">
+    <div class="card">
+      <h2>Active file registry</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Layer</th>
+            <th>Main responsibility</th>
+            <th>Key functions / entrypoints</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono">app.py</td>
+            <td><span class="badge b-api">API</span><span class="badge b-sec">Security</span></td>
+            <td>HTTP endpoints, upload guards, async enqueue, sync fallback</td>
+            <td class="mono">/predict, /predict/&lt;job_id&gt;, /health, /metrics, _predict_single</td>
+          </tr>
+          <tr>
+            <td class="mono">src/segformer_yolo_depthv2_pipeline.py</td>
+            <td><span class="badge b-core">Core ML</span></td>
+            <td>5-stage inference orchestration and final response payload</td>
+            <td class="mono">SegformerYoloDepthV2Pipeline.predict, _gemini_dense_depth, _gemini_fusion, _gemini_calibration</td>
+          </tr>
+          <tr>
+            <td class="mono">src/water_region_detector.py</td>
+            <td><span class="badge b-core">Stage 1</span></td>
+            <td>Water mask detection + false-positive reduction</td>
+            <td class="mono">detect_validated</td>
+          </tr>
+          <tr>
+            <td class="mono">src/reference_depth_estimator.py</td>
+            <td><span class="badge b-core">Fallback CV</span></td>
+            <td>Reference-object and waterline depth estimation</td>
+            <td class="mono">estimate, detect_reference_objects</td>
+          </tr>
+          <tr>
+            <td class="mono">src/pipeline.py</td>
+            <td><span class="badge b-core">Event pipeline</span></td>
+            <td>Unified event processing for API/queue adapters</td>
+            <td class="mono">UnifiedEventProcessor.process_event, execute_event</td>
+          </tr>
+          <tr>
+            <td class="mono">scripts/tasks.py</td>
+            <td><span class="badge b-ops">Queue</span></td>
+            <td>Celery adapter, retries, DLQ path for failed events</td>
+            <td class="mono">infer_flood_depth</td>
+          </tr>
+          <tr>
+            <td class="mono">src/middleware/retry.py</td>
+            <td><span class="badge b-core">Resilience</span></td>
+            <td>Transient-failure retry policy</td>
+            <td class="mono">run_with_retry, is_transient_error</td>
+          </tr>
+          <tr>
+            <td class="mono">src/middleware/circuit_breaker.py</td>
+            <td><span class="badge b-core">Resilience</span></td>
+            <td>Opens circuit after repeated Gemini failures</td>
+            <td class="mono">CircuitBreaker.allow_request, record_failure</td>
+          </tr>
+          <tr>
+            <td class="mono">src/middleware/budget_tracker.py</td>
+            <td><span class="badge b-core">Resilience</span></td>
+            <td>Hourly/daily call and spend budget control</td>
+            <td class="mono">ApiBudgetTracker.try_consume, snapshot</td>
+          </tr>
+          <tr>
+            <td class="mono">src/middleware/observability.py</td>
+            <td><span class="badge b-obs">Observability</span></td>
+            <td>In-memory counters/histograms + Prometheus rendering</td>
+            <td class="mono">METRICS, render_prometheus_metrics, observe_execution</td>
+          </tr>
+          <tr>
+            <td class="mono">config/config.yaml</td>
+            <td><span class="badge b-ops">Config</span></td>
+            <td>Inference mode, Gemini controls, rate limits, alert profiles</td>
+            <td class="mono">inference.*, monitoring.alert_profiles.*</td>
+          </tr>
+          <tr>
+            <td class="mono">evaluate_model_readiness.py</td>
+            <td><span class="badge b-ops">Quality gate</span></td>
+            <td>Architecture-aligned CI readiness evaluator</td>
+            <td class="mono">--enforce-gates thresholds</td>
+          </tr>
+          <tr>
+            <td class="mono">create_labeled_manifest.py</td>
+            <td><span class="badge b-ops">Quality gate</span></td>
+            <td>Builds evaluator-compatible manifest schema</td>
+            <td class="mono">image_path, expected_flood, expected_depth_cm, scene_type</td>
+          </tr>
+          <tr>
+            <td class="mono">.github/workflows/model-readiness-gate.yml</td>
+            <td><span class="badge b-ops">CI</span></td>
+            <td>Runs manifest generation + readiness gate</td>
+            <td class="mono">quality-gate job</td>
+          </tr>
+          <tr>
+            <td class="mono">.github/workflows/deploy.yml</td>
+            <td><span class="badge b-ops">CD</span></td>
+            <td>Gate-then-deploy with canary and seasonal scaling setup</td>
+            <td class="mono">quality-gate, shadow-canary, deploy jobs</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="deps" class="pane">
+    <div class="grid">
+      <div class="card">
+        <h2>Runtime dependency chain</h2>
+        <ul>
+          <li><span class="mono">app.py</span> → calls <span class="mono">scripts.tasks.infer_flood_depth</span> (async) or <span class="mono">_predict_single</span> (sync).</li>
+          <li><span class="mono">_predict_single</span> → <span class="mono">get_segformer_yolo_depthv2_pipeline().predict()</span>.</li>
+          <li><span class="mono">SegformerYoloDepthV2Pipeline</span> → <span class="mono">WaterRegionDetector</span> + <span class="mono">ReferenceDepthEstimator</span> + optional YOLO + optional Gemini.</li>
+          <li>Gemini path → guarded by <span class="mono">run_with_retry</span>, <span class="mono">CircuitBreaker</span>, <span class="mono">ApiBudgetTracker</span>.</li>
+          <li>Queue path → <span class="mono">src.pipeline.execute_event</span> and DLQ routing on permanent failure.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>Operational dependency chain</h2>
+        <ul>
+          <li>Readiness evaluator and manifest scripts feed CI quality gates.</li>
+          <li>Deploy workflow depends on quality gate and shadow canary before ECS rollout.</li>
+          <li>/metrics exposes counters/histograms/gauges consumed by Prometheus/Grafana.</li>
+          <li>Config values in <span class="mono">config/config.yaml</span> drive retries, budgets, and seasonal alert thresholds.</li>
+          <li><span class="mono">docs/pipeline_architecture.html</span> is the single canonical architecture dashboard.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="kt" class="pane">
+    <div class="card">
+      <h2>KT deep dive (engineering handoff)</h2>
+      <p class="muted">Use this tab for team onboarding, ownership mapping, and troubleshooting by file.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>What it owns</th>
+            <th>When to edit</th>
+            <th>Key dependency</th>
+            <th>Common issue signal</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono">app.py</td>
+            <td>API contracts, upload guardrails, async/sync routing, response shaping</td>
+            <td>Endpoint behavior, validation rules, request/response fields</td>
+            <td>scripts/tasks.py, pipeline singleton</td>
+            <td>4xx/5xx API spikes, queue fallback logs</td>
+          </tr>
+          <tr>
+            <td class="mono">src/segformer_yolo_depthv2_pipeline.py</td>
+            <td>5-stage ML inference orchestration and output policy</td>
+            <td>Depth logic, confidence policy, stage-level behavior</td>
+            <td>water_region_detector, reference_depth_estimator, middleware/*</td>
+            <td>Unexpected depth/severity drift or false-positive water</td>
+          </tr>
+          <tr>
+            <td class="mono">src/water_region_detector.py</td>
+            <td>Water-mask creation + false-positive suppression flags</td>
+            <td>Water detection thresholds and cleanup heuristics</td>
+            <td>OpenCV + NumPy</td>
+            <td>High suppression count, weak water-confidence</td>
+          </tr>
+          <tr>
+            <td class="mono">src/reference_depth_estimator.py</td>
+            <td>Reference-object and waterline-based fallback depth</td>
+            <td>No-anchor behavior and physical depth cue calibration</td>
+            <td>Contour/object cue extraction</td>
+            <td>No-reference estimates feel too high/low</td>
+          </tr>
+          <tr>
+            <td class="mono">scripts/tasks.py</td>
+            <td>Celery queue adapter, retries, DLQ routing</td>
+            <td>Worker behavior, queue retry strategy, failure handling</td>
+            <td>src/pipeline.py, src/dlq.py</td>
+            <td>Growing pending queue or repeated RETRY/FAILURE states</td>
+          </tr>
+          <tr>
+            <td class="mono">src/pipeline.py</td>
+            <td>Unified event execution path for API + queue</td>
+            <td>Cross-channel execution consistency</td>
+            <td>event_contract, observability, retry middleware</td>
+            <td>API/queue output mismatch for same input</td>
+          </tr>
+          <tr>
+            <td class="mono">src/middleware/observability.py</td>
+            <td>Metrics counters/histograms and Prometheus render</td>
+            <td>Metric naming/shape, telemetry enrichment</td>
+            <td>METRICS global, app.py:/metrics</td>
+            <td>Missing metrics in dashboards</td>
+          </tr>
+          <tr>
+            <td class="mono">config/config.yaml</td>
+            <td>Runtime policy: retries, budgets, thresholds, alert profiles</td>
+            <td>Seasonal threshold tuning and Gemini guardrails</td>
+            <td>settings loader across runtime</td>
+            <td>Mismatch between expected and actual runtime behavior</td>
+          </tr>
+          <tr>
+            <td class="mono">evaluate_model_readiness.py</td>
+            <td>Release quality gate</td>
+            <td>Gate metric/threshold updates</td>
+            <td>manifest CSV, pipeline predict output</td>
+            <td>CI gate failures on F1/MAE/latency/contradictions</td>
+          </tr>
+          <tr>
+            <td class="mono">.github/workflows/deploy.yml</td>
+            <td>Gate-dependent deployment + canary + scaling workflow</td>
+            <td>Release orchestration, deployment safety controls</td>
+            <td>quality-gate + shadow-canary jobs</td>
+            <td>Blocked deploys or ECS scale policy drift</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h2>KT runbook sequence</h2>
+      <ul>
+        <li>Start from <span class="mono">app.py:/predict</span> and walk both async and sync paths.</li>
+        <li>Trace one sample image through all 5 stages in <span class="mono">segformer_yolo_depthv2_pipeline.py</span>.</li>
+        <li>Review fallback policy: no-anchor behavior, water-confidence suppression, and Gemini fallback.</li>
+        <li>Check queue reliability path: <span class="mono">scripts/tasks.py</span> retry + DLQ behavior.</li>
+        <li>Validate production controls: readiness gate and deploy workflow dependencies.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="leadership" class="pane">
+    <div class="card">
+      <h2>Leadership workflow (high-level)</h2>
+      <p class="muted">Business-level lifecycle from image intake to operational action.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Phase</th>
+            <th>What happens</th>
+            <th>Why it matters</th>
+            <th>Success signal</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1. Ingest &amp; protect</td>
+            <td>Image uploads are validated, rate-limited, and accepted via API.</td>
+            <td>Prevents abuse and bad input from affecting service quality.</td>
+            <td>Low 4xx abuse noise, stable intake latency</td>
+          </tr>
+          <tr>
+            <td>2. Process at scale</td>
+            <td>Requests are queued and processed asynchronously with sync fallback safety.</td>
+            <td>Maintains responsiveness during monsoon spikes.</td>
+            <td>Healthy queue depth and completion rates</td>
+          </tr>
+          <tr>
+            <td>3. Estimate flood depth</td>
+            <td>Five-stage pipeline computes water extent, depth, severity, and action cues.</td>
+            <td>Produces actionable flood intelligence, not just raw model output.</td>
+            <td>Consistent depth + severity outputs</td>
+          </tr>
+          <tr>
+            <td>4. Degrade safely</td>
+            <td>If AI services fail or confidence is weak, system falls back to classical logic.</td>
+            <td>Avoids hard outages and limits unsafe predictions.</td>
+            <td>Fallback used without service interruption</td>
+          </tr>
+          <tr>
+            <td>5. Observe &amp; alert</td>
+            <td>Health/metrics expose latency, failures, Gemini fallback, suppression rates.</td>
+            <td>Enables operational control and fast incident response.</td>
+            <td>SLOs inside thresholds</td>
+          </tr>
+          <tr>
+            <td>6. Release with gates</td>
+            <td>Model readiness and canary checks must pass before deploy.</td>
+            <td>Prevents low-quality or risky models from reaching production.</td>
+            <td>Gate-pass deploys only</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+  const tabs = document.querySelectorAll(".tab");
+  const panes = document.querySelectorAll(".pane");
+  tabs.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      tabs.forEach((t) => t.classList.remove("active"));
+      panes.forEach((p) => p.classList.remove("active"));
+      btn.classList.add("active");
+      document.getElementById(btn.dataset.pane).classList.add("active");
+    });
+  });
+</script>
+</body>
+</html>

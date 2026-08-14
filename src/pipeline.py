@@ -196,7 +196,25 @@ class UnifiedEventProcessor:
             confidence_out = confidence
             frame_count = 1
 
-        band = self.classifier.classify(depth_m * 100.0)
+        # Prefer pipeline-provided severity when available (SegFormer pipeline is SOT)
+        if self.pipeline_mode == "segformer_yolov8_depthv2_fusion" and 'staged' in locals() and isinstance(staged, dict):
+            sev = staged.get('severity')
+            if isinstance(sev, dict):
+                color_code = sev.get('color') or sev.get('hex_color') or ''
+                severity_val = sev.get('stage') or sev.get('severity') or None
+                severity_label = sev.get('label') or sev.get('level') or ''
+            else:
+                # Fallback to classifier if severity shape is unexpected
+                band = self.classifier.classify(depth_m * 100.0)
+                color_code = band.hex_color
+                severity_val = band.severity
+                severity_label = band.label
+        else:
+            band = self.classifier.classify(depth_m * 100.0)
+            color_code = band.hex_color
+            severity_val = band.severity
+            severity_label = band.label
+
         return FloodResultEvent(
             event_id=event.event_id,
             trace_id=event.trace_id,
@@ -207,10 +225,10 @@ class UnifiedEventProcessor:
             longitude=event.longitude,
             estimated_depth_meters=round(depth_m, 4),
             confidence_score=round(confidence_out, 4),
-            color_code=band.hex_color,
+            color_code=color_code,
             action_trigger=action,
-            severity=band.severity,
-            severity_label=band.label,
+            severity=severity_val,
+            severity_label=severity_label,
             method=method,
             window_frame_count=frame_count,
             metadata=metadata,
