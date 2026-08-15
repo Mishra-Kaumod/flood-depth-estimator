@@ -31,11 +31,19 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_PATH = Path(__file__).parent / "models" / "best_flood_model_water_aware.pth"
 ENV_MODEL_PATH = os.environ.get("MODEL_PATH")
-EXTERNAL_MODEL_PATH = Path(r"E:\flood_model_v6.1.pth")
+EXTERNAL_MODEL_PATH = Path(
+    r"C:\Users\pooja\copilot-worktrees\flood-depth-estimator\kaumod-automatic-barnacle\models\Flood_Depth_R2_Advanced_Fusion.ipynb"
+)
+EXTERNAL_MODEL_IS_TORCH_WEIGHTS = EXTERNAL_MODEL_PATH.suffix.lower() == ".pth"
 MODEL_PATH = Path(ENV_MODEL_PATH) if ENV_MODEL_PATH else (
-    EXTERNAL_MODEL_PATH if EXTERNAL_MODEL_PATH.exists() else DEFAULT_MODEL_PATH
+    EXTERNAL_MODEL_PATH if (EXTERNAL_MODEL_PATH.exists() and EXTERNAL_MODEL_IS_TORCH_WEIGHTS) else DEFAULT_MODEL_PATH
 )
 EXTERNAL_MODEL_ACTIVE = MODEL_PATH == EXTERNAL_MODEL_PATH
+if EXTERNAL_MODEL_PATH.exists() and not EXTERNAL_MODEL_IS_TORCH_WEIGHTS:
+    logger.warning(
+        "External model path exists but is not a .pth file (%s); falling back to default model.",
+        EXTERNAL_MODEL_PATH,
+    )
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 PIPELINE_MODE = os.environ.get("FLOOD_PIPELINE_MODE", "segformer_yolov8_depthv2_fusion").strip().lower()
 
