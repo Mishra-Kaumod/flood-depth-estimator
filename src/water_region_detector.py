@@ -69,6 +69,8 @@ class WaterRegionDetector:
         if self.use_contrast:
             contrast_mask = self._detect_contrast(image)
             combined_mask = np.maximum(combined_mask, contrast_mask)
+
+
         
         # Morphological cleanup
         combined_mask = self._morphological_cleanup(combined_mask)
@@ -134,6 +136,35 @@ class WaterRegionDetector:
         threshold = np.percentile(contrast, 25)  # Bottom 25% contrast
         mask = (contrast < threshold).astype(np.uint8) * 255
         
+        return mask
+
+    def _detect_muddy_floodwater(self, image: np.ndarray) -> np.ndarray:
+        """Detect turbid brown/gray floodwater in lower road/camera regions."""
+        h, w = image.shape[:2]
+        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+        hue = hsv[:, :, 0]
+        sat = hsv[:, :, 1]
+        val = hsv[:, :, 2]
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+
+        # Muddy water is usually tan/brown/gray, not blue. Restrict this
+        # fallback mostly to the lower scene so walls/sky are not selected.
+        yy = np.arange(h).reshape(h, 1)
+        lower_scene = yy >= int(h * 0.35)
+        brown_water = (hue >= 8) & (hue <= 42) & (sat >= 18) & (sat <= 185) & (val >= 35) & (val <= 235)
+        gray_brown_water = (hue >= 5) & (hue <= 55) & (sat >= 8) & (sat <= 95) & (val >= 55) & (val <= 230)
+
+        blur = cv2.GaussianBlur(gray, (9, 9), 0)
+        texture = np.abs(gray.astype(np.float32) - blur.astype(np.float32))
+        lower_texture = texture[lower_scene.repeat(w, axis=1)]
+        threshold = float(np.percentile(lower_texture, 72)) if lower_texture.size else 12.0
+        smooth_or_reflective = texture <= max(10.0, threshold)
+
+        mask = lower_scene & (brown_water | gray_brown_water) & smooth_or_reflective
+        mask = mask.astype(np.uint8) * 255
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
         return mask
     
     def _morphological_cleanup(self, mask: np.ndarray, kernel_size: int = 5) -> np.ndarray:

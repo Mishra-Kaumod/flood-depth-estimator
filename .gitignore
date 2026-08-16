@@ -1,8 +1,13 @@
 .venv/
-venv/
 __pycache__/
 *.pyc
-.env
-.env.*
-*.log
-data/*.sqlite3
+.pytest_cache/
+
+# Local/generated outputs
+reports/
+data/final_predictions.csv
+data/final_predictions.parquet
+
+# Recovery archive kept locally, not for git
+archive_cleanup/
+replace.txt

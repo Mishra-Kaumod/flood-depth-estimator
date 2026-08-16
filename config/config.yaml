@@ -2,9 +2,9 @@
 # Centralized configuration for training, inference, and deployment
 # Designed for AWS EC2, S3, ECR/ECS, and Lambda environments
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ---------------------------------------------------------------------
 # TRAINING CONFIGURATION (EC2 / AWS Trainium)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ---------------------------------------------------------------------
 training:
   model_type: "efficientnet_b0"
   backbone_weights: "imagenet"
@@ -67,9 +67,9 @@ training:
     bucket: ""
     prefix: "bengaluru-flood/model-registry"
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ---------------------------------------------------------------------
 # DATA INGESTION CONFIGURATION (S3 / Local)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ---------------------------------------------------------------------
 data:
   # Local dataset paths (fallback for development)
   train_dir: "flood_dataset/train"
@@ -94,9 +94,9 @@ data:
   min_image_size: [100, 100]
   max_image_size: [4000, 4000]
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ---------------------------------------------------------------------
 # INFERENCE & SERVING CONFIGURATION (ECS/Fargate, Lambda)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ---------------------------------------------------------------------
 inference:
   model_path: "models/best_flood_model_water_aware.pth"
   device: "cpu"  # "cpu" or "cuda"
@@ -107,6 +107,22 @@ inference:
     backend: "depth_anything_v2"  # depth_anything_v2 | proxy
     model_name: "depth-anything/Depth-Anything-V2-Small-hf"
     device: -1  # -1 CPU, 0 first CUDA GPU
+  efficientnet_signal:
+    enabled: true
+    model_path: "models/candidate/best_flood_model_water_aware_hardneg.pth"
+    max_depth_cm: 180.0
+    device: "cpu"
+    apply_corrections: true
+  residual_fusion_signal:
+    enabled: true
+    model_path: "models/candidate/residual_fusion_depth_model_retrain_old_eff_20260816_231536.pt"
+    device: "cpu"
+    apply_corrections: true
+    skip_low_water_gate: true
+    max_live_adjustment_cm: 30.0
+    allow_large_candidate_aligned_adjustment: true
+    large_adjustment_candidate_alignment_cm: 15.0
+    review_delta_cm: 20.0
   use_mc_dropout_confidence: true
   mc_passes: 8
   
@@ -142,9 +158,9 @@ inference:
   health_check_interval: 30  # seconds
   ready_timeout: 60  # seconds on startup
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ---------------------------------------------------------------------
 # AWS DEPLOYMENT CONFIGURATION
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ---------------------------------------------------------------------
 aws:
   region: "ap-south-1"
   
@@ -181,9 +197,9 @@ aws:
   cloudwatch_log_group: "/aws/flood-depth-estimator"
   cloudwatch_log_retention: 30  # days
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ---------------------------------------------------------------------
 # MONITORING & LOGGING
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ---------------------------------------------------------------------
 monitoring:
   log_level: "INFO"
   log_dir: "logs"
@@ -202,9 +218,9 @@ monitoring:
   alert_on_val_loss_plateau: true
   alert_on_inference_latency_spike: true
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ---------------------------------------------------------------------
 # ENVIRONMENT-SPECIFIC OVERRIDES
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ---------------------------------------------------------------------
 environments:
   development:
     batch_size: 8
@@ -229,9 +245,9 @@ environments:
     aws.ecs_desired_count: 3
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ---------------------------------------------------------------------
 # SENSOR AGGREGATOR CONFIGURATION (src/aggregator.py)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ---------------------------------------------------------------------
 aggregator:
   # Sliding window parameters
   window_seconds: 600        # 10-minute window
@@ -241,10 +257,10 @@ aggregator:
 
   # Depth thresholds for next_action_recommendation (metres)
   thresholds:
-    advisory_m:  0.10        # > 10 cm  → ADVISORY
-    warning_m:   0.30        # > 30 cm  → WARNING_PUMP_ACTIVATION
-    alert_m:     0.60        # > 60 cm  → ALERT_TRAFFIC_MANAGEMENT
-    critical_m:  1.00        # > 100 cm → DEPLOY_EMERGENCY_DIVERSION
+    advisory_m:  0.10        # > 10 cm  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ADVISORY
+    warning_m:   0.30        # > 30 cm  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ WARNING_PUMP_ACTIVATION
+    alert_m:     0.60        # > 60 cm  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ALERT_TRAFFIC_MANAGEMENT
+    critical_m:  1.00        # > 100 cm ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ DEPLOY_EMERGENCY_DIVERSION
 
   # Depth thresholds for geospatial intensity bands (centimetres)
   # Used by src/geospatial_classifier.py

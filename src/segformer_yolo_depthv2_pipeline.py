@@ -11,7 +11,6 @@ traceable execution details for each step.
 from __future__ import annotations
 
 import logging
-import os
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,7 +18,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+import torch
+import torch.nn as nn
 from PIL import Image
+from torchvision import models, transforms
 
 from src.reference_depth_estimator import ReferenceDepthEstimator
 from src.settings import load_settings_dict
@@ -31,6 +33,58 @@ except ImportError:  # pragma: no cover - optional runtime fallback
     ObjectDetector = None
 
 logger = logging.getLogger(__name__)
+
+RESIDUAL_FUSION_FEATURE_NAMES = [
+    "pipeline_depth_cm",
+    "efficientnet_candidate_depth_cm",
+    "reference_depth_cm",
+    "reference_count",
+    "max_reference_submersion",
+    "dense_depth_cm",
+    "water_coverage_pct",
+    "near_water_coverage_pct",
+    "mid_water_coverage_pct",
+    "far_water_coverage_pct",
+    "largest_water_region_pct",
+    "region_depth_cm",
+    "waterline_pct",
+    "immediate_risk",
+    "far_water_only",
+    "mask_quality_warning",
+    "low_water_gate_applied",
+    "shallow_water_gate_exception",
+    "muddy_water_fallback_applied",
+    "full_road_water_no_reference",
+]
+
+RESIDUAL_FUSION_BOOL_FEATURES = {
+    "immediate_risk",
+    "far_water_only",
+    "mask_quality_warning",
+    "low_water_gate_applied",
+    "shallow_water_gate_exception",
+    "muddy_water_fallback_applied",
+    "full_road_water_no_reference",
+}
+
+
+class ResidualFusionDepthModel(nn.Module):
+    def __init__(self, input_dim: int, max_residual_cm: float):
+        super().__init__()
+        self.max_residual_cm = float(max_residual_cm)
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, 48),
+            nn.ReLU(),
+            nn.Dropout(0.05),
+            nn.Linear(48, 24),
+            nn.ReLU(),
+            nn.Linear(24, 1),
+            nn.Tanh(),
+        )
+
+    def forward(self, x: torch.Tensor, base_depth_cm: torch.Tensor) -> torch.Tensor:
+        residual_cm = self.net(x) * self.max_residual_cm
+        return torch.clamp(base_depth_cm + residual_cm, min=0.0, max=180.0)
 
 
 @dataclass
@@ -60,7 +114,7 @@ def _depth_to_severity(depth_cm: float, features: Dict[str, float]) -> Dict[str,
     if depth_cm < 50:
         return {"level": "MEDIUM", "label": "Moderate flooding", "color": "#ea580c", "stage": 3}
     if depth_cm < 80:
-        return {"level": "HIGH", "label": "High flood — avoid travel", "color": "#dc2626", "stage": 4}
+        return {"level": "HIGH", "label": "High flood ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â avoid travel", "color": "#dc2626", "stage": 4}
     return {"level": "CRITICAL", "label": "Severe / dangerous flooding", "color": "#7f1d1d", "stage": 5}
 
 
@@ -84,9 +138,21 @@ class SegformerYoloDepthV2Pipeline:
         self._depth_estimator = None
         self._depth_backend = "dense-depth-proxy"
         self._depth_model_name = "depth-anything/Depth-Anything-V2-Small-hf"
+        self._efficientnet_model = None
+        self._efficientnet_transform = None
+        self._efficientnet_backend = "disabled"
+        self._efficientnet_max_depth_cm = 100.0
+        self._residual_fusion_model = None
+        self._residual_fusion_backend = "disabled"
+        self._residual_fusion_device = torch.device("cpu")
+        self._residual_fusion_feature_names = RESIDUAL_FUSION_FEATURE_NAMES
+        self._residual_fusion_feature_mean = None
+        self._residual_fusion_feature_std = None
         self._load_yolo_if_available()
         self._load_object_detector_if_available()
         self._load_depth_anything_if_available()
+        self._load_efficientnet_signal_if_available()
+        self._load_residual_fusion_if_available()
 
     def _load_yolo_if_available(self) -> None:
         if not self.yolo_weights_path.exists():
@@ -99,8 +165,6 @@ class SegformerYoloDepthV2Pipeline:
             return
 
         try:
-            # PyTorch>=2.6 defaults to weights_only=True, which breaks legacy YOLO checkpoints.
-            os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
             self._yolo_model = YOLO(str(self.yolo_weights_path))
             self._yolo_backend = "yolov8"
             logger.info("Loaded YOLOv8 reference detector from %s", self.yolo_weights_path)
@@ -155,6 +219,216 @@ class SegformerYoloDepthV2Pipeline:
             logger.warning("Depth Anything V2 unavailable, using proxy depth map: %s", exc)
             self._depth_estimator = None
             self._depth_backend = "dense-depth-proxy"
+
+    def _build_efficientnet_depth_model(self) -> nn.Module:
+        model = models.efficientnet_b0(weights=None)
+        in_features = model.classifier[1].in_features
+        model.classifier = nn.Sequential(
+            nn.Dropout(0.2),
+            nn.Linear(in_features, 256),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
+            nn.Sigmoid(),
+        )
+        return model
+
+    def _load_efficientnet_signal_if_available(self) -> None:
+        try:
+            cfg = load_settings_dict().get("inference", {}).get("efficientnet_signal", {})
+        except Exception as exc:
+            logger.info("EfficientNet signal config unavailable: %s", exc)
+            return
+
+        if not bool(cfg.get("enabled", False)):
+            return
+
+        model_path = Path(str(cfg.get("model_path", "models/candidate/best_flood_model_water_aware.pth")))
+        configured_max_depth_cm = float(cfg.get("max_depth_cm", 100.0))
+        if not model_path.exists():
+            logger.warning("EfficientNet signal checkpoint missing at %s", model_path)
+            return
+
+        try:
+            device = torch.device("cuda" if torch.cuda.is_available() and str(cfg.get("device", "cpu")) == "cuda" else "cpu")
+            model = self._build_efficientnet_depth_model().to(device)
+            checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+            state_dict = checkpoint.get("model_state_dict", checkpoint)
+            self._efficientnet_max_depth_cm = float(checkpoint.get("max_depth_cm", configured_max_depth_cm)) if isinstance(checkpoint, dict) else configured_max_depth_cm
+            model.load_state_dict(state_dict, strict=True)
+            model.eval()
+            self._efficientnet_model = model
+            self._efficientnet_device = device
+            self._efficientnet_backend = str(model_path)
+            self._efficientnet_transform = transforms.Compose(
+                [
+                    transforms.Resize((224, 224)),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ]
+            )
+            logger.info("Loaded EfficientNet depth signal from %s", model_path)
+        except Exception as exc:
+            logger.warning("EfficientNet depth signal unavailable: %s", exc)
+            self._efficientnet_model = None
+            self._efficientnet_transform = None
+            self._efficientnet_backend = "unavailable"
+
+    def _load_residual_fusion_if_available(self) -> None:
+        try:
+            cfg = load_settings_dict().get("inference", {}).get("residual_fusion_signal", {})
+        except Exception as exc:
+            logger.info("Residual fusion config unavailable: %s", exc)
+            return
+
+        if not bool(cfg.get("enabled", False)):
+            return
+
+        model_path = Path(str(cfg.get("model_path", "models/candidate/residual_fusion_depth_model.pt")))
+        if not model_path.exists():
+            logger.warning("Residual fusion checkpoint missing at %s", model_path)
+            return
+
+        try:
+            device = torch.device("cuda" if torch.cuda.is_available() and str(cfg.get("device", "cpu")) == "cuda" else "cpu")
+            checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+            feature_names = list(checkpoint.get("feature_names", RESIDUAL_FUSION_FEATURE_NAMES))
+            max_residual_cm = float(checkpoint.get("max_residual_cm", cfg.get("max_residual_cm", 35.0)))
+            model = ResidualFusionDepthModel(len(feature_names), max_residual_cm).to(device)
+            model.load_state_dict(checkpoint["model_state_dict"], strict=True)
+            model.eval()
+
+            feature_mean = np.asarray(checkpoint.get("feature_mean"), dtype=np.float32)
+            feature_std = np.asarray(checkpoint.get("feature_std"), dtype=np.float32)
+            if feature_mean.shape[0] != len(feature_names) or feature_std.shape[0] != len(feature_names):
+                raise ValueError("Residual fusion feature normalization shape mismatch")
+            feature_std = np.where(feature_std < 1e-6, 1.0, feature_std)
+
+            self._residual_fusion_model = model
+            self._residual_fusion_device = device
+            self._residual_fusion_backend = str(model_path)
+            self._residual_fusion_feature_names = feature_names
+            self._residual_fusion_feature_mean = feature_mean
+            self._residual_fusion_feature_std = feature_std
+            logger.info("Loaded residual fusion depth model from %s", model_path)
+        except Exception as exc:
+            logger.warning("Residual fusion depth model unavailable: %s", exc)
+            self._residual_fusion_model = None
+            self._residual_fusion_backend = "unavailable"
+            self._residual_fusion_feature_mean = None
+            self._residual_fusion_feature_std = None
+
+    @staticmethod
+    def _feature_float(value: Any, default: float = 0.0) -> float:
+        try:
+            if value is None:
+                return default
+            value = float(value)
+            if not np.isfinite(value):
+                return default
+            return value
+        except (TypeError, ValueError):
+            return default
+
+    def _residual_fusion_feature_vector(self, pipeline_depth_cm: float, features: Dict[str, Any]) -> np.ndarray:
+        values: List[float] = []
+        for name in self._residual_fusion_feature_names:
+            if name == "pipeline_depth_cm":
+                value = float(pipeline_depth_cm)
+            elif name == "dense_depth_cm":
+                value = self._feature_float(features.get("dense_depth_p90")) * 120.0
+            elif name in RESIDUAL_FUSION_BOOL_FEATURES:
+                value = 1.0 if bool(features.get(name, False)) else 0.0
+            else:
+                value = self._feature_float(features.get(name))
+            values.append(value)
+        return np.asarray(values, dtype=np.float32)
+
+    def _apply_residual_fusion_model(
+        self,
+        depth_cm: float,
+        confidence: float,
+        action: str,
+        features: Dict[str, Any],
+    ) -> Tuple[float, float, str]:
+        try:
+            cfg = load_settings_dict().get("inference", {}).get("residual_fusion_signal", {})
+        except Exception:
+            cfg = {}
+
+        if self._residual_fusion_model is None or not bool(cfg.get("apply_corrections", True)):
+            features["residual_fusion_status"] = self._residual_fusion_backend
+            return depth_cm, confidence, action
+
+        candidate_depth = features.get("efficientnet_candidate_depth_cm")
+        if candidate_depth is None:
+            features["residual_fusion_status"] = "skipped_no_efficientnet_depth"
+            return depth_cm, confidence, action
+
+        skip_low_water = bool(cfg.get("skip_low_water_gate", True))
+        if skip_low_water and bool(features.get("low_water_gate_applied", False)) and not bool(features.get("shallow_water_gate_exception", False)):
+            features["residual_fusion_status"] = "skipped_low_water_gate"
+            return depth_cm, confidence, action
+
+        try:
+            raw = self._residual_fusion_feature_vector(depth_cm, features)
+            normalized = (raw - self._residual_fusion_feature_mean) / self._residual_fusion_feature_std
+            x = torch.tensor(normalized.reshape(1, -1), dtype=torch.float32, device=self._residual_fusion_device)
+            base = torch.tensor([[float(candidate_depth)]], dtype=torch.float32, device=self._residual_fusion_device)
+            with torch.no_grad():
+                fusion_depth = float(self._residual_fusion_model(x, base).squeeze().item())
+        except Exception as exc:
+            logger.warning("Residual fusion inference failed: %s", exc)
+            features["residual_fusion_status"] = "inference_failed"
+            return depth_cm, confidence, action
+
+        original_depth = round(float(depth_cm), 2)
+        fusion_depth = round(float(np.clip(fusion_depth, 0.0, 180.0)), 2)
+        max_change_cm = float(cfg.get("max_live_adjustment_cm", 30.0))
+        candidate_depth_value = float(candidate_depth)
+        candidate_alignment_cm = float(cfg.get("large_adjustment_candidate_alignment_cm", 15.0))
+        large_adjustment_requested = abs(fusion_depth - original_depth) > max_change_cm
+        candidate_aligned = abs(fusion_depth - candidate_depth_value) <= candidate_alignment_cm
+        allow_large_adjustment = bool(cfg.get("allow_large_candidate_aligned_adjustment", True)) and large_adjustment_requested and candidate_aligned
+
+        if allow_large_adjustment:
+            applied_depth = fusion_depth
+        else:
+            change_cm = float(np.clip(fusion_depth - original_depth, -max_change_cm, max_change_cm))
+            applied_depth = round(float(np.clip(original_depth + change_cm, 0.0, 180.0)), 2)
+
+        features["pre_residual_fusion_depth_cm"] = original_depth
+        features["residual_fusion_depth_cm"] = fusion_depth
+        features["residual_fusion_applied_depth_cm"] = applied_depth
+        features["residual_fusion_delta_cm"] = round(applied_depth - original_depth, 2)
+        features["residual_fusion_large_adjustment_allowed"] = bool(allow_large_adjustment)
+        features["residual_fusion_status"] = "applied"
+        features["residual_fusion_model_path"] = self._residual_fusion_backend
+        features["final_aggregation_source"] = "residual_fusion_model"
+        features["model_agreement_depth_cm"] = applied_depth
+        features["final_output_reason"] = (
+            f"Residual fusion model adjusted depth from {original_depth:.2f} cm to {applied_depth:.2f} cm "
+            "using EfficientNet plus pipeline evidence."
+        )
+
+        if allow_large_adjustment:
+            features["review_required"] = True
+            features["review_reason"] = "Residual fusion and EfficientNet agreed on a large correction against noisy pipeline signals."
+        elif abs(applied_depth - original_depth) >= float(cfg.get("review_delta_cm", 20.0)):
+            features["review_required"] = True
+            features["review_reason"] = "Residual fusion changed the rule-based pipeline depth by more than the review threshold."
+        confidence = max(float(confidence), min(0.90, float(confidence) + 0.05))
+        action = self._action_for_final_depth(applied_depth, features, action)
+        return applied_depth, round(float(np.clip(confidence, 0.0, 0.98)), 4), action
+    def _efficientnet_depth_signal(self, image_rgb: np.ndarray) -> Optional[float]:
+        if self._efficientnet_model is None or self._efficientnet_transform is None:
+            return None
+        image = Image.fromarray(image_rgb.astype(np.uint8), mode="RGB")
+        tensor = self._efficientnet_transform(image).unsqueeze(0).to(self._efficientnet_device)
+        with torch.no_grad():
+            return round(float(self._efficientnet_model(tensor).squeeze().item()) * self._efficientnet_max_depth_cm, 2)
     def _segformer_water_mask(self, image_rgb: np.ndarray) -> Tuple[np.ndarray, float]:
         # SegFormer-aligned stage boundary. Current backend is a lightweight detector.
         water_mask, water_coverage = self.water_detector.detect(image_rgb)
@@ -603,6 +877,29 @@ class SegformerYoloDepthV2Pipeline:
         broad_mask_warning = bool(features.get("broad_mask_warning", False))
         immediate_risk = bool(features.get("immediate_risk", False))
         water_touches_bottom = bool(features.get("water_touches_bottom", False))
+        candidate_depth_cm = features.get("efficientnet_candidate_depth_cm")
+        candidate_depth_value = float(candidate_depth_cm) if candidate_depth_cm is not None else None
+        shallow_model_agreement = (
+            candidate_depth_value is not None
+            and 8.0 <= candidate_depth_value <= 35.0
+            and 8.0 <= dense_depth_cm <= 35.0
+            and abs(candidate_depth_value - dense_depth_cm) <= 12.0
+        )
+        trace_water_evidence = (
+            coverage < 0.05
+            and near_pct < 0.05
+            and max_reference_submersion < 0.15
+            and not immediate_risk
+        )
+        shallow_water_gate_exception = trace_water_evidence and shallow_model_agreement
+        if trace_water_evidence:
+            features["trace_water_evidence"] = True
+            features["low_water_gate_applied"] = not shallow_water_gate_exception
+            features["shallow_water_gate_exception"] = shallow_water_gate_exception
+            if shallow_water_gate_exception:
+                features["low_water_gate_reason"] = "Tiny water mask, but EfficientNet and dense depth agree on shallow flood water."
+            else:
+                features["low_water_gate_reason"] = "Very small water mask with no near-field risk or meaningful vehicle submersion."
         full_road_water_no_reference = (
             reference_count < 1
             and coverage >= 0.70
@@ -621,7 +918,11 @@ class SegformerYoloDepthV2Pipeline:
         # For CCTV/apartment feeds, image position is not reliable enough to be
         # a hard decision rule. Far/near gates only cap depth when there is no
         # useful object-submersion evidence.
-        if far_water_only and weak_reference_evidence:
+        if shallow_water_gate_exception:
+            depth_cm = max(depth_cm, min(candidate_depth_value or dense_depth_cm, dense_depth_cm, 30.0))
+        elif trace_water_evidence:
+            depth_cm = min(depth_cm, 5.0)
+        elif far_water_only and weak_reference_evidence:
             depth_cm = min(depth_cm, 15.0)
         elif far_dominant_water and weak_reference_evidence:
             depth_cm = min(depth_cm, 20.0)
@@ -662,6 +963,201 @@ class SegformerYoloDepthV2Pipeline:
 
         return round(depth_cm, 2), round(confidence, 4), action
 
+    def _apply_efficientnet_correction(
+        self,
+        depth_cm: float,
+        confidence: float,
+        action: str,
+        features: Dict[str, float],
+    ) -> Tuple[float, float, str]:
+        try:
+            cfg = load_settings_dict().get("inference", {}).get("efficientnet_signal", {})
+        except Exception:
+            cfg = {}
+
+        if not bool(cfg.get("apply_corrections", False)):
+            return depth_cm, confidence, action
+
+        candidate_depth = features.get("efficientnet_candidate_depth_cm")
+        if candidate_depth is None:
+            return depth_cm, confidence, action
+
+        candidate_depth = float(candidate_depth)
+        coverage = float(features.get("water_coverage_pct", 0.0)) / 100.0
+        near_pct = float(features.get("near_water_coverage_pct", 0.0)) / 100.0
+        immediate_risk = bool(features.get("immediate_risk", False))
+        delta = candidate_depth - depth_cm
+
+        severe_underestimate = (
+            candidate_depth >= 60.0
+            and depth_cm < 50.0
+            and delta >= 25.0
+            and coverage >= 0.20
+            and near_pct >= 0.10
+            and immediate_risk
+        )
+        extreme_depth_underestimate = (
+            candidate_depth >= 100.0
+            and depth_cm < 60.0
+            and delta >= 50.0
+            and coverage >= 0.08
+            and near_pct >= 0.08
+            and immediate_risk
+            and not bool(features.get("low_water_gate_applied", False))
+        )
+        if not (severe_underestimate or extreme_depth_underestimate):
+            return depth_cm, confidence, action
+
+        corrected_depth = float(np.clip(candidate_depth, 0.0, 180.0))
+        corrected_confidence = max(confidence, min(0.84, confidence + 0.12))
+        if corrected_depth >= 80.0:
+            corrected_action = "Deploy Emergency Diversion" if immediate_risk else "Activate Traffic Management"
+        elif corrected_depth >= 60.0:
+            corrected_action = "Activate Traffic Management"
+        elif corrected_depth >= 30.0:
+            corrected_action = "Issue Municipal Warning"
+        else:
+            corrected_action = action
+
+        features["efficientnet_correction_applied"] = True
+        features["pre_correction_depth_cm"] = round(depth_cm, 2)
+        features["correction_reason"] = "candidate_extreme_depth_with_visible_risk" if extreme_depth_underestimate else "candidate_severe_depth_with_visible_water"
+        return round(corrected_depth, 2), round(corrected_confidence, 4), corrected_action
+
+    def _action_for_final_depth(self, depth_cm: float, features: Dict[str, Any], fallback_action: str) -> str:
+        immediate_risk = bool(features.get("immediate_risk", False))
+        if depth_cm >= 100.0 and immediate_risk:
+            return "Deploy Emergency Diversion"
+        if depth_cm >= 60.0 and immediate_risk:
+            return "Activate Traffic Management"
+        if depth_cm >= 30.0:
+            return "Issue Municipal Warning"
+        if depth_cm >= 10.0:
+            return "Advisory Monitoring"
+        if depth_cm > 0.0:
+            return "Monitor"
+        return fallback_action
+
+    def _record_model_agreement(
+        self,
+        final_depth_cm: float,
+        confidence: float,
+        action: str,
+        features: Dict[str, Any],
+    ) -> Tuple[float, float, str]:
+        coverage = float(features.get("water_coverage_pct", 0.0)) / 100.0
+        near_pct = float(features.get("near_water_coverage_pct", 0.0)) / 100.0
+        immediate_risk = bool(features.get("immediate_risk", False))
+        low_water_gate = bool(features.get("low_water_gate_applied", False))
+        muddy_fallback = bool(features.get("muddy_water_fallback_applied", False))
+        max_submersion = float(features.get("max_reference_submersion", 0.0))
+        reference_count = int(float(features.get("reference_count", 0.0)))
+
+        signals: List[Dict[str, Any]] = []
+
+        def add_signal(name: str, depth: Any, trusted: bool, reason: str, weight: float) -> None:
+            if depth is None:
+                return
+            try:
+                value = float(depth)
+            except (TypeError, ValueError):
+                return
+            if not np.isfinite(value):
+                return
+            signals.append({"name": name, "depth_cm": round(value, 2), "trusted": bool(trusted), "reason": reason, "weight": float(weight)})
+
+        calibration_depth = features.get("pre_correction_depth_cm", features.get("calibration_depth_cm", final_depth_cm))
+        add_signal("fusion_calibration", calibration_depth, True, "combined water/depth/reference calibration", 0.25)
+
+        candidate_depth = features.get("efficientnet_candidate_depth_cm")
+        shallow_exception = bool(features.get("shallow_water_gate_exception", False))
+        candidate_trusted = (not low_water_gate or shallow_exception) and (
+            shallow_exception or muddy_fallback or immediate_risk or coverage >= 0.08 or (candidate_depth is not None and float(candidate_depth) < 15.0)
+        )
+        add_signal("efficientnet_candidate", candidate_depth, candidate_trusted, "trained depth model", 0.50)
+
+        reference_depth = features.get("reference_depth_cm")
+        reference_trusted = reference_count > 0 and not low_water_gate and (max_submersion >= 0.15 or coverage >= 0.20 or immediate_risk)
+        add_signal("reference_objects", reference_depth, reference_trusted, "object/reference depth estimate", 0.15)
+
+        dense_depth = float(features.get("dense_depth_p90", 0.0)) * 120.0
+        dense_trusted = (not low_water_gate and (coverage >= 0.20 or near_pct >= 0.10 or immediate_risk)) or shallow_exception
+        add_signal("depth_anything_dense", dense_depth, dense_trusted, "monocular dense-depth support", 0.10)
+
+        trusted = [signal for signal in signals if signal["trusted"]]
+        tolerance_cm = 25.0
+        best_cluster: List[Dict[str, Any]] = []
+
+        candidate_signal = next((signal for signal in trusted if signal["name"] == "efficientnet_candidate"), None)
+        if candidate_signal is not None:
+            candidate_cluster = [signal for signal in trusted if abs(signal["depth_cm"] - candidate_signal["depth_cm"]) <= tolerance_cm]
+            if len(candidate_cluster) >= 2:
+                best_cluster = candidate_cluster
+
+        if not best_cluster:
+            for signal in trusted:
+                cluster = [candidate for candidate in trusted if abs(candidate["depth_cm"] - signal["depth_cm"]) <= tolerance_cm]
+                if len(cluster) > len(best_cluster):
+                    best_cluster = cluster
+
+        output_depth = float(final_depth_cm)
+        output_confidence = float(confidence)
+        output_action = action
+
+        if low_water_gate:
+            status = "low_water_gate"
+            agreed_depth = final_depth_cm
+            reason = str(features.get("low_water_gate_reason", "Low-water evidence overruled larger depth signals."))
+        elif len(best_cluster) >= 2:
+            total_weight = sum(item["weight"] for item in best_cluster) or 1.0
+            agreed_depth = sum(item["depth_cm"] * item["weight"] for item in best_cluster) / total_weight
+            names = ", ".join(item["name"] for item in best_cluster)
+            status = "agreement"
+            reason = f"Trusted signals agree within {tolerance_cm:.0f} cm: {names}."
+
+            if candidate_signal is not None:
+                candidate_value = float(candidate_signal["depth_cm"])
+                candidate_gap = candidate_value - float(final_depth_cm)
+                should_prefer_candidate = (
+                    candidate_gap >= 12.0
+                    and candidate_value >= 45.0
+                    and (muddy_fallback or (immediate_risk and coverage >= 0.20) or max_submersion >= 0.35)
+                )
+                if should_prefer_candidate:
+                    output_depth = candidate_value
+                    output_confidence = max(output_confidence, min(0.88, output_confidence + 0.10))
+                    output_action = self._action_for_final_depth(output_depth, features, action)
+                    status = "candidate_selected_by_agreement"
+                    reason = (
+                        f"Trained EfficientNet depth was trusted and fusion was {candidate_gap:.1f} cm lower; "
+                        f"final depth uses EfficientNet with support from: {names}."
+                    )
+                elif abs(agreed_depth - final_depth_cm) >= 15.0:
+                    output_depth = float(np.clip(agreed_depth, 0.0, 180.0))
+                    output_confidence = max(output_confidence, min(0.84, output_confidence + 0.06))
+                    output_action = self._action_for_final_depth(output_depth, features, action)
+                    status = "weighted_model_agreement"
+                    reason = f"Final depth uses weighted agreement from trusted signals: {names}."
+        elif features.get("efficientnet_correction_applied"):
+            agreed_depth = final_depth_cm
+            status = "candidate_corrected_with_evidence"
+            reason = str(features.get("correction_reason", "trained candidate corrected the calibration estimate"))
+        else:
+            agreed_depth = final_depth_cm
+            status = "weak_agreement"
+            reason = "No two trusted model signals were close enough; final output used conservative calibration."
+
+        output_depth = round(float(np.clip(output_depth, 0.0, 180.0)), 2)
+        output_confidence = round(float(np.clip(output_confidence, 0.0, 0.98)), 4)
+
+        features["model_signals"] = signals
+        features["model_agreement_status"] = status
+        features["model_cluster_depth_cm"] = round(float(agreed_depth), 2)
+        features["model_agreement_depth_cm"] = output_depth
+        features["model_agreement_tolerance_cm"] = tolerance_cm
+        features["final_aggregation_source"] = "model_agreement_engine"
+        features["final_output_reason"] = reason
+        return output_depth, output_confidence, output_action
     def predict(self, image_rgb: np.ndarray) -> Dict[str, Any]:
         if image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
             raise ValueError("predict expects an RGB image array with shape (H, W, 3)")
@@ -669,6 +1165,7 @@ class SegformerYoloDepthV2Pipeline:
         trace: List[Dict[str, str]] = []
 
         water_mask, water_coverage_pct = self._segformer_water_mask(image_rgb)
+        muddy_water_fallback_applied = False
         trace.append(
             {
                 "stage": "SegFormer",
@@ -678,6 +1175,32 @@ class SegformerYoloDepthV2Pipeline:
             }
         )
 
+        efficientnet_depth_cm = self._efficientnet_depth_signal(image_rgb)
+        if efficientnet_depth_cm is not None:
+            trace.append(
+                {
+                    "stage": "EfficientNet Candidate",
+                    "backend": self._efficientnet_backend,
+                    "status": "ok",
+                    "summary": f"candidate_depth_cm={efficientnet_depth_cm:.2f}",
+                }
+            )
+
+        if efficientnet_depth_cm is not None and efficientnet_depth_cm >= 35.0 and water_coverage_pct < 5.0:
+            muddy_mask = self.water_detector._detect_muddy_floodwater(image_rgb)
+            muddy_coverage_pct = float((muddy_mask > 0).mean() * 100.0)
+            if muddy_coverage_pct >= 15.0:
+                water_mask = (muddy_mask > 0).astype(np.uint8) * 255
+                water_coverage_pct = muddy_coverage_pct
+                muddy_water_fallback_applied = True
+                trace.append(
+                    {
+                        "stage": "Muddy Water Fallback",
+                        "backend": "candidate-gated-brown-water-mask",
+                        "status": "ok",
+                        "summary": f"water_coverage={water_coverage_pct:.2f}%",
+                    }
+                )
         references, ref_backend = self._yolov8_reference_stage(image_rgb, water_mask)
         trace.append(
             {
@@ -706,6 +1229,9 @@ class SegformerYoloDepthV2Pipeline:
             dense_depth_map=dense_depth_map,
             reference_estimate=reference_estimate,
         )
+        if efficientnet_depth_cm is not None:
+            features["efficientnet_candidate_depth_cm"] = efficientnet_depth_cm
+            features["fusion_candidate_delta_cm"] = round(abs(float(features.get("region_depth_cm", 0.0)) - efficientnet_depth_cm), 2)
         trace.append(
             {
                 "stage": "Fusion Engine",
@@ -720,6 +1246,24 @@ class SegformerYoloDepthV2Pipeline:
         )
 
         depth_cm, confidence, action = self._calibration_severity_model(features)
+        features["calibration_depth_cm"] = round(depth_cm, 2)
+        if efficientnet_depth_cm is not None:
+            features["final_candidate_delta_cm"] = round(abs(depth_cm - efficientnet_depth_cm), 2)
+        depth_cm, confidence, action = self._apply_efficientnet_correction(depth_cm, confidence, action, features)
+        depth_cm, confidence, action = self._record_model_agreement(depth_cm, confidence, action, features)
+        depth_cm, confidence, action = self._apply_residual_fusion_model(depth_cm, confidence, action, features)
+        if features.get("residual_fusion_status") in {"applied", "skipped_low_water_gate"}:
+            trace.append(
+                {
+                    "stage": "Residual Fusion Model",
+                    "backend": self._residual_fusion_backend,
+                    "status": str(features.get("residual_fusion_status")),
+                    "summary": (
+                        f"depth_cm={depth_cm:.2f} "
+                        f"delta={float(features.get('residual_fusion_delta_cm', 0.0)):.2f}"
+                    ),
+                }
+            )
         severity = _depth_to_severity(depth_cm, features)
         trace.append(
             {
@@ -738,6 +1282,10 @@ class SegformerYoloDepthV2Pipeline:
         stage_cues = [f"{step['stage']}: {step['summary']}" for step in trace]
         if features.get("full_road_water_no_reference"):
             stage_cues.append("Road coverage gate: full-road water with no reference object; depth kept conservative and marked for review")
+        if features.get("low_water_gate_applied"):
+            stage_cues.append("Low-water gate: tiny water mask with no near-field risk; depth capped as shallow trace water")
+        if features.get("final_output_reason"):
+            stage_cues.append(f"Model Agreement: {features.get('model_agreement_status')} - {features.get('final_output_reason')}")
         visual_cues = stage_cues + ref_cues
 
         return {

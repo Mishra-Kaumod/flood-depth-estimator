@@ -46,13 +46,32 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _write_final_table(path: Path, frame: pd.DataFrame, expected_columns: list[str]) -> None:
+    if path.exists():
+        if path.suffix == ".parquet":
+            existing = pd.read_parquet(path)
+        else:
+            existing = pd.read_csv(path)
+
+        if list(existing.columns) == expected_columns:
+            frame = pd.concat([existing, frame], ignore_index=True)
+        else:
+            backup_path = path.with_name(f"{path.stem}_detailed_backup{path.suffix}")
+            if not backup_path.exists():
+                path.replace(backup_path)
+
+    if path.suffix == ".parquet":
+        frame.to_parquet(path, index=False)
+    else:
+        frame.to_csv(path, index=False)
+
+
 def write_final_prediction_record(result: dict[str, Any], image_name: str | None = None) -> str:
     payload = result.get("result", {}) or {}
     metadata = payload.get("metadata", {}) or {}
     structured = metadata.get("structured_features", {}) or {}
     final_decision = payload.get("final_decision", {}) or {}
     llm_judge = payload.get("llm_judge") or payload.get("llm_judge_result") or {}
-    evidence = payload.get("pipeline_evidence") or {}
 
     depth_cm = _safe_float(
         final_decision.get("estimated_depth_cm"),
@@ -65,49 +84,41 @@ def write_final_prediction_record(result: dict[str, Any], image_name: str | None
         "latitude": payload.get("latitude"),
         "longitude": payload.get("longitude"),
         "water_present": bool(payload.get("water_present", depth_cm > 0.0)),
-        "depth_cm": round(depth_cm, 2),
-        "severity": final_decision.get("severity_label") or payload.get("severity_label"),
-        "severity_score": final_decision.get("severity") or payload.get("severity"),
-        "action": final_decision.get("action_trigger") or payload.get("action_trigger"),
+        "final_depth_cm": round(depth_cm, 2),
+        "final_severity": final_decision.get("severity_label") or payload.get("severity_label"),
+        "final_severity_score": final_decision.get("severity") or payload.get("severity"),
+        "final_action": final_decision.get("action_trigger") or payload.get("action_trigger"),
+        "final_confidence_pct": round(_safe_float(payload.get("confidence_score")) * 100.0, 2),
         "decision_source": final_decision.get("decision_source") or payload.get("decision_source", "pipeline"),
-        "confidence_pct": round(_safe_float(payload.get("confidence_score")) * 100.0, 2),
-        "water_coverage_pct": structured.get("water_coverage_pct"),
-        "near_water_coverage_pct": structured.get("near_water_coverage_pct"),
-        "mid_water_coverage_pct": structured.get("mid_water_coverage_pct"),
-        "far_water_coverage_pct": structured.get("far_water_coverage_pct"),
-        "reference_count": structured.get("reference_count"),
-        "reference_depth_cm": structured.get("reference_depth_cm"),
-        "max_reference_submersion": structured.get("max_reference_submersion"),
-        "immediate_risk": structured.get("immediate_risk"),
-        "far_water_only": structured.get("far_water_only"),
-        "mask_quality_warning": structured.get("mask_quality_warning"),
-        "full_road_water_no_reference": structured.get("full_road_water_no_reference"),
-        "review_required": bool(payload.get("review_required", False)),
-        "review_reason": payload.get("review_reason"),
+        "aggregation_source": structured.get("final_aggregation_source"),
+        "agreement_status": structured.get("model_agreement_status"),
+        "agreement_depth_cm": structured.get("model_agreement_depth_cm"),
+        "final_reason": structured.get("final_output_reason"),
+        "review_required": bool(payload.get("review_required", structured.get("review_required", False))),
+        "review_reason": payload.get("review_reason") or structured.get("review_reason"),
         "llm_status": "available" if llm_judge else "unavailable",
-        "llm_prediction_correct": llm_judge.get("prediction_correct") if llm_judge else None,
         "llm_recommended_depth_cm": llm_judge.get("recommended_depth_cm") if llm_judge else None,
         "llm_recommended_severity": llm_judge.get("recommended_severity") if llm_judge else None,
-        "llm_reason": llm_judge.get("reason") if llm_judge else payload.get("llm_judge_error"),
-        "pipeline_evidence_json": json.dumps(evidence, default=str),
-        "llm_judge_json": json.dumps(llm_judge, default=str),
     }
 
-    parquet_path = Path(__file__).resolve().parent / "data" / "final_predictions.parquet"
-    parquet_path.parent.mkdir(parents=True, exist_ok=True)
+    data_dir = Path(__file__).resolve().parent / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
     frame = pd.DataFrame([row])
+    expected_columns = list(row.keys())
+
+    saved_paths: list[str] = []
+    parquet_path = data_dir / "final_predictions.parquet"
+    csv_path = data_dir / "final_predictions.csv"
 
     try:
-        if parquet_path.exists():
-            existing = pd.read_parquet(parquet_path)
-            frame = pd.concat([existing, frame], ignore_index=True)
-        frame.to_parquet(parquet_path, index=False)
-        return str(parquet_path)
+        _write_final_table(parquet_path, frame, expected_columns)
+        saved_paths.append(str(parquet_path))
     except Exception as exc:
-        csv_path = parquet_path.with_suffix(".csv")
-        frame.to_csv(csv_path, mode="a", index=False, header=not csv_path.exists())
-        return f"{csv_path} (CSV fallback; install pyarrow for Parquet)"
+        saved_paths.append(f"Parquet unavailable: {exc}")
 
+    _write_final_table(csv_path, frame, expected_columns)
+    saved_paths.append(str(csv_path))
+    return "; ".join(saved_paths)
 
 def summarize_event_result(result: dict[str, Any], image_name: str | None = None) -> None:
     payload = result.get("result", {})
@@ -127,18 +138,28 @@ def summarize_event_result(result: dict[str, Any], image_name: str | None = None
     near_water = structured.get("near_water_coverage_pct")
     mid_water = structured.get("mid_water_coverage_pct")
     far_water = structured.get("far_water_coverage_pct")
+    model_signals = structured.get("model_signals") or []
+    agreement_status = structured.get("model_agreement_status")
+    final_reason = structured.get("final_output_reason")
 
     print("\n" + "=" * 60)
-    print("INFERENCE RESULT")
-    print(f"Camera: {payload.get('camera_id', 'unknown')}")
+    print("FINAL DECISION")
+    print("-" * 60)
     print(f"Image: {image_name or '<unknown>'}")
-    print(f"Water detected: {'Yes' if water_present else 'No'}")
-    print(f"Estimated flood depth: {depth_cm:.2f} cm")
-    print(f"Flood severity: {severity}")
-    print(f"Recommended action: {action}")
+    print(f"Camera: {payload.get('camera_id', 'unknown')}")
+    print(f"Water present: {'Yes' if water_present else 'No'}")
+    print(f"Final depth: {depth_cm:.2f} cm")
+    print(f"Final severity: {severity}")
+    print(f"Final action: {action}")
     if final_decision.get("decision_source") or payload.get("decision_source"):
         print(f"Decision source: {final_decision.get('decision_source') or payload.get('decision_source')}")
     print(f"Confidence: {confidence_pct:.2f}%")
+    if agreement_status:
+        print(f"Model agreement: {agreement_status}")
+    if final_reason:
+        print(f"Why this final output: {final_reason}")
+    print("\nEVIDENCE SUMMARY")
+    print("-" * 60)
     if water_coverage is not None:
         print(f"Water coverage: {water_coverage:.2f}%")
     if reference_count is not None:
@@ -156,10 +177,20 @@ def summarize_event_result(result: dict[str, Any], image_name: str | None = None
     print(f"Mask quality warning: {bool(structured.get('mask_quality_warning', False))}")
     if structured.get("full_road_water_no_reference"):
         print("Full-road water without reference object: True")
+    if structured.get("low_water_gate_applied"):
+        print("Low-water gate applied: True")
+        if structured.get("low_water_gate_reason"):
+            print(f"Low-water reason: {structured.get('low_water_gate_reason')}")
     if payload.get("review_required"):
         print("Review required: Yes")
         if payload.get("review_reason"):
             print(f"Review reason: {payload.get('review_reason')}")
+
+    if model_signals:
+        print("\nModel signals:")
+        for signal in model_signals:
+            trust = "trusted" if signal.get("trusted") else "not trusted"
+            print(f"  - {signal.get('name')}: {signal.get('depth_cm')} cm ({trust})")
 
     if trace:
         print("\nPipeline summary:")
