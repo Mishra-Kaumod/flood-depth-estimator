@@ -126,6 +126,17 @@ inference:
       estimated_cost_per_call_usd: 0.0015
       hourly_spend_cap_usd: 5.0
       daily_spend_cap_usd: 40.0
+  depth_teachers:
+    depth_anything_v2:
+      model: "depth-anything/Depth-Anything-V2-Small-hf"
+      revision: "main"
+    depth_pro:
+      model: "apple/DepthPro"
+      checkpoint: ""
+    metric3d:
+      model: "YvanYin/Metric3D"
+      variant: "metric3d_vit_small"
+      checkpoint: ""
   security:
     rate_limit:
       max_requests_per_window: 60

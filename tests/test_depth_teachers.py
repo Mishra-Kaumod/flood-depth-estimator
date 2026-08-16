@@ -1,4 +1,5 @@
-﻿import tempfile
+﻿import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -100,6 +101,7 @@ class TestDepthTeachers(unittest.TestCase):
         out = ens.predict(self.img_path)
         self.assertIn("teachers", out)
         self.assertIn("ensemble", out)
+        self.assertIn("features", out)
         self.assertIn("DepthAnythingV2", out["teachers"])
 
     def test_valid_water_mask(self):
@@ -135,8 +137,7 @@ class TestDepthTeachers(unittest.TestCase):
         }
         ens = self._ensemble(custom_maps=maps)
         out = ens.predict(self.img_path)
-        agreement = out["ensemble"]["teacher_agreement"]
-        self.assertLess(agreement, 0.8)
+        self.assertLess(out["ensemble"]["teacher_agreement"], 0.8)
 
     def test_cpu_mode(self):
         ens = self._ensemble()
@@ -146,23 +147,51 @@ class TestDepthTeachers(unittest.TestCase):
         ens = self._ensemble()
         out = ens.predict(self.img_path)
 
-        ensemble_required = {
-            "teacher_mean", "teacher_median", "teacher_min", "teacher_max",
-            "teacher_spread", "teacher_std", "teacher_agreement"
+        required_top = {
+            "global_mean", "global_median", "p10", "p25", "p50", "p75", "p90",
+            "water_depth_mean", "water_depth_median", "teacher_mean", "teacher_median",
+            "teacher_spread", "teacher_std", "teacher_agreement", "valid_pixel_ratio"
         }
-        self.assertTrue(ensemble_required.issubset(out["ensemble"].keys()))
+        self.assertTrue(required_top.issubset(out["features"].keys()))
 
         per_teacher_required = {
             "global_mean", "global_median", "p10", "p25", "p50", "p75", "p90",
             "water_depth_mean", "water_depth_median", "water_p10", "water_p25", "water_p50", "water_p75", "water_p90",
-            "valid_pixel_ratio", "spatial_gradient", "depth_variance"
+            "valid_pixel_ratio"
         }
         for name in TeacherEnsemble.TEACHER_NAMES:
             row = out["teachers"][name]
             if row.get("available"):
                 self.assertTrue(per_teacher_required.issubset(row.keys()))
 
+    def test_diagnose_schema(self):
+        ens = self._ensemble()
+        d = ens.diagnose()
+        self.assertIn("python_version", d)
+        self.assertIn("torch_version", d)
+        self.assertIn("teacher_status", d)
+        self.assertIn("cache_paths", d)
+
+
+@unittest.skipUnless(os.getenv("DEPTH_TEACHER_INTEGRATION") == "1", "integration test disabled")
+class TestDepthTeachersIntegration(unittest.TestCase):
+    def test_real_teacher_integration(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        candidates = list((repo_root / "test_images").glob("*.jpg")) + list((repo_root / "test_images").glob("*.png"))
+        self.assertTrue(len(candidates) > 0, "No test image found under test_images/")
+        image_path = candidates[0]
+
+        teachers = TeacherEnsemble(device="cpu", lazy_load=True)
+        result = teachers.predict(image_path)
+        self.assertIn("teachers", result)
+        self.assertIn("features", result)
+
+        # Do not assert all teachers available; only assert schema and at least one executed or failed with explicit error.
+        for name in TeacherEnsemble.TEACHER_NAMES:
+            self.assertIn(name, result["teachers"])
+            self.assertIn("available", result["teachers"][name])
+            self.assertIn("error", result["teachers"][name])
+
 
 if __name__ == "__main__":
     unittest.main()
-

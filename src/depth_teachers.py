@@ -1,26 +1,16 @@
-﻿"""
-Canonical depth-teacher feature extraction module.
-
-This module provides optional teacher depth maps (Depth Anything V2, Depth Pro,
-Metric3D V2) and converts them into robust teacher features for flood-depth
-fusion models.
-
-Runtime guarantees:
-- No archived/* imports
-- No flood_depth.* imports
-- Each teacher is loaded independently
-- Teacher failure does not crash ensemble prediction
-- No implicit teacher substitution when a teacher fails
-"""
+﻿"""Canonical production depth-teacher feature extraction module."""
 
 from __future__ import annotations
 
 import copy
+import inspect
 import logging
 import os
+import platform
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -46,18 +36,12 @@ class _TeacherBackend:
 
 class TeacherEnsemble:
     """
-    Optional teacher ensemble for depth-feature extraction.
+    Teacher feature extractor.
 
     Required API:
       teachers = TeacherEnsemble(device="cuda")
       teachers.status
       teachers.predict(image_path, water_mask=None)
-
-    Notes:
-    - image_path may be a filesystem path OR an RGB numpy array.
-    - Teacher model loading is independent per teacher.
-    - By default, remote downloads are disabled to keep behavior deterministic.
-      Set FLOOD_DEPTH_TEACHERS_ALLOW_DOWNLOAD=1 to enable.
     """
 
     TEACHER_NAMES: Tuple[str, str, str] = ("DepthAnythingV2", "DepthPro", "Metric3D")
@@ -79,188 +63,211 @@ class TeacherEnsemble:
         self._teacher_overrides: Mapping[str, Mapping[str, Any]] = teacher_overrides or {}
         self._teacher_backends: Dict[str, _TeacherBackend] = {}
         self._status: Dict[str, Dict[str, Any]] = {}
+        self._cfg = self._load_teacher_cfg()
         self._probed = False
 
-        cfg = self._load_teacher_cfg()
-        self._register_teachers(cfg)
-
+        self._register_teachers(self._cfg)
         if not self.lazy_load:
             self._probe_all()
 
     @property
     def status(self) -> Dict[str, Dict[str, Any]]:
-        """Return per-teacher load status with independent failure details."""
         if not self._probed:
             self._probe_all()
         return copy.deepcopy(self._status)
 
-    def predict(
-        self,
-        image_path: Union[str, Path, np.ndarray],
-        water_mask: Optional[np.ndarray] = None,
-    ) -> Dict[str, Any]:
-        """
-        Compute teacher features for the given image.
+    def diagnose(self) -> Dict[str, Any]:
+        def _ver(pkg: str) -> Optional[str]:
+            try:
+                m = __import__(pkg)
+                return getattr(m, "__version__", "unknown")
+            except Exception:
+                return None
 
-        Returns:
-          {
-            "water_region_valid": bool,
-            "teachers": {
-              "DepthAnythingV2": { ... required stats ... },
-              "DepthPro": { ... },
-              "Metric3D": { ... },
+        gpu = None
+        if torch.cuda.is_available():
+            try:
+                gpu = torch.cuda.get_device_name(0)
+            except Exception:
+                gpu = "unknown"
+
+        return {
+            "python_version": platform.python_version(),
+            "torch_version": getattr(torch, "__version__", None),
+            "transformers_version": _ver("transformers"),
+            "huggingface_hub_version": _ver("huggingface_hub"),
+            "cuda_available": bool(torch.cuda.is_available()),
+            "gpu_name": gpu,
+            "cache_paths": {
+                "HF_HOME": os.getenv("HF_HOME"),
+                "TRANSFORMERS_CACHE": os.getenv("TRANSFORMERS_CACHE"),
+                "HUGGINGFACE_HUB_CACHE": os.getenv("HUGGINGFACE_HUB_CACHE"),
+                "TORCH_HOME": os.getenv("TORCH_HOME"),
             },
-            "ensemble": {
-              "teacher_mean": ...,
-              "teacher_median": ...,
-              "teacher_min": ...,
-              "teacher_max": ...,
-              "teacher_spread": ...,
-              "teacher_std": ...,
-              "teacher_agreement": ...,
-            },
-            "meta": { ... }
-          }
-        """
+            "teacher_config": copy.deepcopy(self._cfg),
+            "teacher_status": self.status,
+        }
+
+    def predict(self, image_path: Union[str, Path, np.ndarray], water_mask: Optional[np.ndarray] = None) -> Dict[str, Any]:
         image_rgb = self._load_image_rgb(image_path)
         h, w = image_rgb.shape[:2]
+        water_valid, water_mask_bool = self._validate_water_mask(water_mask, (h, w))
 
-        mask_valid, mask_bool = self._validate_water_mask(water_mask, (h, w))
-
-        teachers_out: Dict[str, Dict[str, Any]] = {}
-        normalized_region_maps: Dict[str, np.ndarray] = {}
-        normalized_region_means: Dict[str, float] = {}
+        teacher_rows: Dict[str, Dict[str, Any]] = {}
+        norm_region_maps: Dict[str, np.ndarray] = {}
 
         for name in self.TEACHER_NAMES:
-            teacher_status = self._status.get(name, {"available": False, "model": "", "error": "not_initialized"})
+            base = self._status.get(name, {"available": False, "model": "", "error": "not_initialized"})
             row: Dict[str, Any] = {
-                "available": bool(teacher_status.get("available", False)),
-                "model": teacher_status.get("model"),
-                "error": teacher_status.get("error"),
+                "available": bool(base.get("available", False)),
+                "model": base.get("model"),
+                "error": base.get("error"),
             }
 
             if not self._ensure_loaded(name):
-                teachers_out[name] = row
+                row["available"] = bool(self._status[name].get("available", False))
+                row["error"] = self._status[name].get("error")
+                teacher_rows[name] = row
                 continue
 
             backend = self._teacher_backends[name]
             assert backend.loaded_payload is not None
-
             try:
-                raw_map = backend.predictor(backend.loaded_payload, image_rgb)
-            except Exception as exc:  # pragma: no cover - defensive path
+                raw = backend.predictor(backend.loaded_payload, image_rgb)
+            except Exception as exc:
+                msg = f"predict failed: {exc}"
+                self._status[name]["available"] = False
+                self._status[name]["error"] = msg
                 row["available"] = False
-                row["error"] = f"predict failed: {exc}"
-                teachers_out[name] = row
-                logger.warning("Teacher %s prediction failed: %s", name, exc)
+                row["error"] = msg
+                teacher_rows[name] = row
                 continue
 
-            if raw_map.shape != (h, w):
+            if raw.shape != (h, w):
+                msg = f"invalid depth map shape: {raw.shape}, expected {(h, w)}"
+                self._status[name]["available"] = False
+                self._status[name]["error"] = msg
                 row["available"] = False
-                row["error"] = f"invalid depth map shape: {raw_map.shape}, expected {(h, w)}"
-                teachers_out[name] = row
+                row["error"] = msg
+                teacher_rows[name] = row
                 continue
 
-            raw_map = raw_map.astype(np.float32)
-            finite = np.isfinite(raw_map)
-            valid_ratio = float(finite.mean()) if finite.size else 0.0
-
-            safe_map = raw_map.copy()
+            raw = raw.astype(np.float32)
+            finite = np.isfinite(raw)
+            valid_pixel_ratio = float(finite.mean()) if finite.size else 0.0
+            safe = raw.copy()
             if not finite.all():
-                safe_map[~finite] = np.nanmedian(safe_map[finite]) if finite.any() else 0.0
+                fill = float(np.nanmedian(safe[finite])) if finite.any() else 0.0
+                safe[~finite] = fill
 
-            norm_map, norm_meta = self._robust_normalize(safe_map)
-
-            global_vals = safe_map.reshape(-1)
-            if mask_valid:
-                region_vals = safe_map[mask_bool]
-                region_norm = norm_map[mask_bool]
+            norm, norm_meta = self._robust_normalize(safe)
+            global_vals = safe.reshape(-1)
+            if water_valid:
+                region_vals = safe[water_mask_bool]
+                region_norm = norm[water_mask_bool]
             else:
                 region_vals = global_vals
-                region_norm = norm_map.reshape(-1)
+                region_norm = norm.reshape(-1)
 
-            global_stats = self._quantile_stats(global_vals)
-            water_stats = self._quantile_stats(region_vals)
+            gs = self._quantile_stats(global_vals)
+            ws = self._quantile_stats(region_vals)
 
             row.update(
                 {
-                    # Requested canonical names
-                    "global_mean": global_stats["mean"],
-                    "global_median": global_stats["median"],
-                    "p10": global_stats["p10"],
-                    "p25": global_stats["p25"],
-                    "p50": global_stats["p50"],
-                    "p75": global_stats["p75"],
-                    "p90": global_stats["p90"],
-                    "water_depth_mean": water_stats["mean"],
-                    "water_depth_median": water_stats["median"],
-                    "water_p10": water_stats["p10"],
-                    "water_p25": water_stats["p25"],
-                    "water_p50": water_stats["p50"],
-                    "water_p75": water_stats["p75"],
-                    "water_p90": water_stats["p90"],
-                    "valid_pixel_ratio": round(valid_ratio, 6),
-                    # Backward-compatible aliases for existing pipeline consumers
-                    "mean": global_stats["mean"],
-                    "median": global_stats["median"],
-                    "water_mean": water_stats["mean"],
-                    "water_median": water_stats["median"],
-                    "spatial_gradient": self._spatial_gradient(norm_map),
+                    "global_mean": gs["mean"],
+                    "global_median": gs["median"],
+                    "p10": gs["p10"],
+                    "p25": gs["p25"],
+                    "p50": gs["p50"],
+                    "p75": gs["p75"],
+                    "p90": gs["p90"],
+                    "water_depth_mean": ws["mean"],
+                    "water_depth_median": ws["median"],
+                    "water_p10": ws["p10"],
+                    "water_p25": ws["p25"],
+                    "water_p50": ws["p50"],
+                    "water_p75": ws["p75"],
+                    "water_p90": ws["p90"],
+                    "valid_pixel_ratio": round(valid_pixel_ratio, 6),
+                    "spatial_gradient": self._spatial_gradient(norm),
                     "depth_variance": float(np.nanvar(global_vals)),
                     "normalization": norm_meta,
+                    # compatibility aliases
+                    "mean": gs["mean"],
+                    "median": gs["median"],
+                    "water_mean": ws["mean"],
+                    "water_median": ws["median"],
                 }
             )
+            if name == "DepthPro":
+                row["metric_depth_mean_m"] = gs["mean"]
+                row["metric_depth_median_m"] = gs["median"]
 
-            teachers_out[name] = row
-            normalized_region_maps[name] = region_norm.astype(np.float32)
-            normalized_region_means[name] = float(np.nanmean(region_norm))
+            self._status[name]["available"] = True
+            self._status[name]["error"] = None
+            row["available"] = True
+            row["error"] = None
+            teacher_rows[name] = row
+            norm_region_maps[name] = region_norm.astype(np.float32)
 
-        ensemble = self._aggregate_teacher_metrics(normalized_region_maps, normalized_region_means)
+        ensemble = self._aggregate_teacher_metrics(norm_region_maps)
+        available_rows = [r for r in teacher_rows.values() if r.get("available")]
+        features = self._aggregate_requested_features(available_rows, ensemble)
 
         return {
-            "water_region_valid": bool(mask_valid),
-            "teachers": teachers_out,
+            "water_region_valid": bool(water_valid),
+            "teachers": teacher_rows,
             "ensemble": ensemble,
+            "features": features,
             "meta": {
                 "device": self.device,
                 "use_fp16": self.use_fp16,
-                "available_teacher_count": int(sum(1 for v in teachers_out.values() if v.get("available"))),
+                "available_teacher_count": int(len(available_rows)),
                 "total_teachers": len(self.TEACHER_NAMES),
-                "mask_pixels": int(mask_bool.sum()) if mask_bool is not None else 0,
+                "mask_pixels": int(water_mask_bool.sum()) if water_mask_bool is not None else 0,
             },
         }
 
-    # ------------------------------------------------------------------
-    # Teacher registration and loading
-    # ------------------------------------------------------------------
-
     def _register_teachers(self, cfg: Dict[str, Any]) -> None:
         for name in self.TEACHER_NAMES:
-            self._status[name] = {
-                "available": False,
-                "model": "",
-                "error": "not_loaded",
-            }
+            self._status[name] = {"available": False, "model": "", "error": "not_loaded"}
+
+        da = cfg.get("DepthAnythingV2", {})
+        dp = cfg.get("DepthPro", {})
+        m3 = cfg.get("Metric3D", {})
 
         specs = {
-            "DepthAnythingV2": cfg.get("DepthAnythingV2", {}),
-            "DepthPro": cfg.get("DepthPro", {}),
-            "Metric3D": cfg.get("Metric3D", {}),
+            "DepthAnythingV2": {
+                "model": str(da.get("model", "")).strip(),
+                "loader": lambda model=str(da.get("model", "")).strip(), rev=(str(da.get("revision", "")).strip() or None): self._load_depth_anything_v2(model, rev),
+                "predictor": self._predict_transformers_depth,
+            },
+            "DepthPro": {
+                "model": str(dp.get("model", "")).strip(),
+                "loader": lambda model=str(dp.get("model", "")).strip(), ckpt=(str(dp.get("checkpoint", "")).strip() or None): self._load_depth_pro(model, ckpt),
+                "predictor": self._predict_depth_pro,
+            },
+            "Metric3D": {
+                "model": str(m3.get("model", "")).strip(),
+                "loader": lambda model=str(m3.get("model", "")).strip(), var=(str(m3.get("variant", "metric3d_vit_small")).strip() or "metric3d_vit_small"), ckpt=(str(m3.get("checkpoint", "")).strip() or None): self._load_metric3d(model, var, ckpt),
+                "predictor": self._predict_metric3d,
+            },
         }
 
-        for name, spec in specs.items():
+        for name in self.TEACHER_NAMES:
             override = self._teacher_overrides.get(name, {})
-            model_ref = str(override.get("model") or spec.get("model") or "").strip()
-
-            loader: Callable[[], Dict[str, Any]]
-            predictor: Callable[[Dict[str, Any], np.ndarray], np.ndarray]
-
             if override:
-                loader = override.get("loader", lambda: {"kind": "mock"})
-                predictor = override.get("predictor", lambda _payload, img: np.zeros(img.shape[:2], dtype=np.float32))
+                model_ref = str(override.get("model") or specs[name]["model"]).strip()
+                loader = override.get("loader")
+                predictor = override.get("predictor")
+                if not callable(loader):
+                    loader = specs[name]["loader"]
+                if not callable(predictor):
+                    predictor = specs[name]["predictor"]
             else:
-                loader = lambda model_ref=model_ref: self._load_transformers_teacher(model_ref)
-                predictor = self._predict_with_transformers_teacher
+                model_ref = specs[name]["model"]
+                loader = specs[name]["loader"]
+                predictor = specs[name]["predictor"]
 
             self._teacher_backends[name] = _TeacherBackend(
                 model_ref=model_ref,
@@ -268,8 +275,6 @@ class TeacherEnsemble:
                 predictor=predictor,
             )
             self._status[name]["model"] = model_ref
-            if not model_ref:
-                self._status[name]["error"] = "no model identifier/checkpoint configured"
 
     def _probe_all(self) -> None:
         for name in self.TEACHER_NAMES:
@@ -302,133 +307,290 @@ class TeacherEnsemble:
             self._status[teacher_name]["error"] = str(exc)
             return False
 
-    def _load_transformers_teacher(self, model_ref: str) -> Dict[str, Any]:
+    def _load_depth_anything_v2(self, model_ref: str, revision: Optional[str]) -> Dict[str, Any]:
+        if not model_ref:
+            raise RuntimeError("DepthAnythingV2 model identifier is empty")
         try:
             from transformers import AutoImageProcessor, AutoModelForDepthEstimation
         except Exception as exc:
-            raise RuntimeError(f"transformers not available: {exc}") from exc
+            raise RuntimeError(f"transformers import failed: {exc}") from exc
+
+        cache_dir = os.getenv("HUGGINGFACE_HUB_CACHE") or os.getenv("HF_HOME") or os.getenv("TRANSFORMERS_CACHE")
+        force_download = os.getenv("FLOOD_DEPTH_TEACHERS_FORCE_DOWNLOAD", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+        source: Union[str, Path] = model_ref
+        if "/" in model_ref and not Path(model_ref).exists():
+            try:
+                from huggingface_hub import snapshot_download
+                source = snapshot_download(
+                    repo_id=model_ref,
+                    revision=revision,
+                    local_files_only=not self.allow_download,
+                    force_download=force_download and self.allow_download,
+                    cache_dir=cache_dir,
+                    allow_patterns=["*.json", "*.safetensors", "*.bin", "*.txt", "*.model"],
+                )
+            except Exception:
+                source = model_ref
 
         kwargs: Dict[str, Any] = {"local_files_only": not self.allow_download}
-        processor = AutoImageProcessor.from_pretrained(model_ref, **kwargs)
-        model = AutoModelForDepthEstimation.from_pretrained(model_ref, **kwargs)
+        if cache_dir:
+            kwargs["cache_dir"] = cache_dir
+        if revision:
+            kwargs["revision"] = revision
+
+        processor = AutoImageProcessor.from_pretrained(str(source), **kwargs)
+        model = AutoModelForDepthEstimation.from_pretrained(str(source), **kwargs)
         model = model.to(self.device)
         model.eval()
-        if self.use_fp16 and self.device.startswith("cuda"):
+        if self.use_fp16 and self.device == "cuda":
             model = model.half()
+        return {"kind": "transformers", "processor": processor, "model": model, "model_ref": model_ref, "resolved_source": str(source)}
 
-        return {
-            "processor": processor,
-            "model": model,
-            "model_ref": model_ref,
-        }
+    def _load_depth_pro(self, model_ref: str, checkpoint: Optional[str]) -> Dict[str, Any]:
+        if not model_ref:
+            raise RuntimeError("DepthPro model identifier is empty")
+        try:
+            import depth_pro
+        except Exception as exc:
+            raise RuntimeError(f"depth_pro import failed: {exc}") from exc
 
-    def _predict_with_transformers_teacher(self, payload: Dict[str, Any], image_rgb: np.ndarray) -> np.ndarray:
+        create_fn = getattr(depth_pro, "create_model_and_transforms", None)
+        if create_fn is None:
+            raise RuntimeError("depth_pro.create_model_and_transforms not found")
+
+        kwargs: Dict[str, Any] = {}
+        sig = inspect.signature(create_fn)
+        if "device" in sig.parameters:
+            kwargs["device"] = torch.device(self.device)
+        if "precision" in sig.parameters and self.use_fp16 and self.device == "cuda":
+            kwargs["precision"] = torch.float16
+        if checkpoint:
+            for k in ("checkpoint", "checkpoint_uri", "checkpoint_path"):
+                if k in sig.parameters:
+                    kwargs[k] = checkpoint
+                    break
+
+        created = create_fn(**kwargs)
+        if not isinstance(created, tuple) or len(created) < 2:
+            raise RuntimeError("Depth Pro factory did not return (model, transform)")
+
+        model, transform = created[0], created[1]
+        if hasattr(model, "to"):
+            model = model.to(self.device)
+        if hasattr(model, "eval"):
+            model.eval()
+
+        return {"kind": "depth_pro", "module": depth_pro, "model": model, "transform": transform, "model_ref": model_ref, "checkpoint": checkpoint}
+
+    def _load_metric3d(self, model_ref: str, variant: str, checkpoint: Optional[str]) -> Dict[str, Any]:
+        if not model_ref:
+            raise RuntimeError("Metric3D model identifier is empty")
+        if checkpoint and not Path(checkpoint).exists():
+            raise RuntimeError(f"Metric3D checkpoint not found: {checkpoint}")
+
+        try:
+            import metric3d  # type: ignore
+            create_fn = getattr(metric3d, "create_model_and_transforms", None)
+            if create_fn is not None:
+                kwargs: Dict[str, Any] = {}
+                sig = inspect.signature(create_fn)
+                if "variant" in sig.parameters:
+                    kwargs["variant"] = variant
+                if "checkpoint" in sig.parameters and checkpoint:
+                    kwargs["checkpoint"] = checkpoint
+                out = create_fn(**kwargs)
+                if isinstance(out, tuple) and len(out) >= 2:
+                    model, transform = out[0], out[1]
+                    if hasattr(model, "to"):
+                        model = model.to(self.device)
+                    if hasattr(model, "eval"):
+                        model.eval()
+                    return {"kind": "metric3d_pkg", "module": metric3d, "model": model, "transform": transform, "model_ref": model_ref, "variant": variant, "checkpoint": checkpoint}
+        except Exception:
+            pass
+
+        try:
+            model = torch.hub.load(model_ref, variant, pretrained=(checkpoint is None), trust_repo=True)
+            if checkpoint:
+                state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+                sd = state.get("state_dict", state) if isinstance(state, dict) else state
+                model.load_state_dict(sd, strict=False)
+            model = model.to(self.device)
+            model.eval()
+            return {"kind": "metric3d_hub", "module": None, "model": model, "transform": None, "model_ref": model_ref, "variant": variant, "checkpoint": checkpoint}
+        except Exception as exc:
+            raise RuntimeError(
+                "Metric3D load failed. Install official Metric3D dependency or configure a valid checkpoint. "
+                f"Details: {exc}"
+            ) from exc
+
+    def _predict_transformers_depth(self, payload: Dict[str, Any], image_rgb: np.ndarray) -> np.ndarray:
         processor = payload["processor"]
         model = payload["model"]
-
         inputs = processor(images=image_rgb, return_tensors="pt")
+
         tensor_inputs: Dict[str, Any] = {}
         for k, v in inputs.items():
             if torch.is_tensor(v):
                 t = v.to(self.device)
-                if self.use_fp16 and self.device.startswith("cuda") and t.dtype == torch.float32:
+                if self.use_fp16 and self.device == "cuda" and t.dtype == torch.float32:
                     t = t.half()
                 tensor_inputs[k] = t
             else:
                 tensor_inputs[k] = v
 
         with torch.inference_mode():
-            if self.use_fp16 and self.device.startswith("cuda"):
+            if self.use_fp16 and self.device == "cuda":
                 with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    outputs = model(**tensor_inputs)
+                    out = model(**tensor_inputs)
             else:
-                outputs = model(**tensor_inputs)
+                out = model(**tensor_inputs)
 
-        depth_tensor = self._extract_depth_tensor(outputs)
-        if depth_tensor.ndim == 2:
-            depth_tensor = depth_tensor.unsqueeze(0).unsqueeze(0)
-        elif depth_tensor.ndim == 3:
-            depth_tensor = depth_tensor.unsqueeze(1)
-        elif depth_tensor.ndim != 4:
-            raise RuntimeError(f"Unsupported depth tensor shape: {tuple(depth_tensor.shape)}")
+        depth = self._extract_depth_tensor(out)
+        return self._resize_depth_to_image(depth, image_rgb.shape[:2])
 
-        h, w = image_rgb.shape[:2]
-        depth_tensor = F.interpolate(depth_tensor.float(), size=(h, w), mode="bicubic", align_corners=False)
-        depth_np = depth_tensor[0, 0].detach().cpu().numpy().astype(np.float32)
-        return depth_np
+    def _predict_depth_pro(self, payload: Dict[str, Any], image_rgb: np.ndarray) -> np.ndarray:
+        depth_pro = payload["module"]
+        model = payload["model"]
+        transform = payload["transform"]
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                tmp_path = f.name
+            Image.fromarray(image_rgb).save(tmp_path)
+
+            if hasattr(depth_pro, "load_rgb"):
+                loaded = depth_pro.load_rgb(tmp_path)
+                if isinstance(loaded, tuple):
+                    rgb_img = loaded[0]
+                    f_px = loaded[2] if len(loaded) > 2 else None
+                else:
+                    rgb_img = loaded
+                    f_px = None
+            else:
+                rgb_img = Image.open(tmp_path).convert("RGB")
+                f_px = None
+
+            x = transform(rgb_img) if callable(transform) else rgb_img
+            if isinstance(x, np.ndarray):
+                x = torch.from_numpy(x)
+            if torch.is_tensor(x):
+                if x.ndim == 3:
+                    x = x.unsqueeze(0)
+                x = x.to(self.device)
+                if self.use_fp16 and self.device == "cuda" and x.dtype == torch.float32:
+                    x = x.half()
+
+            infer_fn = getattr(model, "infer", None)
+            with torch.inference_mode():
+                if callable(infer_fn):
+                    kwargs: Dict[str, Any] = {}
+                    sig = inspect.signature(infer_fn)
+                    if "f_px" in sig.parameters and f_px is not None:
+                        kwargs["f_px"] = f_px
+                    out = infer_fn(x, **kwargs)
+                else:
+                    out = model(x)
+
+            depth = self._extract_depth_tensor(out)
+            return self._resize_depth_to_image(depth, image_rgb.shape[:2])
+        finally:
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+    def _predict_metric3d(self, payload: Dict[str, Any], image_rgb: np.ndarray) -> np.ndarray:
+        model = payload["model"]
+        transform = payload.get("transform")
+
+        if callable(transform):
+            x = transform(Image.fromarray(image_rgb))
+        else:
+            x = torch.from_numpy(image_rgb.astype(np.float32) / 255.0).permute(2, 0, 1)
+
+        if isinstance(x, np.ndarray):
+            x = torch.from_numpy(x)
+        if x.ndim == 3:
+            x = x.unsqueeze(0)
+        x = x.to(self.device)
+        if self.use_fp16 and self.device == "cuda" and x.dtype == torch.float32:
+            x = x.half()
+
+        with torch.inference_mode():
+            out = model(x)
+        depth = self._extract_depth_tensor(out)
+        return self._resize_depth_to_image(depth, image_rgb.shape[:2])
 
     @staticmethod
     def _extract_depth_tensor(outputs: Any) -> torch.Tensor:
+        if torch.is_tensor(outputs):
+            return outputs
         if hasattr(outputs, "predicted_depth"):
             return outputs.predicted_depth
         if hasattr(outputs, "depth"):
             return outputs.depth
         if isinstance(outputs, Mapping):
-            for key in ("predicted_depth", "depth", "output", "last_hidden_state"):
-                if key in outputs and torch.is_tensor(outputs[key]):
-                    return outputs[key]
-        if isinstance(outputs, (tuple, list)) and outputs:
-            if torch.is_tensor(outputs[0]):
-                return outputs[0]
-        raise RuntimeError("Teacher output does not contain a depth tensor")
+            for k in ("predicted_depth", "depth", "metric_depth", "depth_map", "output"):
+                if k in outputs and torch.is_tensor(outputs[k]):
+                    return outputs[k]
+        if isinstance(outputs, (tuple, list)):
+            for item in outputs:
+                if torch.is_tensor(item):
+                    return item
+                if isinstance(item, Mapping):
+                    for k in ("predicted_depth", "depth", "metric_depth", "depth_map"):
+                        if k in item and torch.is_tensor(item[k]):
+                            return item[k]
+        raise RuntimeError("Teacher output does not contain a tensor depth map")
 
-    # ------------------------------------------------------------------
-    # Config + utility helpers
-    # ------------------------------------------------------------------
+    @staticmethod
+    def _resize_depth_to_image(depth: torch.Tensor, hw: Tuple[int, int]) -> np.ndarray:
+        h, w = hw
+        d = depth
+        if d.ndim == 2:
+            d = d.unsqueeze(0).unsqueeze(0)
+        elif d.ndim == 3:
+            d = d.unsqueeze(1)
+        elif d.ndim != 4:
+            raise RuntimeError(f"Unsupported depth tensor shape: {tuple(d.shape)}")
+        d = F.interpolate(d.float(), size=(h, w), mode="bicubic", align_corners=False)
+        return d[0, 0].detach().cpu().numpy().astype(np.float32)
 
     def _load_teacher_cfg(self) -> Dict[str, Any]:
         cfg: Dict[str, Any] = {}
         try:
             settings = load_settings_dict()
-            cfg = (
-                settings.get("inference", {})
-                .get("depth_teachers", {})
-            ) or {}
+            cfg = settings.get("inference", {}).get("depth_teachers", {}) or {}
         except Exception:
             cfg = {}
 
-        def pick(model_env: str, ckpt_env: str, cfg_node: Mapping[str, Any], default_model: str) -> str:
-            env_ckpt = os.getenv(ckpt_env, "").strip()
-            env_model = os.getenv(model_env, "").strip()
-            cfg_ckpt = str(cfg_node.get("checkpoint", "")).strip() if cfg_node else ""
-            cfg_model = str(cfg_node.get("model", "")).strip() if cfg_node else ""
-            return env_ckpt or env_model or cfg_ckpt or cfg_model or default_model
-
-        da_cfg = cfg.get("depth_anything_v2", {}) if isinstance(cfg, Mapping) else {}
-        dp_cfg = cfg.get("depth_pro", {}) if isinstance(cfg, Mapping) else {}
-        m3_cfg = cfg.get("metric3d", {}) if isinstance(cfg, Mapping) else {}
+        da = cfg.get("depth_anything_v2", {}) if isinstance(cfg, Mapping) else {}
+        dp = cfg.get("depth_pro", {}) if isinstance(cfg, Mapping) else {}
+        m3 = cfg.get("metric3d", {}) if isinstance(cfg, Mapping) else {}
 
         return {
             "DepthAnythingV2": {
-                "model": pick(
-                    "FLOOD_DEPTH_ANYTHING_V2_MODEL",
-                    "FLOOD_DEPTH_ANYTHING_V2_CHECKPOINT",
-                    da_cfg,
-                    "depth-anything/Depth-Anything-V2-Small-hf",
-                )
+                "model": os.getenv("FLOOD_DEPTH_ANYTHING_V2_MODEL", str(da.get("model", "")).strip() or "depth-anything/Depth-Anything-V2-Small-hf"),
+                "revision": os.getenv("FLOOD_DEPTH_ANYTHING_V2_REVISION", str(da.get("revision", "")).strip() or "main"),
             },
             "DepthPro": {
-                "model": pick(
-                    "FLOOD_DEPTH_PRO_MODEL",
-                    "FLOOD_DEPTH_PRO_CHECKPOINT",
-                    dp_cfg,
-                    "apple/DepthPro-hf",
-                )
+                "model": os.getenv("FLOOD_DEPTH_PRO_MODEL", str(dp.get("model", "")).strip() or "apple/DepthPro"),
+                "checkpoint": os.getenv("FLOOD_DEPTH_PRO_CHECKPOINT", str(dp.get("checkpoint", "")).strip()),
             },
             "Metric3D": {
-                "model": pick(
-                    "FLOOD_METRIC3D_MODEL",
-                    "FLOOD_METRIC3D_CHECKPOINT",
-                    m3_cfg,
-                    "",
-                )
+                "model": os.getenv("FLOOD_METRIC3D_MODEL", str(m3.get("model", "")).strip() or "YvanYin/Metric3D"),
+                "variant": os.getenv("FLOOD_METRIC3D_VARIANT", str(m3.get("variant", "")).strip() or "metric3d_vit_small"),
+                "checkpoint": os.getenv("FLOOD_METRIC3D_CHECKPOINT", str(m3.get("checkpoint", "")).strip()),
             },
         }
 
     @staticmethod
     def _resolve_device(device: str) -> str:
-        requested = str(device).strip().lower()
-        if requested == "cuda" and torch.cuda.is_available():
+        d = str(device).strip().lower()
+        if d == "cuda" and torch.cuda.is_available():
             return "cuda"
         return "cpu"
 
@@ -449,64 +611,50 @@ class TeacherEnsemble:
     def _resolve_allow_download(allow_download: Optional[bool]) -> bool:
         if allow_download is not None:
             return bool(allow_download)
-        env = os.getenv("FLOOD_DEPTH_TEACHERS_ALLOW_DOWNLOAD", "0").strip().lower()
+        env = os.getenv("FLOOD_DEPTH_TEACHERS_ALLOW_DOWNLOAD", "1").strip().lower()
         return env in {"1", "true", "yes", "on"}
 
     @staticmethod
     def _load_image_rgb(image_path: Union[str, Path, np.ndarray]) -> np.ndarray:
         if isinstance(image_path, np.ndarray):
-            image_rgb = image_path
-            if image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
+            arr = image_path
+            if arr.ndim != 3 or arr.shape[2] != 3:
                 raise ValueError("image array must have shape (H, W, 3)")
-            return image_rgb.astype(np.uint8, copy=False)
-
-        path = Path(image_path)
-        if not path.exists():
-            raise FileNotFoundError(f"image not found: {path}")
-        image = Image.open(path).convert("RGB")
-        return np.array(image)
+            return arr.astype(np.uint8, copy=False)
+        p = Path(image_path)
+        if not p.exists():
+            raise FileNotFoundError(f"image not found: {p}")
+        return np.array(Image.open(p).convert("RGB"))
 
     @staticmethod
     def _validate_water_mask(water_mask: Optional[np.ndarray], hw: Tuple[int, int]) -> Tuple[bool, Optional[np.ndarray]]:
-        h, w = hw
         if water_mask is None:
             return False, None
-
-        mask = np.asarray(water_mask)
-        if mask.ndim == 3:
-            mask = mask[..., 0]
-        if mask.ndim != 2:
+        h, w = hw
+        m = np.asarray(water_mask)
+        if m.ndim == 3:
+            m = m[..., 0]
+        if m.ndim != 2 or m.shape != (h, w):
             return False, None
-        if mask.shape != (h, w):
-            return False, None
-
-        mask_bool = mask.astype(np.float32) > 0.5
-        if int(mask_bool.sum()) == 0:
-            return False, mask_bool
-        return True, mask_bool
+        mb = m.astype(np.float32) > 0.5
+        if int(mb.sum()) == 0:
+            return False, mb
+        return True, mb
 
     @staticmethod
     def _quantile_stats(values: np.ndarray) -> Dict[str, float]:
         vals = np.asarray(values, dtype=np.float32).reshape(-1)
-        finite = vals[np.isfinite(vals)]
-        if finite.size == 0:
-            return {
-                "mean": 0.0,
-                "median": 0.0,
-                "p10": 0.0,
-                "p25": 0.0,
-                "p50": 0.0,
-                "p75": 0.0,
-                "p90": 0.0,
-            }
+        vals = vals[np.isfinite(vals)]
+        if vals.size == 0:
+            return {"mean": 0.0, "median": 0.0, "p10": 0.0, "p25": 0.0, "p50": 0.0, "p75": 0.0, "p90": 0.0}
         return {
-            "mean": float(np.mean(finite)),
-            "median": float(np.median(finite)),
-            "p10": float(np.percentile(finite, 10)),
-            "p25": float(np.percentile(finite, 25)),
-            "p50": float(np.percentile(finite, 50)),
-            "p75": float(np.percentile(finite, 75)),
-            "p90": float(np.percentile(finite, 90)),
+            "mean": float(np.mean(vals)),
+            "median": float(np.median(vals)),
+            "p10": float(np.percentile(vals, 10)),
+            "p25": float(np.percentile(vals, 25)),
+            "p50": float(np.percentile(vals, 50)),
+            "p75": float(np.percentile(vals, 75)),
+            "p90": float(np.percentile(vals, 90)),
         }
 
     @staticmethod
@@ -514,13 +662,7 @@ class TeacherEnsemble:
         arr = np.asarray(depth_map, dtype=np.float32)
         finite = arr[np.isfinite(arr)]
         if finite.size == 0:
-            return np.zeros_like(arr, dtype=np.float32), {
-                "method": "robust_p5_p95",
-                "q05": 0.0,
-                "q95": 0.0,
-                "eps_fallback": True,
-            }
-
+            return np.zeros_like(arr, dtype=np.float32), {"method": "robust_p5_p95", "q05": 0.0, "q95": 0.0, "eps_fallback": True}
         q05 = float(np.percentile(finite, 5))
         q95 = float(np.percentile(finite, 95))
         eps = 1e-6
@@ -528,66 +670,35 @@ class TeacherEnsemble:
             mn = float(np.min(finite))
             mx = float(np.max(finite))
             if (mx - mn) < eps:
-                return np.zeros_like(arr, dtype=np.float32), {
-                    "method": "robust_p5_p95",
-                    "q05": q05,
-                    "q95": q95,
-                    "eps_fallback": True,
-                }
-            norm = (arr - mn) / (mx - mn)
-            norm = np.clip(norm, 0.0, 1.0).astype(np.float32)
-            return norm, {
-                "method": "minmax_fallback",
-                "min": mn,
-                "max": mx,
-                "eps_fallback": True,
-            }
-
-        norm = (arr - q05) / (q95 - q05)
-        norm = np.clip(norm, 0.0, 1.0).astype(np.float32)
-        return norm, {
-            "method": "robust_p5_p95",
-            "q05": q05,
-            "q95": q95,
-            "eps_fallback": False,
-        }
+                return np.zeros_like(arr, dtype=np.float32), {"method": "robust_p5_p95", "q05": q05, "q95": q95, "eps_fallback": True}
+            n = np.clip((arr - mn) / (mx - mn), 0.0, 1.0).astype(np.float32)
+            return n, {"method": "minmax_fallback", "min": mn, "max": mx, "eps_fallback": True}
+        n = np.clip((arr - q05) / (q95 - q05), 0.0, 1.0).astype(np.float32)
+        return n, {"method": "robust_p5_p95", "q05": q05, "q95": q95, "eps_fallback": False}
 
     @staticmethod
     def _spatial_gradient(norm_map: np.ndarray) -> float:
         arr = np.asarray(norm_map, dtype=np.float32)
         gy, gx = np.gradient(arr)
-        mag = np.sqrt(gx * gx + gy * gy)
-        return float(np.nanmean(mag))
+        return float(np.nanmean(np.sqrt(gx * gx + gy * gy)))
 
-    def _aggregate_teacher_metrics(
-        self,
-        region_maps: Mapping[str, np.ndarray],
-        region_means: Mapping[str, float],
-    ) -> Dict[str, Any]:
-        if not region_means:
-            return {
-                "teacher_mean": 0.0,
-                "teacher_median": 0.0,
-                "teacher_min": 0.0,
-                "teacher_max": 0.0,
-                "teacher_spread": 0.0,
-                "teacher_std": 0.0,
-                "teacher_agreement": 0.0,
-            }
+    @staticmethod
+    def _aggregate_teacher_metrics(region_maps: Mapping[str, np.ndarray]) -> Dict[str, float]:
+        if not region_maps:
+            return {"teacher_mean": 0.0, "teacher_median": 0.0, "teacher_spread": 0.0, "teacher_std": 0.0, "teacher_agreement": 0.0}
 
-        vals = np.array(list(region_means.values()), dtype=np.float32)
-        teacher_mean = float(np.mean(vals))
-        teacher_median = float(np.median(vals))
-        teacher_min = float(np.min(vals))
-        teacher_max = float(np.max(vals))
-        teacher_spread = float(teacher_max - teacher_min)
-        teacher_std = float(np.std(vals))
+        means = np.array([float(np.nanmean(v)) for v in region_maps.values()], dtype=np.float32)
+        out = {
+            "teacher_mean": float(np.mean(means)),
+            "teacher_median": float(np.median(means)),
+            "teacher_spread": float(np.max(means) - np.min(means)),
+            "teacher_std": float(np.std(means)),
+            "teacher_agreement": 1.0,
+        }
 
-        if len(region_maps) <= 1:
-            agreement = 1.0
-        else:
+        if len(region_maps) > 1:
             names = list(region_maps.keys())
-            pairwise_mae = []
+            maes = []
             for i in range(len(names)):
                 for j in range(i + 1, len(names)):
                     a = np.asarray(region_maps[names[i]], dtype=np.float32).reshape(-1)
@@ -599,21 +710,52 @@ class TeacherEnsemble:
                         step = int(np.ceil(n / 20000.0))
                         a = a[::step]
                         b = b[::step]
-                    pairwise_mae.append(float(np.mean(np.abs(a - b))))
-            if pairwise_mae:
-                # Agreement in [0,1]: lower normalized disagreement => higher agreement.
-                agreement = float(np.clip(1.0 - np.mean(pairwise_mae), 0.0, 1.0))
-            else:
-                agreement = 0.0
+                    maes.append(float(np.mean(np.abs(a - b))))
+            out["teacher_agreement"] = float(np.clip(1.0 - (np.mean(maes) if maes else 1.0), 0.0, 1.0))
+
+        return out
+
+    @staticmethod
+    def _aggregate_requested_features(available_rows: list[Dict[str, Any]], ensemble: Dict[str, float]) -> Dict[str, float]:
+        if not available_rows:
+            return {
+                "global_mean": 0.0,
+                "global_median": 0.0,
+                "p10": 0.0,
+                "p25": 0.0,
+                "p50": 0.0,
+                "p75": 0.0,
+                "p90": 0.0,
+                "water_depth_mean": 0.0,
+                "water_depth_median": 0.0,
+                "teacher_mean": float(ensemble.get("teacher_mean", 0.0)),
+                "teacher_median": float(ensemble.get("teacher_median", 0.0)),
+                "teacher_spread": float(ensemble.get("teacher_spread", 0.0)),
+                "teacher_std": float(ensemble.get("teacher_std", 0.0)),
+                "teacher_agreement": float(ensemble.get("teacher_agreement", 0.0)),
+                "valid_pixel_ratio": 0.0,
+            }
+
+        def avg(k: str) -> float:
+            vals = [float(r.get(k, 0.0)) for r in available_rows if isinstance(r.get(k), (int, float))]
+            return float(np.mean(vals)) if vals else 0.0
 
         return {
-            "teacher_mean": teacher_mean,
-            "teacher_median": teacher_median,
-            "teacher_min": teacher_min,
-            "teacher_max": teacher_max,
-            "teacher_spread": teacher_spread,
-            "teacher_std": teacher_std,
-            "teacher_agreement": agreement,
+            "global_mean": avg("global_mean"),
+            "global_median": avg("global_median"),
+            "p10": avg("p10"),
+            "p25": avg("p25"),
+            "p50": avg("p50"),
+            "p75": avg("p75"),
+            "p90": avg("p90"),
+            "water_depth_mean": avg("water_depth_mean"),
+            "water_depth_median": avg("water_depth_median"),
+            "teacher_mean": float(ensemble.get("teacher_mean", 0.0)),
+            "teacher_median": float(ensemble.get("teacher_median", 0.0)),
+            "teacher_spread": float(ensemble.get("teacher_spread", 0.0)),
+            "teacher_std": float(ensemble.get("teacher_std", 0.0)),
+            "teacher_agreement": float(ensemble.get("teacher_agreement", 0.0)),
+            "valid_pixel_ratio": avg("valid_pixel_ratio"),
         }
 
 
