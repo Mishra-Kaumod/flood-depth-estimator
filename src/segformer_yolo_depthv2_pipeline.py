@@ -33,6 +33,7 @@ from src.middleware.retry import RetryPolicy, run_with_retry
 from src.reference_depth_estimator import ReferenceDepthEstimator
 from src.settings import load_settings_dict
 from src.water_region_detector import WaterRegionDetector
+from src.depth_teachers import TeacherEnsemble
 # Centralized severity helpers (canonical source-of-truth)
 from src.geospatial_classifier import classify_depth_dict, severity_anchor_depth
 
@@ -128,6 +129,8 @@ class SegformerYoloDepthV2Pipeline:
         # Gemini — stages 3-5 only
         settings = load_settings_dict()
         inference_cfg = settings.get("inference", {})
+        teacher_device = str(inference_cfg.get("device", "cpu")).strip().lower()
+        self.teacher_ensemble = TeacherEnsemble(device=teacher_device)
         gemini_cfg = inference_cfg.get("gemini", {})
         retry_cfg = gemini_cfg.get("retry", {})
         circuit_cfg = gemini_cfg.get("circuit_breaker", {})
@@ -719,6 +722,42 @@ class SegformerYoloDepthV2Pipeline:
             }
         )
 
+        teacher_features: Dict[str, Any] = {}
+        teacher_ensemble_metrics: Dict[str, Any] = {}
+        try:
+            teacher_features = self.teacher_ensemble.predict(image_rgb, water_mask=(water_mask > 0))
+            teacher_ensemble_metrics = teacher_features.get("ensemble", {})
+            teacher_meta = teacher_features.get("meta", {})
+            trace.append(
+                {
+                    "stage": "Depth Teachers",
+                    "backend": "DepthAnythingV2+DepthPro+Metric3D",
+                    "status": "ok",
+                    "summary": (
+                        f"available={teacher_meta.get('available_teacher_count', 0)}/"
+                        f"{teacher_meta.get('total_teachers', 3)} "
+                        f"agreement={teacher_ensemble_metrics.get('teacher_agreement', 0.0):.3f}"
+                    ),
+                }
+            )
+        except Exception as exc:
+            logger.warning("Depth teacher feature extraction failed: %s", exc)
+            trace.append(
+                {
+                    "stage": "Depth Teachers",
+                    "backend": "DepthAnythingV2+DepthPro+Metric3D",
+                    "status": "degraded",
+                    "summary": f"teacher extraction failed: {exc}",
+                }
+            )
+            teacher_features = {
+                "water_region_valid": False,
+                "teachers": {},
+                "ensemble": {},
+                "meta": {"available_teacher_count": 0, "total_teachers": 3},
+            }
+            teacher_ensemble_metrics = {}
+
         reference_estimate = self.reference_estimator.estimate(image_rgb)
         features = self._fusion_engine(
             water_mask=water_mask,
@@ -727,6 +766,30 @@ class SegformerYoloDepthV2Pipeline:
             dense_depth_map=dense_depth_map,
             reference_estimate=reference_estimate,
         )
+
+        if teacher_ensemble_metrics:
+            for key in (
+                "teacher_mean",
+                "teacher_median",
+                "teacher_min",
+                "teacher_max",
+                "teacher_spread",
+                "teacher_std",
+                "teacher_agreement",
+            ):
+                val = teacher_ensemble_metrics.get(key)
+                if isinstance(val, (int, float)):
+                    features[key] = round(float(val), 6)
+
+        for t_name, t_stats in teacher_features.get("teachers", {}).items():
+            slug = t_name.lower()
+            features[f"{slug}_available"] = 1.0 if t_stats.get("available") else 0.0
+            if t_stats.get("available"):
+                for metric in ("mean", "p50", "p90", "water_mean", "water_p50", "water_p90", "spatial_gradient", "depth_variance"):
+                    val = t_stats.get(metric)
+                    if isinstance(val, (int, float)):
+                        features[f"{slug}_{metric}"] = round(float(val), 6)
+
         # Stage 4: optional Gemini fusion override
         gemini_fusion_data = self._gemini_fusion(features, image_rgb)
         stage4_backend = "feature-fusion-v1"
@@ -889,6 +952,7 @@ class SegformerYoloDepthV2Pipeline:
             "action_trigger": action,
             "structured_features": features,
             "pipeline_trace": trace,
+            "depth_teachers": teacher_features,
         }
 
 
