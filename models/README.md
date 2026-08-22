@@ -41,6 +41,31 @@ available. It only forces depth to zero when the classifier is highly
 confident and the existing water mask/reference evidence also indicates a dry
 scene; uncertain scenes continue through the existing models.
 
+#Edit_start
+To train this checkpoint, arrange labeled images as:
+
+```text
+training_data/water_presence/
+  no_water/
+  water/
+```
+
+Then run:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python scripts\train_no_water_guard.py `
+  --data-dir training_data\water_presence `
+  --output models\no_water_guard_mobilenet_v3_small.pth `
+  --epochs 15 `
+  --device cpu
+```
+
+The training script creates a two-class MobileNetV3-Small checkpoint with
+class order `no_water`, then `water`. Keep the guard disabled until the
+validation accuracy and dry/wet test images have been reviewed.
+#Edit_end
+
 ## Safe Checkpoint Inspection
 
 Use `weights_only=True` when inspecting untrusted PyTorch checkpoints:

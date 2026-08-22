@@ -114,7 +114,7 @@ inference:
     device: "cpu"
     apply_corrections: true
   no_water_guard:
-    enabled: false
+    enabled: true
     model_path: "models/no_water_guard_mobilenet_v3_small.pth"
     device: "cpu"
     no_water_threshold: 0.92

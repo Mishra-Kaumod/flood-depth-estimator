@@ -520,17 +520,15 @@ class SegformerYoloDepthV2Pipeline:
             cfg = {}
         threshold = float(cfg.get("no_water_threshold", 0.92))
         max_coverage_pct = float(cfg.get("max_water_coverage_pct", 3.0))
-        max_submersion = float(features.get("max_reference_submersion", 0.0))
-        reference_count = int(float(features.get("reference_count", 0.0)))
         coverage_pct = float(features.get("water_coverage_pct", 0.0))
+        #Edit_start
         corroborated = (
             float(probability) >= threshold
             and coverage_pct <= max_coverage_pct
-            and reference_count == 0
-            and max_submersion < 0.10
             and not bool(features.get("immediate_risk", False))
             and not bool(features.get("muddy_water_fallback_applied", False))
         )
+        #Edit_end
         features["no_water_guard_status"] = "applied" if corroborated else "uncertain"
         features["no_water_guard_corroborated"] = corroborated
         if not corroborated:
@@ -1315,6 +1313,10 @@ class SegformerYoloDepthV2Pipeline:
             }
         )
 
+        #Edit_start
+        no_water_probability = self._no_water_guard_signal(image_rgb)
+        #Edit_end
+
         efficientnet_depth_cm = self._efficientnet_depth_signal(image_rgb)
         if efficientnet_depth_cm is not None:
             trace.append(
@@ -1332,6 +1334,7 @@ class SegformerYoloDepthV2Pipeline:
             and water_coverage_pct < 5.0
             #Edit_start
             and not self.water_detector.looks_like_dry_land(image_rgb)
+            and not (no_water_probability is not None and no_water_probability >= 0.92)
             #Edit_end
         ):
             muddy_mask = self.water_detector._detect_muddy_floodwater(image_rgb)
@@ -1349,7 +1352,6 @@ class SegformerYoloDepthV2Pipeline:
                     }
                 )
         #Edit_start
-        no_water_probability = self._no_water_guard_signal(image_rgb)
         no_water_status = "disabled" if self._no_water_model is None else "ok"
         no_water_summary = "checkpoint unavailable"
         if no_water_probability is not None:
