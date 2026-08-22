@@ -114,33 +114,49 @@ class LLMJudge:
         return "image/jpeg"
 
     def _build_prompt(self, prediction: Dict[str, Any], has_image: bool = False) -> str:
-        compact = {
+        model_context = {
+            "confidence_pct": prediction.get("confidence_pct"),
+            "water_coverage_pct": prediction.get("water_coverage_pct"),
+            "reference_count": prediction.get("reference_count"),
+            "reference_depth_cm": prediction.get("reference_depth_cm"),
+            "waterline_pct": prediction.get("waterline_pct"),
+            "dense_depth_p90": prediction.get("dense_depth_p90"),
+            "near_water_coverage_pct": prediction.get("near_water_coverage_pct"),
+            "mid_water_coverage_pct": prediction.get("mid_water_coverage_pct"),
+            "far_water_coverage_pct": prediction.get("far_water_coverage_pct"),
+            "far_water_only": prediction.get("far_water_only"),
+            "immediate_risk": prediction.get("immediate_risk"),
+            "mask_quality_warning": prediction.get("mask_quality_warning"),
+            "visual_cues": prediction.get("visual_cues", [])[:6],
+        }
+        pipeline_output = {
             "predicted_depth_cm": prediction.get("depth_cm"),
             "predicted_severity": prediction.get("severity_label"),
             "action": prediction.get("action_trigger"),
-            "confidence_pct": prediction.get("confidence_pct"),
-            "water_coverage_pct": prediction.get("water_coverage_pct"),
-            "reference_depth_cm": prediction.get("reference_depth_cm"),
-            "reference_count": prediction.get("reference_count"),
-            "waterline_pct": prediction.get("waterline_pct"),
-            "dense_depth_p90": prediction.get("dense_depth_p90"),
-            "visual_cues": prediction.get("visual_cues", [])[:6],
         }
         image_instruction = (
-            "Inspect the attached image and compare it with these CV numbers."
+            "Inspect the attached image first. Estimate flood depth from visible scene evidence before looking at the pipeline output."
             if has_image
             else "Use only these CV numbers; no image is attached."
         )
         return (
-            "You are a flood-depth reviewer. "
+            "You are an independent flood-depth visual reviewer. "
             + image_instruction
-            + " Decide whether the predicted flood depth/severity matches a human visual review. "
+            + " Do not automatically trust the model depth. Water coverage alone is not depth. "
+            "If there is no clear scale reference such as vehicle wheels, people legs, curb, step, wall, pole, or road edge, mark low visual confidence and prefer a depth range or human review. "
+            "For far-road water with dry/visible near road and no close reference, cap recommended depth to a shallow or advisory estimate unless obvious deep submersion is visible. "
+            "Compare your independent estimate against the pipeline only after forming the visual estimate. "
             "Return ONLY minified JSON with these exact keys: "
-            "prediction_correct, recommended_depth_cm, recommended_severity, final_depth_cm, final_severity, reason. "
-            "Use short values. prediction_correct must be true or false. Depth fields must be numbers in cm. "
-            "If unsure, keep the pipeline prediction. Evidence: "
-            + json.dumps(compact, separators=(",", ":"), default=str)
+            "prediction_correct, visual_depth_estimate_cm, visual_depth_range_cm, visual_confidence, recommended_depth_cm, recommended_severity, final_depth_cm, final_severity, review_required, reason. "
+            "prediction_correct and review_required must be true or false. Depth fields must be numbers in cm. "
+            "visual_depth_range_cm must be a short string like '10-25'. visual_confidence must be low, medium, or high. "
+            "Use severity NORMAL for 0 cm, ADVISORY for shallow water, WARNING for moderate hazardous road flooding, ALERT or CRITICAL only for deep vehicle/person submersion. "
+            "Model context: "
+            + json.dumps(model_context, separators=(",", ":"), default=str)
+            + " Pipeline output to verify: "
+            + json.dumps(pipeline_output, separators=(",", ":"), default=str)
         )
+
     def _call_google_api(self, payload: Dict[str, Any]) -> str:
         url = self.endpoint
         if "{model}" in url:
@@ -299,3 +315,5 @@ class LLMJudge:
         except json.JSONDecodeError:
             return None
         return None
+
+

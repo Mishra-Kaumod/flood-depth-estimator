@@ -372,6 +372,10 @@ class SegformerYoloDepthV2Pipeline:
             features["residual_fusion_status"] = "skipped_low_water_gate"
             return depth_cm, confidence, action
 
+        if bool(features.get("no_reference_depth_uncertain", False)):
+            features["residual_fusion_status"] = "skipped_no_reference_depth_uncertain"
+            return depth_cm, confidence, action
+
         try:
             raw = self._residual_fusion_feature_vector(depth_cm, features)
             normalized = (raw - self._residual_fusion_feature_mean) / self._residual_fusion_feature_std
@@ -911,6 +915,18 @@ class SegformerYoloDepthV2Pipeline:
             features["full_road_water_no_reference"] = True
             features["review_required"] = True
             features["review_reason"] = "Road surface is broadly covered by water, but no reference object was detected for exact depth."
+
+        no_reference_depth_uncertain = (
+            reference_count < 1
+            and not full_road_water_no_reference
+            and coverage >= 0.08
+            and max_reference_submersion < 0.15
+        )
+        if no_reference_depth_uncertain:
+            features["no_reference_depth_uncertain"] = True
+            features["review_required"] = True
+            features["review_reason"] = "Floodwater is visible, but no usable scale reference was detected; depth is capped and needs review if operational impact is high."
+
         strong_vehicle_submersion = multi_vehicle_bumper_evidence or (reference_count >= 2 and max_reference_submersion >= 0.70) or single_strong_vehicle_evidence
         useful_reference_evidence = reference_count >= 1 and max_reference_submersion >= 0.45
         weak_reference_evidence = not useful_reference_evidence
@@ -934,6 +950,13 @@ class SegformerYoloDepthV2Pipeline:
                 depth_cm = min(depth_cm, 40.0)
             else:
                 depth_cm = min(depth_cm, 25.0)
+        elif no_reference_depth_uncertain:
+            if coverage < 0.60:
+                depth_cm = min(depth_cm, 25.0)
+            elif coverage < 0.75:
+                depth_cm = min(depth_cm, 35.0)
+            else:
+                depth_cm = min(depth_cm, 45.0)
         elif not immediate_risk and near_pct < 0.05 and weak_reference_evidence:
             depth_cm = min(depth_cm, 20.0)
         elif near_pct < 0.12 and mid_pct < 0.20 and max_reference_submersion < 0.60:
@@ -945,6 +968,8 @@ class SegformerYoloDepthV2Pipeline:
         confidence = float(np.clip(0.35 + (coverage * 0.35) + (min(reference_count, 1.0) * 0.30), 0.2, 0.98))
         if bool(features.get("mask_quality_warning", False)):
             confidence = min(confidence, 0.72)
+        if bool(features.get("no_reference_depth_uncertain", False)):
+            confidence = min(confidence, 0.68)
 
         if (far_water_only and weak_reference_evidence) or (far_dominant_water and weak_reference_evidence) or self._is_waterlogged(depth_cm, coverage, max_reference_submersion):
             action = "Monitor" if depth_cm < 10.0 else "Advisory Monitoring"
@@ -1071,8 +1096,14 @@ class SegformerYoloDepthV2Pipeline:
 
         candidate_depth = features.get("efficientnet_candidate_depth_cm")
         shallow_exception = bool(features.get("shallow_water_gate_exception", False))
+        no_reference_uncertain = bool(features.get("no_reference_depth_uncertain", False))
+        candidate_value_for_trust = float(candidate_depth) if candidate_depth is not None else None
         candidate_trusted = (not low_water_gate or shallow_exception) and (
-            shallow_exception or muddy_fallback or immediate_risk or coverage >= 0.08 or (candidate_depth is not None and float(candidate_depth) < 15.0)
+            shallow_exception
+            or muddy_fallback
+            or (immediate_risk and not (no_reference_uncertain and candidate_value_for_trust is not None and candidate_value_for_trust > 35.0))
+            or (coverage >= 0.08 and not (no_reference_uncertain and candidate_value_for_trust is not None and candidate_value_for_trust > 35.0))
+            or (candidate_value_for_trust is not None and candidate_value_for_trust < 15.0)
         )
         add_signal("efficientnet_candidate", candidate_depth, candidate_trusted, "trained depth model", 0.50)
 
@@ -1081,7 +1112,7 @@ class SegformerYoloDepthV2Pipeline:
         add_signal("reference_objects", reference_depth, reference_trusted, "object/reference depth estimate", 0.15)
 
         dense_depth = float(features.get("dense_depth_p90", 0.0)) * 120.0
-        dense_trusted = (not low_water_gate and (coverage >= 0.20 or near_pct >= 0.10 or immediate_risk)) or shallow_exception
+        dense_trusted = ((not low_water_gate and (coverage >= 0.20 or near_pct >= 0.10 or immediate_risk)) or shallow_exception) and not (no_reference_uncertain and dense_depth > 35.0)
         add_signal("depth_anything_dense", dense_depth, dense_trusted, "monocular dense-depth support", 0.10)
 
         trusted = [signal for signal in signals if signal["trusted"]]

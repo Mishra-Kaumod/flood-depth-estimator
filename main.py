@@ -213,6 +213,14 @@ def summarize_event_result(result: dict[str, Any], image_name: str | None = None
     if llm_judge:
         print("\nLLM Judge:")
         print(f"  Prediction correct: {llm_judge.get('prediction_correct', llm_judge.get('plausible'))}")
+        if llm_judge.get('visual_depth_estimate_cm') is not None:
+            print(f"  Visual estimate: {llm_judge.get('visual_depth_estimate_cm')} cm")
+        if llm_judge.get('visual_depth_range_cm'):
+            print(f"  Visual range: {llm_judge.get('visual_depth_range_cm')} cm")
+        if llm_judge.get('visual_confidence'):
+            print(f"  Visual confidence: {llm_judge.get('visual_confidence')}")
+        if llm_judge.get('review_required') is not None:
+            print(f"  Review required: {llm_judge.get('review_required')}")
         print(f"  Recommended depth: {llm_judge.get('recommended_depth_cm')}")
         print(f"  Recommended severity: {llm_judge.get('recommended_severity')}")
         print(f"  Final depth: {payload.get('llm_judge_final_depth_cm', llm_judge.get('final_depth_cm', llm_judge.get('recommended_depth_cm')))}")

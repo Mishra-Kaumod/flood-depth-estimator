@@ -1,0 +1,35 @@
+temp_id,suggested_depth_cm,scenario,use_for_training,notes
+review_001,15,street water with visible road and pedestrian reference,yes,Low shallow flood; road surface still visible.
+review_002,5,far floodwater with near road mostly dry,yes,Good shallow/far-water example so model does not overpredict.
+review_003,25,person walking through flooded street,yes,Water appears below knee.
+review_004,20,partial road flood with dry road visible,yes,Important visible-road shallow flood case.
+review_005,20,road covered but likely shallow,yes,No strong deep reference; keep low/moderate.
+review_006,10,roadside/field water beside mostly visible road,yes,Good shallow side-water example.
+review_007,15,road closed with shallow standing water,yes,Road visible and barricades show shallow scene.
+review_008,25,road flooded with no strong reference object,review,Use cautiously; no clean object scale.
+review_009,15,far water with near road visible,yes,Similar to image_268 style; should teach shallow/far water.
+review_010,20,vehicle crossing shallow road water,yes,Vehicle wake but water near tire/lower wheel only.
+review_011,10,road edge and field flood,yes,Mostly shallow water beside road.
+review_012,20,people observing flood with water away from them,review,Depth uncertain because people are not standing in deepest water.
+review_013,0,road washout/destruction,skip,Not a normal flood-depth training image.
+review_014,20,road blocked by broad floodwater no close reference,review,No strong reference; use as low/moderate no-reference case.
+review_015,15,bridge road with water mostly at sides,yes,Visible road and shallow bridge/side flood.
+review_016,10,road visible with side flooding,yes,Good shallow side-water negative/high-depth correction.
+review_017,0,washed-out road damage,skip,Structural road failure; not useful for water-depth regression.
+review_018,20,water over road near warning sign,yes,Visible road and sign reference, shallow/moderate.
+review_019,25,person in park flood below knee,yes,Useful person-reference shallow/moderate example.
+review_020,5,road mostly visible with side water,yes,Very shallow/road-visible example.
+review_021,10,neighborhood side flooding,yes,Shallow water near curb/road edge.
+review_022,0,wet road or puddle only,yes,Good no-flood/trace-water negative.
+review_023,20,intersection flood with car crossing,yes,Vehicle wake but not deep submersion.
+review_024,15,shallow road flood with road still visible,yes,Good road-visible shallow case.
+review_025,25,broad road flood without close reference,review,Depth uncertain; no nearby scale reference.
+review_026,30,broad road flooding at dip,review,Moderate but uncertain without object in water.
+review_027,20,flooded road without object reference,review,No clean reference; cap to low/moderate.
+review_028,10,shallow water in distance,yes,Near road is mostly visible.
+review_029,15,vehicles near partial flood,yes,Water around roadway but not deep around vehicles.
+review_030,0,puddle on trail,skip,Not a road flood training example unless used as negative.
+review_031,20,dirt road flooded but surface still visible,yes,Good muddy shallow-water example.
+review_032,25,truck crossing water at road dip,yes,Moderate splash but likely shallow actual depth.
+review_033,45,stop sign in broad floodwater,review,Potentially deeper; sign gives reference but exact depth uncertain.
+review_034,10,roadside/far flooding near sign,yes,Shallow road-edge water, useful cap example.
