@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local/generated outputs
+reports/
+data/final_predictions.csv
+data/final_predictions.parquet
+
+# Recovery archive kept locally, not for git
+archive_cleanup/
+replace.txt
