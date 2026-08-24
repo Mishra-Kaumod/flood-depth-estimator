@@ -54,22 +54,27 @@ class WaterRegionDetector:
         """
         h, w = image.shape[:2]
         combined_mask = np.zeros((h, w), dtype=np.uint8)
+        color_mask = np.zeros((h, w), dtype=np.uint8)
         
         # Method 1: HSV-based detection
         if self.use_hsv:
             hsv_mask = self._detect_hsv(image)
-            combined_mask = np.maximum(combined_mask, hsv_mask)
+            color_mask = np.maximum(color_mask, hsv_mask)
         
         # Method 2: RGB channel detection
         if self.use_rgb:
             rgb_mask = self._detect_rgb(image)
-            combined_mask = np.maximum(combined_mask, rgb_mask)
+            color_mask = np.maximum(color_mask, rgb_mask)
+
+        combined_mask = np.maximum(combined_mask, color_mask)
         
         # Method 3: Contrast-based detection
         if self.use_contrast:
             contrast_mask = self._detect_contrast(image)
-            combined_mask = np.maximum(combined_mask, contrast_mask)
-
+            lower_scene = color_mask[int(h * 0.35):]
+            lower_color_coverage = float((lower_scene > 0).mean()) if lower_scene.size else 0.0
+            if lower_color_coverage >= 0.015:
+                combined_mask = np.maximum(combined_mask, contrast_mask)
 
         
         # Morphological cleanup
@@ -167,6 +172,24 @@ class WaterRegionDetector:
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
         return mask
     
+    def looks_like_dry_land(self, image: np.ndarray) -> bool:
+        h, w = image.shape[:2]
+        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        lower_scene = np.zeros((h, w), dtype=bool)
+        lower_scene[int(h * 0.35):, :] = True
+        brown_land = (
+            (hsv[:, :, 0] >= 8)
+            & (hsv[:, :, 0] <= 42)
+            & (hsv[:, :, 1] >= 45)
+            & (hsv[:, :, 2] >= 45)
+            & lower_scene
+        )
+        edges = cv2.Canny(gray, 80, 160) > 0
+        lower_pixels = lower_scene.sum()
+        brown_coverage = float(brown_land.sum() / lower_pixels) if lower_pixels else 0.0
+        edge_density = float(edges[lower_scene].mean()) if lower_pixels else 0.0
+        return brown_coverage >= 0.35 and edge_density >= 0.12
     def _morphological_cleanup(self, mask: np.ndarray, kernel_size: int = 5) -> np.ndarray:
         """Clean up mask using morphological operations."""
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
@@ -408,3 +431,4 @@ if __name__ == "__main__":
     # plt.show()
     
     logger.info("Water region detection ready for integration with training!")
+

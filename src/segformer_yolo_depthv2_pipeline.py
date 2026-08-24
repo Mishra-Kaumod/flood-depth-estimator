@@ -28,6 +28,11 @@ from src.settings import load_settings_dict
 from src.water_region_detector import WaterRegionDetector
 
 try:
+    from src.depth_teachers import TeacherEnsemble
+except Exception:  # pragma: no cover - optional runtime dependency
+    TeacherEnsemble = None
+
+try:
     from archive.legacy_cli.modules.object_detection import ObjectDetector
 except ImportError:  # pragma: no cover - optional runtime fallback
     ObjectDetector = None
@@ -142,17 +147,25 @@ class SegformerYoloDepthV2Pipeline:
         self._efficientnet_transform = None
         self._efficientnet_backend = "disabled"
         self._efficientnet_max_depth_cm = 100.0
+        self._no_water_model = None
+        self._no_water_transform = None
+        self._no_water_device = torch.device("cpu")
+        self._no_water_backend = "disabled"
         self._residual_fusion_model = None
         self._residual_fusion_backend = "disabled"
         self._residual_fusion_device = torch.device("cpu")
         self._residual_fusion_feature_names = RESIDUAL_FUSION_FEATURE_NAMES
         self._residual_fusion_feature_mean = None
         self._residual_fusion_feature_std = None
+        self._teacher_ensemble = None
+        self._teacher_backend = "disabled"
         self._load_yolo_if_available()
         self._load_object_detector_if_available()
         self._load_depth_anything_if_available()
         self._load_efficientnet_signal_if_available()
+        self._load_no_water_guard_if_available()
         self._load_residual_fusion_if_available()
+        self._load_depth_teachers_if_available()
 
     def _load_yolo_if_available(self) -> None:
         if not self.yolo_weights_path.exists():
@@ -275,6 +288,93 @@ class SegformerYoloDepthV2Pipeline:
             self._efficientnet_model = None
             self._efficientnet_transform = None
             self._efficientnet_backend = "unavailable"
+
+    def _build_no_water_model(self) -> nn.Module:
+        model = models.mobilenet_v3_small(weights=None)
+        in_features = model.classifier[-1].in_features
+        model.classifier[-1] = nn.Linear(in_features, 2)
+        return model
+
+    def _load_no_water_guard_if_available(self) -> None:
+        try:
+            cfg = load_settings_dict().get("inference", {}).get("no_water_guard", {})
+        except Exception as exc:
+            logger.info("No-water guard config unavailable: %s", exc)
+            return
+
+        if not bool(cfg.get("enabled", False)):
+            return
+
+        model_path = Path(str(cfg.get("model_path", "models/no_water_guard_mobilenet_v3_small.pth")))
+        if not model_path.exists():
+            logger.warning("No-water guard checkpoint missing at %s", model_path)
+            self._no_water_backend = "unavailable"
+            return
+
+        try:
+            device = torch.device("cuda" if torch.cuda.is_available() and str(cfg.get("device", "cpu")) == "cuda" else "cpu")
+            model = self._build_no_water_model().to(device)
+            checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+            state_dict = checkpoint.get("model_state_dict", checkpoint)
+            model.load_state_dict(state_dict, strict=True)
+            model.eval()
+            self._no_water_model = model
+            self._no_water_device = device
+            self._no_water_backend = str(model_path)
+            self._no_water_transform = transforms.Compose(
+                [
+                    transforms.Resize((224, 224)),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ]
+            )
+            logger.info("Loaded no-water guard from %s", model_path)
+        except Exception as exc:
+            logger.warning("No-water guard unavailable: %s", exc)
+            self._no_water_model = None
+            self._no_water_transform = None
+            self._no_water_backend = "unavailable"
+    def _load_depth_teachers_if_available(self) -> None:
+        try:
+            cfg = load_settings_dict().get("inference", {}).get("depth_teachers", {})
+        except Exception as exc:
+            logger.info("Depth teacher config unavailable: %s", exc)
+            return
+
+        if not bool(cfg.get("enabled", False)):
+            return
+        if TeacherEnsemble is None:
+            self._teacher_backend = "unavailable: import failed"
+            return
+
+        try:
+            device = str(cfg.get("device", load_settings_dict().get("inference", {}).get("device", "cpu")))
+            self._teacher_ensemble = TeacherEnsemble(
+                device=device,
+                lazy_load=bool(cfg.get("lazy_load", True)),
+                allow_download=bool(cfg.get("allow_download", True)),
+                use_fp16=bool(cfg.get("use_fp16", False)),
+            )
+            self._teacher_backend = "DepthAnythingV2+DepthPro+Metric3D"
+            logger.info("Depth teacher ensemble enabled")
+        except Exception as exc:
+            logger.warning("Depth teacher ensemble unavailable: %s", exc)
+            self._teacher_ensemble = None
+            self._teacher_backend = f"unavailable: {exc}"
+
+    def _depth_teacher_features(self, image_rgb: np.ndarray, water_mask: np.ndarray) -> Dict[str, Any]:
+        if self._teacher_ensemble is None:
+            return {}
+        try:
+            return self._teacher_ensemble.predict(image_rgb, water_mask=(water_mask > 0))
+        except Exception as exc:
+            logger.warning("Depth teacher feature extraction failed: %s", exc)
+            return {
+                "water_region_valid": False,
+                "teachers": {},
+                "ensemble": {},
+                "meta": {"available_teacher_count": 0, "total_teachers": 3, "error": str(exc)},
+            }
 
     def _load_residual_fusion_if_available(self) -> None:
         try:
@@ -433,6 +533,82 @@ class SegformerYoloDepthV2Pipeline:
         tensor = self._efficientnet_transform(image).unsqueeze(0).to(self._efficientnet_device)
         with torch.no_grad():
             return round(float(self._efficientnet_model(tensor).squeeze().item()) * self._efficientnet_max_depth_cm, 2)
+    def _no_water_guard_signal(self, image_rgb: np.ndarray) -> Optional[float]:
+        if self._no_water_model is None or self._no_water_transform is None:
+            return None
+        image = Image.fromarray(image_rgb.astype(np.uint8), mode="RGB")
+        tensor = self._no_water_transform(image).unsqueeze(0).to(self._no_water_device)
+        try:
+            with torch.no_grad():
+                probabilities = torch.softmax(self._no_water_model(tensor), dim=1)
+            return float(np.clip(probabilities[0, 0].item(), 0.0, 1.0))
+        except Exception as exc:
+            logger.warning("No-water guard inference failed: %s", exc)
+            return None
+
+    def _apply_no_water_guard(
+        self,
+        depth_cm: float,
+        confidence: float,
+        action: str,
+        features: Dict[str, Any],
+    ) -> Tuple[float, float, str]:
+        probability = features.get("no_water_probability")
+        if probability is None:
+            return depth_cm, confidence, action
+
+        try:
+            cfg = load_settings_dict().get("inference", {}).get("no_water_guard", {})
+        except Exception:
+            cfg = {}
+
+        threshold = float(cfg.get("no_water_threshold", 0.92))
+        max_coverage_pct = float(cfg.get("max_water_coverage_pct", 3.0))
+        coverage_pct = float(features.get("water_coverage_pct", 0.0))
+        corroborated = (
+            float(probability) >= threshold
+            and coverage_pct <= max_coverage_pct
+            and not bool(features.get("immediate_risk", False))
+            and not bool(features.get("muddy_water_fallback_applied", False))
+            and float(features.get("max_reference_submersion", 0.0)) < 0.10
+        )
+
+        features["no_water_guard_status"] = "applied" if corroborated else "uncertain"
+        features["no_water_guard_corroborated"] = corroborated
+        if not corroborated:
+            return depth_cm, confidence, action
+
+        features["no_water_guard_applied"] = True
+        features["water_present_overridden_by_no_water_guard"] = True
+        features["final_output_reason"] = (
+            f"No-water guard detected a dry scene with probability {float(probability):.2f}; "
+            "water/depth signals were suppressed."
+        )
+        features["final_aggregation_source"] = "no_water_guard"
+        return 0.0, round(float(max(confidence, float(probability))), 4), self._action_for_final_depth(0.0, features, action)
+
+    def _apply_dry_land_guard(
+        self,
+        depth_cm: float,
+        confidence: float,
+        action: str,
+        image_rgb: np.ndarray,
+        features: Dict[str, Any],
+    ) -> Tuple[float, float, str]:
+        if not self.water_detector.looks_like_dry_land(image_rgb):
+            return depth_cm, confidence, action
+        if (
+            float(features.get("near_water_coverage_pct", 0.0)) > 1.0
+            or bool(features.get("immediate_risk", False))
+            or bool(features.get("muddy_water_fallback_applied", False))
+            or int(float(features.get("reference_count", 0.0))) > 0
+        ):
+            return depth_cm, confidence, action
+
+        features["dry_land_guard_applied"] = True
+        features["final_aggregation_source"] = "dry_land_guard"
+        features["final_output_reason"] = "Dry-land visual evidence with no near-field water overruled flood depth signals."
+        return 0.0, round(float(max(confidence, 0.90)), 4), self._action_for_final_depth(0.0, features, action)
     def _segformer_water_mask(self, image_rgb: np.ndarray) -> Tuple[np.ndarray, float]:
         # SegFormer-aligned stage boundary. Current backend is a lightweight detector.
         water_mask, water_coverage = self.water_detector.detect(image_rgb)
@@ -1206,6 +1382,16 @@ class SegformerYoloDepthV2Pipeline:
             }
         )
 
+        no_water_probability = self._no_water_guard_signal(image_rgb)
+        trace.append(
+            {
+                "stage": "No-Water Guard",
+                "backend": self._no_water_backend,
+                "status": "disabled" if self._no_water_model is None else "ok",
+                "summary": "checkpoint unavailable" if no_water_probability is None else f"no_water_probability={no_water_probability:.3f}",
+            }
+        )
+
         efficientnet_depth_cm = self._efficientnet_depth_signal(image_rgb)
         if efficientnet_depth_cm is not None:
             trace.append(
@@ -1217,7 +1403,13 @@ class SegformerYoloDepthV2Pipeline:
                 }
             )
 
-        if efficientnet_depth_cm is not None and efficientnet_depth_cm >= 35.0 and water_coverage_pct < 5.0:
+        if (
+            efficientnet_depth_cm is not None
+            and efficientnet_depth_cm >= 35.0
+            and water_coverage_pct < 5.0
+            and not self.water_detector.looks_like_dry_land(image_rgb)
+            and not (no_water_probability is not None and no_water_probability >= 0.92)
+        ):
             muddy_mask = self.water_detector._detect_muddy_floodwater(image_rgb)
             muddy_coverage_pct = float((muddy_mask > 0).mean() * 100.0)
             if muddy_coverage_pct >= 15.0:
@@ -1252,6 +1444,23 @@ class SegformerYoloDepthV2Pipeline:
             }
         )
 
+        teacher_features = self._depth_teacher_features(image_rgb, water_mask)
+        teacher_ensemble_metrics = teacher_features.get("ensemble", {}) if teacher_features else {}
+        teacher_meta = teacher_features.get("meta", {}) if teacher_features else {}
+        if self._teacher_ensemble is not None:
+            trace.append(
+                {
+                    "stage": "Depth Teachers",
+                    "backend": self._teacher_backend,
+                    "status": "ok" if int(teacher_meta.get("available_teacher_count", 0) or 0) > 0 else "degraded",
+                    "summary": (
+                        f"available={teacher_meta.get('available_teacher_count', 0)}/"
+                        f"{teacher_meta.get('total_teachers', 3)} "
+                        f"agreement={float(teacher_ensemble_metrics.get('teacher_agreement', 0.0) or 0.0):.3f}"
+                    ),
+                }
+            )
+
         reference_estimate = self.reference_estimator.estimate(image_rgb)
         features = self._fusion_engine(
             water_mask=water_mask,
@@ -1263,6 +1472,31 @@ class SegformerYoloDepthV2Pipeline:
         if efficientnet_depth_cm is not None:
             features["efficientnet_candidate_depth_cm"] = efficientnet_depth_cm
             features["fusion_candidate_delta_cm"] = round(abs(float(features.get("region_depth_cm", 0.0)) - efficientnet_depth_cm), 2)
+        features["no_water_probability"] = no_water_probability
+        features["no_water_guard_backend"] = self._no_water_backend
+        if teacher_features:
+            features["depth_teacher_available_count"] = int(teacher_meta.get("available_teacher_count", 0) or 0)
+            features["depth_teacher_total_count"] = int(teacher_meta.get("total_teachers", 3) or 3)
+            for key in (
+                "teacher_mean",
+                "teacher_median",
+                "teacher_min",
+                "teacher_max",
+                "teacher_spread",
+                "teacher_std",
+                "teacher_agreement",
+            ):
+                value = teacher_ensemble_metrics.get(key)
+                if isinstance(value, (int, float)) and np.isfinite(float(value)):
+                    features[key] = round(float(value), 6)
+            for teacher_name, teacher_stats in teacher_features.get("teachers", {}).items():
+                slug = str(teacher_name).lower().replace(" ", "_")
+                features[f"{slug}_available"] = 1.0 if teacher_stats.get("available") else 0.0
+                if teacher_stats.get("available"):
+                    for metric in ("mean", "p50", "p90", "water_mean", "water_p50", "water_p90", "spatial_gradient", "depth_variance"):
+                        value = teacher_stats.get(metric)
+                        if isinstance(value, (int, float)) and np.isfinite(float(value)):
+                            features[f"{slug}_{metric}"] = round(float(value), 6)
         trace.append(
             {
                 "stage": "Fusion Engine",
@@ -1283,6 +1517,26 @@ class SegformerYoloDepthV2Pipeline:
         depth_cm, confidence, action = self._apply_efficientnet_correction(depth_cm, confidence, action, features)
         depth_cm, confidence, action = self._record_model_agreement(depth_cm, confidence, action, features)
         depth_cm, confidence, action = self._apply_residual_fusion_model(depth_cm, confidence, action, features)
+        depth_cm, confidence, action = self._apply_dry_land_guard(depth_cm, confidence, action, image_rgb, features)
+        depth_cm, confidence, action = self._apply_no_water_guard(depth_cm, confidence, action, features)
+        if features.get("dry_land_guard_applied"):
+            trace.append(
+                {
+                    "stage": "Dry-Land Decision",
+                    "backend": "dry-land-heuristic",
+                    "status": "applied",
+                    "summary": "dry scene evidence forced depth=0.00 cm",
+                }
+            )
+        elif features.get("no_water_guard_applied"):
+            trace.append(
+                {
+                    "stage": "No-Water Decision",
+                    "backend": self._no_water_backend,
+                    "status": "applied",
+                    "summary": "dry-scene classifier forced depth=0.00 cm",
+                }
+            )
         if features.get("residual_fusion_status") in {"applied", "skipped_low_water_gate"}:
             trace.append(
                 {
@@ -1331,6 +1585,7 @@ class SegformerYoloDepthV2Pipeline:
             "action_trigger": action,
             "structured_features": features,
             "pipeline_trace": trace,
+            "depth_teachers": teacher_features,
         }
 
 
@@ -1342,3 +1597,8 @@ def get_segformer_yolo_depthv2_pipeline() -> SegformerYoloDepthV2Pipeline:
     if _PIPELINE is None:
         _PIPELINE = SegformerYoloDepthV2Pipeline()
     return _PIPELINE
+
+
+
+
+

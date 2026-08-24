@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from src.api_service import FloodApiService
+from src.settings import load_settings_dict
 
 
 def get_s3_handler(bucket_name: str | None = None):
@@ -44,6 +45,21 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def resolve_video_skip_frames(cli_value: int | None) -> int:
+    if cli_value is not None:
+        return max(1, int(cli_value))
+
+    try:
+        cfg = load_settings_dict()
+        configured = cfg.get("video", {}).get("skip_frames")
+        if configured is not None:
+            return max(1, int(configured))
+    except Exception:
+        pass
+
+    return 30
 
 
 def _write_final_table(path: Path, frame: pd.DataFrame, expected_columns: list[str]) -> None:
@@ -410,7 +426,7 @@ def main() -> None:
     parser.add_argument("--longitude", type=float, default=0.0, help="Camera longitude")
     parser.add_argument("--location-name", help="Camera location name")
     parser.add_argument("--output", help="Output path for CSV or annotated image")
-    parser.add_argument("--skip-frames", type=int, default=1, help="Frame skip rate for video")
+    parser.add_argument("--skip-frames", type=int, default=None, help="Frame skip rate for video; overrides video.skip_frames in config")
     parser.add_argument("--app", action="store_true", help="Run the Flask web app")
     parser.add_argument("--host", default="0.0.0.0", help="Host for the Flask app")
     parser.add_argument("--port", type=int, default=5000, help="Port for the Flask app")
@@ -450,7 +466,7 @@ def main() -> None:
         process_video_cli(
             video_path=args.path,
             output_csv=args.output or "video_analysis.csv",
-            skip_frames=max(1, args.skip_frames),
+            skip_frames=resolve_video_skip_frames(args.skip_frames),
             storage_mode=storage_mode,
             camera_id=args.camera_id,
             latitude=args.latitude,

@@ -1,0 +1,114 @@
+image_path,expected_flood,expected_depth_cm,scene_type,label_status,notes
+dry_150525_r26543.webp,0,0.00,barren,reviewed_from_existing_data,dry/no-water guard evaluation image
+dry_bike_road.jpg,0,0.00,barren,reviewed_from_existing_data,dry/no-water guard evaluation image
+dry_desert-country.webp,0,0.00,barren,reviewed_from_existing_data,dry/no-water guard evaluation image
+dry_draught.jpg,0,0.00,barren,reviewed_from_existing_data,dry/no-water guard evaluation image
+dry_draught_1.jpg,0,0.00,barren,reviewed_from_existing_data,dry/no-water guard evaluation image
+dry_Empty_Road.jpg,0,0.00,barren,reviewed_from_existing_data,dry/no-water guard evaluation image
+dry_human_dry_field.jpg,0,0.00,barren,reviewed_from_existing_data,dry/no-water guard evaluation image
+dry_human_dry_sand.jpg,0,0.00,barren,reviewed_from_existing_data,dry/no-water guard evaluation image
+dry_landscape-view-lonely-dead-tree-260nw-1705648108.webp,0,0.00,barren,reviewed_from_existing_data,dry/no-water guard evaluation image
+dry_lonely-trees-beside-dirt-road.webp,0,0.00,barren,reviewed_from_existing_data,dry/no-water guard evaluation image
+dry_road_gir.jpg,0,0.00,barren,reviewed_from_existing_data,dry/no-water guard evaluation image
+dry_some-desert-places.webp,0,0.00,barren,reviewed_from_existing_data,dry/no-water guard evaluation image
+dry_sunset_road_land.webp,0,0.00,barren,reviewed_from_existing_data,dry/no-water guard evaluation image
+shallow_0_20_2cm.jpg,1,2.00,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_5.0cm.jpg,1,5.00,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_image_16.jpg,1,5.00,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_7.5cm.jpg,1,7.50,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_10.0cm_1.jpg,1,10.00,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_13cm.jpg,1,13.00,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.0cm.jpg,1,15.00,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.0cm_1.jpg,1,15.00,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15cm_2.jpg,1,15.00,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.01cm.jpg,1,15.01,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.02cm.jpg,1,15.02,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.03cm_1.jpg,1,15.03,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.05cm.jpg,1,15.05,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.06cm.png,1,15.06,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.08cm.jpg,1,15.08,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.09cm_1.jpg,1,15.09,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.1cm.png,1,15.10,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.11cm.png,1,15.11,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.12cm_1.jpg,1,15.12,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.14cm.jpg,1,15.14,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.15cm.png,1,15.15,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.18cm.jpg,1,15.18,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.2cm.jpg,1,15.20,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_15.23cm.jpg,1,15.23,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+shallow_0_20_18cm.png,1,18.00,shallow,reviewed_from_existing_data,shallow_0_20 labeled depth evaluation image
+medium_20_50_20.00cm.jpg,1,20.00,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_image_80.jpg,1,20.00,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_20.03cm_1.jpg,1,20.03,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_20.07cm.jpg,1,20.07,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_20.1cm_1.jpg,1,20.10,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_20.15cm_1.jpg,1,20.15,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_20.20cm.jpg,1,20.20,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_20.27cm.jpg,1,20.27,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_22.50cm.png,1,22.50,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_22.56cm.jpg,1,22.56,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_25cm.jpg,1,25.00,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_25.02cm.png,1,25.02,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_27.50cm.png,1,27.50,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_27.56cm.jpg,1,27.56,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_27.65cm.jpg,1,27.65,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_30.02cm.jpg,1,30.02,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_32.51cm.jpg,1,32.51,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_35.00cm_1.jpg,1,35.00,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_35.01cm.png,1,35.01,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_37.5cm.jpg,1,37.50,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_37.57cm.jpg,1,37.57,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_42.50cm.jpg,1,42.50,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_42.53cm_1.jpg,1,42.53,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_45.04cm.jpg,1,45.04,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+medium_20_50_48cm.png,1,48.00,medium,reviewed_from_existing_data,medium_20_50 labeled depth evaluation image
+high_50_80_50.00cm.jpg,1,50.00,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_50.0cm.png,1,50.00,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_50cm_1.png,1,50.00,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_50.02.jpg,1,50.02,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_50.04cm.jpg,1,50.04,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_51cm.jpg,1,51.00,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_52.01cm.png,1,52.01,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_52.5cm.jpg,1,52.50,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_52.6cm.png,1,52.60,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_55.00cm.jpg,1,55.00,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_55.0cm.png,1,55.00,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_55cm_2.jpg,1,55.00,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_57.5cm.jpg,1,57.50,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_60.00cm.png,1,60.00,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_60cm.jpg,1,60.00,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_60.01cm.png,1,60.01,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_62.5cm.jpg,1,62.50,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_65cm.jpg,1,65.00,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_65.01cm.jpg,1,65.01,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_70.0cm.jpg,1,70.00,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_70cm_1.jpg,1,70.00,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_70.01cm.png,1,70.01,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_72cm.png,1,72.00,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_75cm.jpg,1,75.00,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+high_50_80_77.5cm_1.jpg,1,77.50,high,reviewed_from_existing_data,high_50_80 labeled depth evaluation image
+deep_80_plus_80.0cm.png,1,80.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_80cm_1.png,1,80.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_82cm.png,1,82.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_85.0cm.jpg,1,85.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_85cm.jpg,1,85.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_87.5cm.png,1,87.50,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_87.52cm.png,1,87.52,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_90.0cm.png,1,90.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_90cm.png,1,90.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_90.01cm.jpg,1,90.01,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_90.02cm.jpg,1,90.02,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_90.04cm.jpg,1,90.04,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_90.07cm.jpg,1,90.07,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_95cm.jpg,1,95.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_97.5cm.png,1,97.50,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_100.0cm.png,1,100.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_102.5cm.png,1,102.50,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_107cm.png,1,107.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_115cm.png,1,115.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_120.0cm.jpg,1,120.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_120cm.jpg,1,120.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_130cm.png,1,130.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_140cm_1.png,1,140.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_150cm.png,1,150.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image
+deep_80_plus_160cm.jpg,1,160.00,deep,reviewed_from_existing_data,deep_80_plus labeled depth evaluation image

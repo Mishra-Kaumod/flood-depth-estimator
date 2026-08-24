@@ -107,12 +107,34 @@ inference:
     backend: "depth_anything_v2"  # depth_anything_v2 | proxy
     model_name: "depth-anything/Depth-Anything-V2-Small-hf"
     device: -1  # -1 CPU, 0 first CUDA GPU
+  depth_teachers:
+    enabled: false
+    device: "cpu"
+    lazy_load: true
+    allow_download: true
+    use_fp16: false
+    depth_anything_v2:
+      model: "depth-anything/Depth-Anything-V2-Small-hf"
+      revision: "main"
+    depth_pro:
+      model: "apple/DepthPro"
+      checkpoint: ""
+    metric3d:
+      model: "YvanYin/Metric3D"
+      variant: "metric3d_vit_small"
+      checkpoint: ""
   efficientnet_signal:
     enabled: true
     model_path: "models/candidate/best_flood_model_water_aware_hardneg.pth"
     max_depth_cm: 180.0
     device: "cpu"
     apply_corrections: true
+  no_water_guard:
+    enabled: true
+    model_path: "models/no_water_guard_mobilenet_v3_small.pth"
+    device: "cpu"
+    no_water_threshold: 0.92
+    max_water_coverage_pct: 3.0
   residual_fusion_signal:
     enabled: true
     model_path: "models/candidate/residual_fusion_depth_model_retrain_old_eff_20260816_231536.pt"
@@ -157,6 +179,14 @@ inference:
     apply_corrections: true
   health_check_interval: 30  # seconds
   ready_timeout: 60  # seconds on startup
+
+# ---------------------------------------------------------------------
+# VIDEO PROCESSING CONFIGURATION
+# ---------------------------------------------------------------------
+video:
+  # Process one frame out of every N frames when no CLI value is provided.
+  # For a 30 FPS video, 30 means about 1 frame per second.
+  skip_frames: 30
 
 # ---------------------------------------------------------------------
 # AWS DEPLOYMENT CONFIGURATION
@@ -290,3 +320,5 @@ secrets: {}
 # Local persistent storage for API-triggered camera workflows.
 storage:
   sqlite_path: "data/flood_app.sqlite3"
+
+

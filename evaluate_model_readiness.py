@@ -308,7 +308,21 @@ def build_summary(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         abs(float(r["eval_depth_cm"]) - float(r["expected_depth_cm"]))
         for r in depth_labeled
     ]
+    depth_squared_errors = [
+        (float(r["eval_depth_cm"]) - float(r["expected_depth_cm"])) ** 2
+        for r in depth_labeled
+    ]
     depth_mae = (sum(depth_abs_errors) / len(depth_abs_errors)) if depth_abs_errors else None
+    depth_rmse = math.sqrt(sum(depth_squared_errors) / len(depth_squared_errors)) if depth_squared_errors else None
+    depth_r2 = None
+    if depth_labeled:
+        expected_values = [float(r["expected_depth_cm"]) for r in depth_labeled]
+        predicted_values = [float(r["eval_depth_cm"]) for r in depth_labeled]
+        expected_mean = sum(expected_values) / len(expected_values)
+        total_sum_squares = sum((value - expected_mean) ** 2 for value in expected_values)
+        residual_sum_squares = sum((actual - predicted) ** 2 for actual, predicted in zip(expected_values, predicted_values))
+        if total_sum_squares > 0:
+            depth_r2 = 1.0 - (residual_sum_squares / total_sum_squares)
 
     depth_band_samples: Dict[str, List[float]] = {band: [] for band, _, _ in DEPTH_BANDS}
     for row in depth_labeled:
@@ -344,6 +358,8 @@ def build_summary(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "labeled_depth_subset_size": len(depth_labeled),
         "barren_subset_size": len(barren_rows),
         "depth_mae_cm": round(depth_mae, 3) if depth_mae is not None else None,
+        "depth_rmse_cm": round(depth_rmse, 3) if depth_rmse is not None else None,
+        "depth_r2": round(depth_r2, 4) if depth_r2 is not None else None,
         "depth_mae_by_band": depth_mae_by_band,
         "classification": {
             "tp": tp,
@@ -381,6 +397,13 @@ def evaluate_quality_gates(summary: Dict[str, Any], args: argparse.Namespace) ->
         failed.append("depth_mae_cm is missing")
     elif depth_mae > args.max_depth_mae:
         failed.append(f"depth_mae_cm {depth_mae} > {args.max_depth_mae}")
+
+    if args.min_depth_r2 is not None:
+        depth_r2 = summary.get("depth_r2")
+        if depth_r2 is None:
+            failed.append("depth_r2 is missing")
+        elif depth_r2 < args.min_depth_r2:
+            failed.append(f"depth_r2 {depth_r2} < {args.min_depth_r2}")
 
     band_thresholds = {
         "0_20": args.max_mae_0_20,
@@ -429,6 +452,7 @@ def evaluate_quality_gates(summary: Dict[str, Any], args: argparse.Namespace) ->
             "min_barren": args.min_barren,
             "min_f1": args.min_f1,
             "max_depth_mae": args.max_depth_mae,
+            "min_depth_r2": args.min_depth_r2,
             "min_depth_labels_per_band": args.min_depth_labels_per_band,
             "max_mae_0_20": args.max_mae_0_20,
             "max_mae_20_50": args.max_mae_20_50,
@@ -452,6 +476,7 @@ def main() -> None:
     parser.add_argument("--min-barren", type=int, default=25, help="Minimum barren-scene samples")
     parser.add_argument("--min-f1", type=float, default=0.90, help="Minimum classification F1")
     parser.add_argument("--max-depth-mae", type=float, default=15.0, help="Maximum depth MAE (cm)")
+    parser.add_argument("--min-depth-r2", type=float, default=None, help="Optional minimum R2 score for depth regression")
     parser.add_argument("--min-depth-labels-per-band", type=int, default=3, help="Minimum labeled depth samples required in each depth band")
     parser.add_argument("--max-mae-0-20", type=float, default=8.0, help="Maximum MAE for 0-20cm depth band")
     parser.add_argument("--max-mae-20-50", type=float, default=12.0, help="Maximum MAE for 20-50cm depth band")
