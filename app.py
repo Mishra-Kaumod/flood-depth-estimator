@@ -29,10 +29,10 @@ from src.settings import load_settings_dict
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_PATH = Path(__file__).parent / "models" / "best_flood_model_water_aware.pth"
+DEFAULT_MODEL_PATH = Path(__file__).parent / "models" / "FloodDepth-MaskConditionedFusion.pth"
 ENV_MODEL_PATH = os.environ.get("MODEL_PATH")
 EXTERNAL_MODEL_PATH = Path(
-    r"C:\Users\pooja\copilot-worktrees\flood-depth-estimator\kaumod-automatic-barnacle\models\Flood_Depth_R2_Advanced_Fusion.ipynb"
+    r"C:\Users\pooja\copilot-worktrees\flood-depth-estimator\kaumod-automatic-barnacle\models\FloodDepth-MaskConditionedFusion.pth"
 )
 EXTERNAL_MODEL_IS_TORCH_WEIGHTS = EXTERNAL_MODEL_PATH.suffix.lower() == ".pth"
 MODEL_PATH = Path(ENV_MODEL_PATH) if ENV_MODEL_PATH else (
@@ -1225,3 +1225,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     logger.info(f"Starting Flood Depth Estimator on port {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
+
