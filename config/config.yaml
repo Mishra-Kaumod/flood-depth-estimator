@@ -131,7 +131,7 @@ inference:
     apply_corrections: true
   no_water_guard:
     enabled: true
-    model_path: "models/no_water_guard_mobilenet_v3_small.pth"
+    model_path: "models/candidate/no_water_guard_teammate_augmented.pth"
     device: "cpu"
     no_water_threshold: 0.92
     max_water_coverage_pct: 3.0

@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import models, transforms
 
 CLASS_NAMES = ["no_water", "water"]
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".avif"}
 
 
 def build_model(pretrained: bool) -> nn.Module:
@@ -132,7 +132,12 @@ def main(args: argparse.Namespace) -> None:
     val_loader = DataLoader(Subset(val_source, val_indices), batch_size=args.batch_size, shuffle=False, num_workers=0)
 
     model = build_model(args.pretrained).to(device)
-    criterion = nn.CrossEntropyLoss()
+    class_counts = np.bincount(labels, minlength=len(CLASS_NAMES)).astype(np.float32)
+    class_weights = class_counts.sum() / np.maximum(class_counts, 1.0)
+    class_weights /= class_weights.mean()
+    criterion = nn.CrossEntropyLoss(
+        weight=torch.tensor(class_weights, dtype=torch.float32, device=device)
+    )
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
     best_accuracy = -1.0
     best_checkpoint: dict[str, object] | None = None
