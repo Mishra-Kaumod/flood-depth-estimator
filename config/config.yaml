@@ -133,8 +133,9 @@ inference:
     enabled: true
     model_path: "models/candidate/no_water_guard_teammate_augmented.pth"
     device: "cpu"
-    no_water_threshold: 0.92
-    max_water_coverage_pct: 3.0
+    no_water_threshold: 0.99
+    max_water_coverage_pct: 5.0
+    max_near_water_coverage_pct: 5.0
   residual_fusion_signal:
     enabled: true
     model_path: "models/candidate/residual_fusion_depth_model_retrain_old_eff_20260816_231536.pt"

@@ -564,13 +564,15 @@ class SegformerYoloDepthV2Pipeline:
 
         threshold = float(cfg.get("no_water_threshold", 0.92))
         max_coverage_pct = float(cfg.get("max_water_coverage_pct", 3.0))
+        max_near_coverage_pct = float(cfg.get("max_near_water_coverage_pct", max_coverage_pct))
         coverage_pct = float(features.get("water_coverage_pct", 0.0))
+        near_coverage_pct = float(features.get("near_water_coverage_pct", 0.0))
         corroborated = (
             float(probability) >= threshold
             and coverage_pct <= max_coverage_pct
+            and near_coverage_pct <= max_near_coverage_pct
             and not bool(features.get("immediate_risk", False))
             and not bool(features.get("muddy_water_fallback_applied", False))
-            and float(features.get("max_reference_submersion", 0.0)) < 0.10
         )
 
         features["no_water_guard_status"] = "applied" if corroborated else "uncertain"
