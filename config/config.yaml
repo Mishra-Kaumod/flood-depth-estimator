@@ -1,4 +1,4 @@
-# BENGALURU FLOOD DEPTH ESTIMATOR - PRODUCTION CONFIG
+﻿# BENGALURU FLOOD DEPTH ESTIMATOR - PRODUCTION CONFIG
 # Centralized configuration for training, inference, and deployment
 # Designed for AWS EC2, S3, ECR/ECS, and Lambda environments
 
@@ -129,13 +129,36 @@ inference:
     max_depth_cm: 180.0
     device: "cpu"
     apply_corrections: true
+  mask_conditioned_fusion_signal:
+    enabled: true
+    model_path: "models/FloodDepth-MaskConditionedFusion.pth"
+    device: "cpu"
+    use_for_final_decision: false
+    high_flood_correction_enabled: true
+    high_flood_min_mask_depth_cm: 75.0
+    high_flood_max_current_depth_cm: 70.0
+    high_flood_min_gap_cm: 25.0
+    high_flood_min_water_coverage_pct: 45.0
+    high_flood_min_near_or_mid_pct: 35.0
+    high_flood_max_no_water_probability: 0.98
+    high_flood_max_wet_road_probability: 0.98
+    high_flood_min_weak_mask_coverage_pct: 12.0
+    high_flood_min_weak_mask_near_pct: 12.0
+    high_flood_min_efficientnet_depth_cm: 60.0
+    high_flood_min_dense_depth_cm: 70.0
   no_water_guard:
     enabled: true
     model_path: "models/candidate/no_water_guard_teammate_augmented.pth"
+    wet_road_guard_model_path: "models/candidate/wet_road_no_water_guard_augmented.pth"
     device: "cpu"
     no_water_threshold: 0.99
     max_water_coverage_pct: 5.0
     max_near_water_coverage_pct: 5.0
+    max_no_water_reference_submersion: 0.12
+    wet_road_guard_enabled: true
+    wet_road_guard_threshold: 0.995
+    wet_road_guard_max_water_coverage_pct: 12.0
+    wet_road_guard_max_near_water_coverage_pct: 8.0
   residual_fusion_signal:
     enabled: true
     model_path: "models/candidate/residual_fusion_depth_model_retrain_old_eff_20260816_231536.pt"
@@ -146,6 +169,14 @@ inference:
     allow_large_candidate_aligned_adjustment: true
     large_adjustment_candidate_alignment_cm: 15.0
     review_delta_cm: 20.0
+  strong_deep_flood_correction:
+    enabled: false
+    min_water_coverage_pct: 60.0
+    min_near_water_coverage_pct: 45.0
+    min_reference_count: 1
+    min_reference_submersion: 0.80
+    min_reference_depth_cm: 85.0
+    min_region_depth_cm: 65.0
   use_mc_dropout_confidence: true
   mc_passes: 8
   
@@ -288,10 +319,10 @@ aggregator:
 
   # Depth thresholds for next_action_recommendation (metres)
   thresholds:
-    advisory_m:  0.10        # > 10 cm  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ADVISORY
-    warning_m:   0.30        # > 30 cm  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ WARNING_PUMP_ACTIVATION
-    alert_m:     0.60        # > 60 cm  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ALERT_TRAFFIC_MANAGEMENT
-    critical_m:  1.00        # > 100 cm ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ DEPLOY_EMERGENCY_DIVERSION
+    advisory_m:  0.10        # > 10 cm  ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ ADVISORY
+    warning_m:   0.30        # > 30 cm  ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ WARNING_PUMP_ACTIVATION
+    alert_m:     0.60        # > 60 cm  ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ ALERT_TRAFFIC_MANAGEMENT
+    critical_m:  1.00        # > 100 cm ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ DEPLOY_EMERGENCY_DIVERSION
 
   # Depth thresholds for geospatial intensity bands (centimetres)
   # Used by src/geospatial_classifier.py
@@ -321,5 +352,8 @@ secrets: {}
 # Local persistent storage for API-triggered camera workflows.
 storage:
   sqlite_path: "data/flood_app.sqlite3"
+
+
+
 
 

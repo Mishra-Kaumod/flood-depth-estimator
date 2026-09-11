@@ -1,4 +1,4 @@
-"""
+﻿"""
 Stage-aligned flood inference pipeline:
 RGB -> SegFormer water mask -> YOLOv8 reference objects ->
 Depth Anything V2 dense depth proxy -> Fusion engine ->
@@ -91,6 +91,29 @@ class ResidualFusionDepthModel(nn.Module):
         residual_cm = self.net(x) * self.max_residual_cm
         return torch.clamp(base_depth_cm + residual_cm, min=0.0, max=180.0)
 
+class MaskConditionedFusionDepthModel(nn.Module):
+    """Checkpoint-compatible loader for FloodDepth-MaskConditionedFusion.pth."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        try:
+            import timm
+        except ImportError as exc:  # pragma: no cover - optional model dependency
+            raise RuntimeError("timm is required for MaskConditionedFusionDepthModel") from exc
+        self.backbone = timm.create_model("efficientnetv2_rw_s", pretrained=False, num_classes=0, global_pool="avg")
+        self.vis_proj = nn.Sequential(nn.Linear(1792, 256), nn.ReLU(), nn.LayerNorm(256))
+        self.obj_mlp = nn.Sequential(nn.Linear(24, 64), nn.ReLU(), nn.LayerNorm(64), nn.Linear(64, 128), nn.ReLU(), nn.LayerNorm(128))
+        self.geo_mlp = nn.Sequential(nn.Linear(3, 32), nn.ReLU(), nn.LayerNorm(32), nn.Linear(32, 64), nn.ReLU(), nn.LayerNorm(64))
+        self.fusion = nn.Sequential(nn.Linear(448, 384), nn.ReLU(), nn.LayerNorm(384), nn.Dropout(0.10), nn.Linear(384, 256), nn.ReLU(), nn.LayerNorm(256))
+        self.depth_head = nn.Linear(256, 1)
+        self.ordinal_head = nn.Linear(256, 5)
+
+    def forward(self, image: torch.Tensor, object_features: torch.Tensor, geometry_features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        visual = self.vis_proj(self.backbone(image))
+        object_embedding = self.obj_mlp(object_features)
+        geometry_embedding = self.geo_mlp(geometry_features)
+        fused = self.fusion(torch.cat([visual, object_embedding, geometry_embedding], dim=1))
+        return self.depth_head(fused), self.ordinal_head(fused)
 
 @dataclass
 class ReferenceObject:
@@ -119,7 +142,7 @@ def _depth_to_severity(depth_cm: float, features: Dict[str, float]) -> Dict[str,
     if depth_cm < 50:
         return {"level": "MEDIUM", "label": "Moderate flooding", "color": "#ea580c", "stage": 3}
     if depth_cm < 80:
-        return {"level": "HIGH", "label": "High flood ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â avoid travel", "color": "#dc2626", "stage": 4}
+        return {"level": "HIGH", "label": "High flood ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¾ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â avoid travel", "color": "#dc2626", "stage": 4}
     return {"level": "CRITICAL", "label": "Severe / dangerous flooding", "color": "#7f1d1d", "stage": 5}
 
 
@@ -147,10 +170,18 @@ class SegformerYoloDepthV2Pipeline:
         self._efficientnet_transform = None
         self._efficientnet_backend = "disabled"
         self._efficientnet_max_depth_cm = 100.0
+        self._mask_conditioned_fusion_model = None
+        self._mask_conditioned_fusion_transform = None
+        self._mask_conditioned_fusion_device = torch.device("cpu")
+        self._mask_conditioned_fusion_backend = "disabled"
+        self._mask_conditioned_fusion_target_transform = "log1p"
         self._no_water_model = None
         self._no_water_transform = None
         self._no_water_device = torch.device("cpu")
         self._no_water_backend = "disabled"
+        self._wet_road_guard_model = None
+        self._wet_road_guard_transform = None
+        self._wet_road_guard_backend = "disabled"
         self._residual_fusion_model = None
         self._residual_fusion_backend = "disabled"
         self._residual_fusion_device = torch.device("cpu")
@@ -163,6 +194,7 @@ class SegformerYoloDepthV2Pipeline:
         self._load_object_detector_if_available()
         self._load_depth_anything_if_available()
         self._load_efficientnet_signal_if_available()
+        self._load_mask_conditioned_fusion_if_available()
         self._load_no_water_guard_if_available()
         self._load_residual_fusion_if_available()
         self._load_depth_teachers_if_available()
@@ -289,6 +321,49 @@ class SegformerYoloDepthV2Pipeline:
             self._efficientnet_transform = None
             self._efficientnet_backend = "unavailable"
 
+
+    def _load_mask_conditioned_fusion_if_available(self) -> None:
+        try:
+            cfg = load_settings_dict().get("inference", {}).get("mask_conditioned_fusion_signal", {})
+        except Exception as exc:
+            logger.info("Mask-conditioned fusion config unavailable: %s", exc)
+            return
+
+        if not bool(cfg.get("enabled", False)):
+            return
+
+        model_path = Path(str(cfg.get("model_path", "models/FloodDepth-MaskConditionedFusion.pth")))
+        if not model_path.exists():
+            logger.warning("Mask-conditioned fusion checkpoint missing at %s", model_path)
+            self._mask_conditioned_fusion_backend = "unavailable"
+            return
+
+        try:
+            device = torch.device("cuda" if torch.cuda.is_available() and str(cfg.get("device", "cpu")) == "cuda" else "cpu")
+            checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+            state_dict = checkpoint.get("model_state_dict", checkpoint)
+            model = MaskConditionedFusionDepthModel().to(device)
+            model.load_state_dict(state_dict, strict=True)
+            model.eval()
+            self._mask_conditioned_fusion_model = model
+            self._mask_conditioned_fusion_device = device
+            self._mask_conditioned_fusion_backend = str(model_path)
+            self._mask_conditioned_fusion_target_transform = str(checkpoint.get("target_transform", "log1p")) if isinstance(checkpoint, dict) else "log1p"
+            image_size = int(checkpoint.get("image_size", cfg.get("image_size", 384))) if isinstance(checkpoint, dict) else int(cfg.get("image_size", 384))
+            self._mask_conditioned_fusion_transform = transforms.Compose(
+                [
+                    transforms.Resize((image_size, image_size)),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ]
+            )
+            logger.info("Loaded mask-conditioned fusion depth signal from %s", model_path)
+        except Exception as exc:
+            logger.warning("Mask-conditioned fusion signal unavailable: %s", exc)
+            self._mask_conditioned_fusion_model = None
+            self._mask_conditioned_fusion_transform = None
+            self._mask_conditioned_fusion_backend = "unavailable"
+
     def _build_no_water_model(self) -> nn.Module:
         model = models.mobilenet_v3_small(weights=None)
         in_features = model.classifier[-1].in_features
@@ -329,6 +404,19 @@ class SegformerYoloDepthV2Pipeline:
                 ]
             )
             logger.info("Loaded no-water guard from %s", model_path)
+            wet_road_path_value = cfg.get("wet_road_guard_model_path", cfg.get("secondary_model_path"))
+            if bool(cfg.get("wet_road_guard_enabled", bool(wet_road_path_value))) and wet_road_path_value:
+                wet_road_path = Path(str(wet_road_path_value))
+                if wet_road_path.exists() and wet_road_path.resolve() != model_path.resolve():
+                    wet_road_model = self._build_no_water_model().to(device)
+                    wet_road_checkpoint = torch.load(wet_road_path, map_location=device, weights_only=True)
+                    wet_road_state_dict = wet_road_checkpoint.get("model_state_dict", wet_road_checkpoint)
+                    wet_road_model.load_state_dict(wet_road_state_dict, strict=True)
+                    wet_road_model.eval()
+                    self._wet_road_guard_model = wet_road_model
+                    self._wet_road_guard_transform = self._no_water_transform
+                    self._wet_road_guard_backend = str(wet_road_path)
+                    logger.info("Loaded wet-road no-water guard from %s", wet_road_path)
         except Exception as exc:
             logger.warning("No-water guard unavailable: %s", exc)
             self._no_water_model = None
@@ -467,6 +555,30 @@ class SegformerYoloDepthV2Pipeline:
             features["residual_fusion_status"] = "skipped_no_efficientnet_depth"
             return depth_cm, confidence, action
 
+        try:
+            guard_cfg = load_settings_dict().get("inference", {}).get("no_water_guard", {})
+        except Exception:
+            guard_cfg = {}
+        no_water_probability = self._feature_float(features.get("no_water_probability"))
+        wet_road_probability = self._feature_float(
+            features.get("wet_road_no_water_probability", features.get("secondary_no_water_probability"))
+        )
+        no_water_threshold = float(guard_cfg.get("no_water_threshold", 0.99))
+        wet_road_threshold = float(guard_cfg.get("wet_road_guard_threshold", guard_cfg.get("secondary_override_threshold", 1.0)))
+        coverage_pct = float(features.get("water_coverage_pct", 0.0))
+        near_coverage_pct = float(features.get("near_water_coverage_pct", 0.0))
+        reference_submersion = float(features.get("max_reference_submersion", 0.0))
+        no_water_guard_high = no_water_probability >= no_water_threshold or wet_road_probability >= wet_road_threshold
+        low_risk_no_water_scene = (
+            coverage_pct <= 1.0
+            and near_coverage_pct <= 1.0
+            and reference_submersion < 0.20
+            and not bool(features.get("immediate_risk", False))
+            and not bool(features.get("muddy_water_fallback_applied", False))
+        )
+        if no_water_guard_high and low_risk_no_water_scene:
+            features["residual_fusion_status"] = "skipped_no_water_guard_candidate"
+            return depth_cm, confidence, action
         skip_low_water = bool(cfg.get("skip_low_water_gate", True))
         if skip_low_water and bool(features.get("low_water_gate_applied", False)) and not bool(features.get("shallow_water_gate_exception", False)):
             features["residual_fusion_status"] = "skipped_low_water_gate"
@@ -533,6 +645,62 @@ class SegformerYoloDepthV2Pipeline:
         tensor = self._efficientnet_transform(image).unsqueeze(0).to(self._efficientnet_device)
         with torch.no_grad():
             return round(float(self._efficientnet_model(tensor).squeeze().item()) * self._efficientnet_max_depth_cm, 2)
+
+    def _mask_conditioned_fusion_depth_signal(self, image_rgb: np.ndarray, features: Dict[str, Any]) -> Optional[float]:
+        if self._mask_conditioned_fusion_model is None or self._mask_conditioned_fusion_transform is None:
+            return None
+        object_features = self._mask_conditioned_object_features(features)
+        geometry_features = self._mask_conditioned_geometry_features(features)
+        image = Image.fromarray(image_rgb.astype(np.uint8), mode="RGB")
+        tensor = self._mask_conditioned_fusion_transform(image).unsqueeze(0).to(self._mask_conditioned_fusion_device)
+        obj_tensor = torch.tensor(object_features.reshape(1, -1), dtype=torch.float32, device=self._mask_conditioned_fusion_device)
+        geo_tensor = torch.tensor(geometry_features.reshape(1, -1), dtype=torch.float32, device=self._mask_conditioned_fusion_device)
+        try:
+            with torch.no_grad():
+                depth_raw, ordinal_raw = self._mask_conditioned_fusion_model(tensor, obj_tensor, geo_tensor)
+            raw_depth = float(depth_raw.squeeze().item())
+            if self._mask_conditioned_fusion_target_transform.lower() == "log1p":
+                depth_cm = float(np.expm1(raw_depth))
+            else:
+                depth_cm = raw_depth
+            features["mask_conditioned_fusion_ordinal_class"] = int(torch.argmax(ordinal_raw, dim=1).item())
+            return round(float(np.clip(depth_cm, 0.0, 180.0)), 2)
+        except Exception as exc:
+            logger.warning("Mask-conditioned fusion inference failed: %s", exc)
+            return None
+
+    def _mask_conditioned_object_features(self, features: Dict[str, Any]) -> np.ndarray:
+        values = np.zeros(24, dtype=np.float32)
+        reference_count = float(features.get("reference_count", 0.0))
+        values[0] = min(reference_count / 10.0, 1.0)
+        values[1] = float(features.get("max_reference_submersion", 0.0))
+        values[2] = min(float(features.get("reference_depth_cm", 0.0)) / 180.0, 1.0)
+        values[3] = min(float(features.get("waterline_pct", 0.0)) / 100.0, 1.0)
+        values[4] = 1.0 if bool(features.get("immediate_risk", False)) else 0.0
+        values[5] = 1.0 if bool(features.get("far_water_only", False)) else 0.0
+        values[6] = 1.0 if bool(features.get("mask_quality_warning", False)) else 0.0
+        values[7] = 1.0 if bool(features.get("low_water_gate_applied", False)) else 0.0
+        values[8] = 1.0 if bool(features.get("muddy_water_fallback_applied", False)) else 0.0
+        values[9] = 1.0 if bool(features.get("full_road_water_no_reference", False)) else 0.0
+        values[10] = min(float(features.get("dense_depth_p90", 0.0)), 1.0)
+        values[11] = min(float(features.get("dense_depth_p95", 0.0)), 1.0)
+        values[12] = min(float(features.get("region_depth_cm", 0.0)) / 180.0, 1.0)
+        values[13] = min(float(features.get("largest_water_region_pct", 0.0)) / 100.0, 1.0)
+        values[14] = min(float(features.get("teacher_agreement", 0.0)), 1.0)
+        values[15] = min(float(features.get("teacher_median", 0.0)), 1.0)
+        values[16] = min(float(features.get("efficientnet_candidate_depth_cm", 0.0)) / 180.0, 1.0)
+        return values
+
+    def _mask_conditioned_geometry_features(self, features: Dict[str, Any]) -> np.ndarray:
+        return np.asarray(
+            [
+                min(float(features.get("water_coverage_pct", 0.0)) / 100.0, 1.0),
+                min(float(features.get("near_water_coverage_pct", 0.0)) / 100.0, 1.0),
+                min(float(features.get("far_water_coverage_pct", 0.0)) / 100.0, 1.0),
+            ],
+            dtype=np.float32,
+        )
+
     def _no_water_guard_signal(self, image_rgb: np.ndarray) -> Optional[float]:
         if self._no_water_model is None or self._no_water_transform is None:
             return None
@@ -546,6 +714,19 @@ class SegformerYoloDepthV2Pipeline:
             logger.warning("No-water guard inference failed: %s", exc)
             return None
 
+    def _wet_road_no_water_guard_signal(self, image_rgb: np.ndarray) -> Optional[float]:
+        if self._wet_road_guard_model is None or self._wet_road_guard_transform is None:
+            return None
+        image = Image.fromarray(image_rgb.astype(np.uint8), mode="RGB")
+        tensor = self._wet_road_guard_transform(image).unsqueeze(0).to(self._no_water_device)
+        try:
+            with torch.no_grad():
+                probabilities = torch.softmax(self._wet_road_guard_model(tensor), dim=1)
+            return float(np.clip(probabilities[0, 0].item(), 0.0, 1.0))
+        except Exception as exc:
+            logger.warning("Wet-road no-water guard inference failed: %s", exc)
+            return None
+
     def _apply_no_water_guard(
         self,
         depth_cm: float,
@@ -554,7 +735,8 @@ class SegformerYoloDepthV2Pipeline:
         features: Dict[str, Any],
     ) -> Tuple[float, float, str]:
         probability = features.get("no_water_probability")
-        if probability is None:
+        wet_road_probability = features.get("wet_road_no_water_probability", features.get("secondary_no_water_probability"))
+        if probability is None and wet_road_probability is None:
             return depth_cm, confidence, action
 
         try:
@@ -562,33 +744,213 @@ class SegformerYoloDepthV2Pipeline:
         except Exception:
             cfg = {}
 
+        primary_probability = float(probability) if probability is not None else 0.0
         threshold = float(cfg.get("no_water_threshold", 0.92))
+        wet_road_threshold = float(cfg.get("wet_road_guard_threshold", cfg.get("secondary_override_threshold", 1.0)))
+        wet_road_enabled = bool(cfg.get("wet_road_guard_enabled", cfg.get("secondary_override_enabled", False)))
         max_coverage_pct = float(cfg.get("max_water_coverage_pct", 3.0))
         max_near_coverage_pct = float(cfg.get("max_near_water_coverage_pct", max_coverage_pct))
+        max_reference_submersion = float(cfg.get("max_no_water_reference_submersion", 0.12))
+        wet_road_max_coverage_pct = float(cfg.get("wet_road_guard_max_water_coverage_pct", max_coverage_pct))
+        wet_road_max_near_coverage_pct = float(cfg.get("wet_road_guard_max_near_water_coverage_pct", max_near_coverage_pct))
+
         coverage_pct = float(features.get("water_coverage_pct", 0.0))
         near_coverage_pct = float(features.get("near_water_coverage_pct", 0.0))
-        corroborated = (
-            float(probability) >= threshold
-            and coverage_pct <= max_coverage_pct
-            and near_coverage_pct <= max_near_coverage_pct
-            and not bool(features.get("immediate_risk", False))
+        far_coverage_pct = float(features.get("far_water_coverage_pct", 0.0))
+        reference_submersion = float(features.get("max_reference_submersion", 0.0))
+        has_meaningful_submersion = reference_submersion >= max_reference_submersion
+        common_low_risk_scene = (
+            not bool(features.get("immediate_risk", False))
             and not bool(features.get("muddy_water_fallback_applied", False))
+            and not has_meaningful_submersion
         )
 
+        primary_match = probability is not None and primary_probability >= threshold
+        wet_road_match = wet_road_enabled and wet_road_probability is not None and float(wet_road_probability) >= wet_road_threshold
+        primary_visual_ok = coverage_pct <= max_coverage_pct and near_coverage_pct <= max_near_coverage_pct and common_low_risk_scene
+        wet_road_visual_ok = coverage_pct <= wet_road_max_coverage_pct and near_coverage_pct <= wet_road_max_near_coverage_pct and common_low_risk_scene
+        primary_corroborated = primary_match and primary_visual_ok
+        wet_road_corroborated = wet_road_match and wet_road_visual_ok
+        background_mask_only = (
+            primary_match
+            and wet_road_match
+            and near_coverage_pct <= max_near_coverage_pct
+            and far_coverage_pct >= 80.0
+            and reference_submersion < max_reference_submersion
+            and int(features.get("reference_count", 0)) == 0
+            and common_low_risk_scene
+        )
+        corroborated = primary_corroborated or wet_road_corroborated or background_mask_only
+
+        features["primary_no_water_guard_status"] = self._guard_status(probability, primary_match, primary_corroborated)
+        features["primary_no_water_guard_corroborated"] = bool(primary_corroborated)
+        features["wet_road_guard_status"] = self._guard_status(wet_road_probability, wet_road_match, wet_road_corroborated)
+        features["wet_road_guard_corroborated"] = bool(wet_road_corroborated)
+        features["wet_road_guard_low_risk_scene"] = bool(wet_road_visual_ok)
+        features["background_mask_no_water_override"] = bool(background_mask_only)
         features["no_water_guard_status"] = "applied" if corroborated else "uncertain"
-        features["no_water_guard_corroborated"] = corroborated
+        features["no_water_guard_corroborated"] = bool(corroborated)
+        features["secondary_no_water_override"] = bool(wet_road_corroborated)
+        features["no_water_guard_blocked_by_flood_evidence"] = bool((primary_match or wet_road_match) and not corroborated)
+
         if not corroborated:
             return depth_cm, confidence, action
 
+        use_wet_road_guard = wet_road_corroborated and not primary_corroborated
+        decision_source = "background-mask no-water guard" if background_mask_only else ("wet-road no-water guard" if use_wet_road_guard else "no-water guard")
+        decision_probability = float(wet_road_probability) if use_wet_road_guard and wet_road_probability is not None else primary_probability
+        decision_backend = self._wet_road_guard_backend if use_wet_road_guard else self._no_water_backend
         features["no_water_guard_applied"] = True
         features["water_present_overridden_by_no_water_guard"] = True
+        features["no_water_decision_source"] = decision_source
+        features["no_water_decision_backend"] = decision_backend
         features["final_output_reason"] = (
-            f"No-water guard detected a dry scene with probability {float(probability):.2f}; "
+            f"{decision_source} detected a low-risk dry/wet-road scene with probability {decision_probability:.2f}; "
             "water/depth signals were suppressed."
         )
         features["final_aggregation_source"] = "no_water_guard"
-        return 0.0, round(float(max(confidence, float(probability))), 4), self._action_for_final_depth(0.0, features, action)
+        features["review_required"] = False
+        features["review_reason"] = ""
+        return 0.0, round(float(max(confidence, decision_probability)), 4), self._action_for_final_depth(0.0, features, action)
 
+    @staticmethod
+    def _guard_status(probability: Any, matched: bool, corroborated: bool) -> str:
+        if probability is None:
+            return "unavailable"
+        if corroborated:
+            return "applied"
+        if matched:
+            return "blocked_by_flood_evidence"
+        return "below_threshold"
+    def _apply_strong_deep_flood_correction(
+        self,
+        depth_cm: float,
+        confidence: float,
+        action: str,
+        features: Dict[str, Any],
+    ) -> Tuple[float, float, str]:
+        try:
+            cfg = load_settings_dict().get("inference", {}).get("strong_deep_flood_correction", {})
+        except Exception:
+            cfg = {}
+        if not bool(cfg.get("enabled", False)):
+            return depth_cm, confidence, action
+
+        coverage = float(features.get("water_coverage_pct", 0.0))
+        near = float(features.get("near_water_coverage_pct", 0.0))
+        references = float(features.get("reference_count", 0.0))
+        submersion = float(features.get("max_reference_submersion", 0.0))
+        reference_depth = float(features.get("reference_depth_cm", 0.0))
+        region_depth = float(features.get("region_depth_cm", 0.0))
+        strong_evidence = (
+            coverage >= float(cfg.get("min_water_coverage_pct", 60.0))
+            and near >= float(cfg.get("min_near_water_coverage_pct", 45.0))
+            and references >= float(cfg.get("min_reference_count", 1))
+            and submersion >= float(cfg.get("min_reference_submersion", 0.80))
+            and reference_depth >= float(cfg.get("min_reference_depth_cm", 85.0))
+            and region_depth >= float(cfg.get("min_region_depth_cm", 65.0))
+        )
+        if not strong_evidence:
+            return depth_cm, confidence, action
+
+        evidence_depth = (0.65 * reference_depth) + (0.35 * region_depth)
+        corrected_depth = round(float(np.clip(max(depth_cm, evidence_depth), 0.0, 180.0)), 2)
+        if corrected_depth <= depth_cm:
+            return depth_cm, confidence, action
+        features["strong_deep_flood_correction_applied"] = True
+        features["pre_strong_deep_flood_depth_cm"] = round(float(depth_cm), 2)
+        features["strong_deep_flood_depth_cm"] = corrected_depth
+        features["final_output_reason"] = "Strong broad-water, near-field, reference-object, and region-depth evidence overruled a conservative deep-flood estimate."
+        return corrected_depth, round(float(max(confidence, 0.85)), 4), self._action_for_final_depth(corrected_depth, features, action)
+
+    def _apply_mask_conditioned_high_flood_correction(
+        self,
+        depth_cm: float,
+        confidence: float,
+        action: str,
+        features: Dict[str, Any],
+    ) -> Tuple[float, float, str]:
+        try:
+            cfg = load_settings_dict().get("inference", {}).get("mask_conditioned_fusion_signal", {})
+        except Exception:
+            cfg = {}
+
+        if not bool(cfg.get("high_flood_correction_enabled", False)):
+            features["mask_conditioned_high_flood_status"] = "disabled"
+            return depth_cm, confidence, action
+
+        mask_depth_raw = features.get("mask_conditioned_fusion_depth_cm")
+        if mask_depth_raw is None:
+            features["mask_conditioned_high_flood_status"] = "missing_signal"
+            return depth_cm, confidence, action
+
+        try:
+            mask_depth = float(mask_depth_raw)
+        except (TypeError, ValueError):
+            features["mask_conditioned_high_flood_status"] = "invalid_signal"
+            return depth_cm, confidence, action
+
+        coverage = float(features.get("water_coverage_pct", 0.0))
+        near = float(features.get("near_water_coverage_pct", 0.0))
+        mid = float(features.get("mid_water_coverage_pct", 0.0))
+        far = float(features.get("far_water_coverage_pct", 0.0))
+        max_submersion = float(features.get("max_reference_submersion", 0.0))
+        reference_count = int(float(features.get("reference_count", 0.0)))
+        no_water_probability = self._feature_float(features.get("no_water_probability"))
+        wet_road_probability = self._feature_float(features.get("wet_road_no_water_probability"))
+
+        min_mask_depth = float(cfg.get("high_flood_min_mask_depth_cm", 75.0))
+        max_current_depth = float(cfg.get("high_flood_max_current_depth_cm", 70.0))
+        min_gap = float(cfg.get("high_flood_min_gap_cm", 25.0))
+        min_coverage = float(cfg.get("high_flood_min_water_coverage_pct", 45.0))
+        min_near_or_mid = float(cfg.get("high_flood_min_near_or_mid_pct", 35.0))
+        max_no_water_prob = float(cfg.get("high_flood_max_no_water_probability", 0.98))
+        max_wet_road_prob = float(cfg.get("high_flood_max_wet_road_probability", 0.98))
+
+        dense_depth_cm = float(features.get("dense_depth_p90", 0.0)) * 120.0
+        efficientnet_depth = self._feature_float(features.get("efficientnet_candidate_depth_cm"))
+        broad_water_evidence = coverage >= min_coverage and max(near, mid) >= min_near_or_mid
+        high_model_agreement = (
+            bool(features.get("immediate_risk", False))
+            and coverage >= float(cfg.get("high_flood_min_weak_mask_coverage_pct", 12.0))
+            and near >= float(cfg.get("high_flood_min_weak_mask_near_pct", 12.0))
+            and efficientnet_depth >= float(cfg.get("high_flood_min_efficientnet_depth_cm", 60.0))
+            and dense_depth_cm >= float(cfg.get("high_flood_min_dense_depth_cm", 70.0))
+        )
+        object_or_scene_evidence = bool(features.get("immediate_risk", False)) or reference_count > 0 or max_submersion >= 0.25 or far >= 50.0
+        guard_blocked = (
+            bool(features.get("low_water_gate_applied", False))
+            or bool(features.get("dry_land_guard_applied", False))
+            or bool(features.get("water_present_overridden_by_no_water_guard", False))
+            or bool(features.get("far_water_only", False))
+            or no_water_probability >= max_no_water_prob
+            or wet_road_probability >= max_wet_road_prob
+        )
+        should_apply = (
+            mask_depth >= min_mask_depth
+            and depth_cm <= max_current_depth
+            and (mask_depth - depth_cm) >= min_gap
+            and (broad_water_evidence or high_model_agreement)
+            and object_or_scene_evidence
+            and not guard_blocked
+        )
+
+        if not should_apply:
+            features["mask_conditioned_high_flood_status"] = "not_applicable"
+            return depth_cm, confidence, action
+
+        corrected_depth = round(float(np.clip(mask_depth, 0.0, 180.0)), 2)
+        features["mask_conditioned_high_flood_status"] = "applied"
+        features["mask_conditioned_high_flood_correction_applied"] = True
+        features["pre_mask_conditioned_high_flood_depth_cm"] = round(float(depth_cm), 2)
+        features["mask_conditioned_high_flood_corrected_depth_cm"] = corrected_depth
+        features["model_agreement_status"] = "mask_conditioned_high_flood_correction"
+        features["final_aggregation_source"] = "mask_conditioned_high_flood_correction"
+        features["final_output_reason"] = (
+            f"MaskConditionedFusion predicted deep flood at {corrected_depth:.2f} cm while current pipeline was {depth_cm:.2f} cm; "
+            "broad water evidence or high-model agreement allowed this high-flood correction."
+        )
+        return corrected_depth, round(float(max(confidence, 0.86)), 4), self._action_for_final_depth(corrected_depth, features, action)
     def _apply_dry_land_guard(
         self,
         depth_cm: float,
@@ -1285,6 +1647,10 @@ class SegformerYoloDepthV2Pipeline:
         )
         add_signal("efficientnet_candidate", candidate_depth, candidate_trusted, "trained depth model", 0.50)
 
+        mask_conditioned_depth = features.get("mask_conditioned_fusion_depth_cm")
+        mask_conditioned_trusted = bool(features.get("mask_conditioned_fusion_trusted", False))
+        add_signal("mask_conditioned_fusion", mask_conditioned_depth, mask_conditioned_trusted, "experimental mask-conditioned trained model", 0.20)
+
         reference_depth = features.get("reference_depth_cm")
         reference_trusted = reference_count > 0 and not low_water_gate and (max_submersion >= 0.15 or coverage >= 0.20 or immediate_risk)
         add_signal("reference_objects", reference_depth, reference_trusted, "object/reference depth estimate", 0.15)
@@ -1385,6 +1751,7 @@ class SegformerYoloDepthV2Pipeline:
         )
 
         no_water_probability = self._no_water_guard_signal(image_rgb)
+        wet_road_no_water_probability = self._wet_road_no_water_guard_signal(image_rgb)
         trace.append(
             {
                 "stage": "No-Water Guard",
@@ -1393,6 +1760,15 @@ class SegformerYoloDepthV2Pipeline:
                 "summary": "checkpoint unavailable" if no_water_probability is None else f"no_water_probability={no_water_probability:.3f}",
             }
         )
+        if wet_road_no_water_probability is not None:
+            trace.append(
+                {
+                    "stage": "Wet-Road No-Water Guard",
+                    "backend": self._wet_road_guard_backend,
+                    "status": "ok",
+                    "summary": f"no_water_probability={wet_road_no_water_probability:.3f}",
+                }
+            )
 
         efficientnet_depth_cm = self._efficientnet_depth_signal(image_rgb)
         if efficientnet_depth_cm is not None:
@@ -1474,7 +1850,21 @@ class SegformerYoloDepthV2Pipeline:
         if efficientnet_depth_cm is not None:
             features["efficientnet_candidate_depth_cm"] = efficientnet_depth_cm
             features["fusion_candidate_delta_cm"] = round(abs(float(features.get("region_depth_cm", 0.0)) - efficientnet_depth_cm), 2)
+        mask_conditioned_fusion_depth_cm = self._mask_conditioned_fusion_depth_signal(image_rgb, features)
+        if mask_conditioned_fusion_depth_cm is not None:
+            features["mask_conditioned_fusion_depth_cm"] = mask_conditioned_fusion_depth_cm
+            trace.append(
+                {
+                    "stage": "Mask-Conditioned Fusion Candidate",
+                    "backend": self._mask_conditioned_fusion_backend,
+                    "status": "ok",
+                    "summary": f"candidate_depth_cm={mask_conditioned_fusion_depth_cm:.2f}",
+                }
+            )
         features["no_water_probability"] = no_water_probability
+        features["wet_road_no_water_probability"] = wet_road_no_water_probability
+        features["secondary_no_water_probability"] = wet_road_no_water_probability
+        features["wet_road_guard_backend"] = self._wet_road_guard_backend
         features["no_water_guard_backend"] = self._no_water_backend
         if teacher_features:
             features["depth_teacher_available_count"] = int(teacher_meta.get("available_teacher_count", 0) or 0)
@@ -1519,6 +1909,8 @@ class SegformerYoloDepthV2Pipeline:
         depth_cm, confidence, action = self._apply_efficientnet_correction(depth_cm, confidence, action, features)
         depth_cm, confidence, action = self._record_model_agreement(depth_cm, confidence, action, features)
         depth_cm, confidence, action = self._apply_residual_fusion_model(depth_cm, confidence, action, features)
+        depth_cm, confidence, action = self._apply_mask_conditioned_high_flood_correction(depth_cm, confidence, action, features)
+        depth_cm, confidence, action = self._apply_strong_deep_flood_correction(depth_cm, confidence, action, features)
         depth_cm, confidence, action = self._apply_dry_land_guard(depth_cm, confidence, action, image_rgb, features)
         depth_cm, confidence, action = self._apply_no_water_guard(depth_cm, confidence, action, features)
         if features.get("dry_land_guard_applied"):
@@ -1534,9 +1926,9 @@ class SegformerYoloDepthV2Pipeline:
             trace.append(
                 {
                     "stage": "No-Water Decision",
-                    "backend": self._no_water_backend,
+                    "backend": str(features.get("no_water_decision_backend", self._no_water_backend)),
                     "status": "applied",
-                    "summary": "dry-scene classifier forced depth=0.00 cm",
+                    "summary": "dry/wet-road guard forced depth=0.00 cm",
                 }
             )
         if features.get("residual_fusion_status") in {"applied", "skipped_low_water_gate"}:
@@ -1599,6 +1991,13 @@ def get_segformer_yolo_depthv2_pipeline() -> SegformerYoloDepthV2Pipeline:
     if _PIPELINE is None:
         _PIPELINE = SegformerYoloDepthV2Pipeline()
     return _PIPELINE
+
+
+
+
+
+
+
 
 
 
