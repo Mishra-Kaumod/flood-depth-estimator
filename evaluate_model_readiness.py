@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import csv
 import json
 import math
@@ -129,11 +129,13 @@ def resolve_manifest_row(
         if key in manifest_labels:
             result = dict(manifest_labels[key])
             result["image_path"] = key
+            result["manifest_matched"] = True
             return result
 
     fallback_key = candidates[0] if candidates else _normalize_path_key(image_path.name)
     return {
         "image_path": fallback_key,
+        "manifest_matched": False,
         "expected_flood": None,
         "expected_depth_cm": None,
         "scene_type": None,
@@ -179,22 +181,30 @@ def evaluate_dataset(
     input_dir: Path,
     limit: int,
     manifest_labels: Dict[str, Dict[str, Any]],
+    manifest_only: bool = False,
 ) -> List[Dict[str, Any]]:
     repo_root = Path(__file__).resolve().parent
     pipeline = get_segformer_yolo_depthv2_pipeline()
 
-    candidates = list(iter_images(input_dir))
+    candidates = [
+        (
+            source,
+            resolve_manifest_row(
+                image_path=source,
+                repo_root=repo_root,
+                input_dir=input_dir,
+                manifest_labels=manifest_labels,
+            ),
+        )
+        for source in iter_images(input_dir)
+    ]
+    if manifest_only:
+        candidates = [item for item in candidates if item[1].get("manifest_matched")]
     if limit:
         candidates = candidates[:limit]
 
     rows: List[Dict[str, Any]] = []
-    for source in candidates:
-        annotation = resolve_manifest_row(
-            image_path=source,
-            repo_root=repo_root,
-            input_dir=input_dir,
-            manifest_labels=manifest_labels,
-        )
+    for source, annotation in candidates:
         expected_flood = annotation.get("expected_flood")
         if expected_flood not in (0, 1):
             expected_flood = infer_label_from_name(source.name)
@@ -205,6 +215,7 @@ def evaluate_dataset(
         row: Dict[str, Any] = {
             "image": source.name,
             "image_path": annotation.get("image_path"),
+            "manifest_matched": bool(annotation.get("manifest_matched")),
         }
         try:
             image_rgb = np.array(Image.open(source).convert("RGB"))
@@ -469,6 +480,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run model readiness evaluation on local test images.")
     parser.add_argument("--input-dir", default="test_images", help="Directory containing evaluation images")
     parser.add_argument("--manifest", default="test_images/evaluation_manifest_labeled.csv", help="CSV manifest with expected labels/depth")
+    parser.add_argument(
+        "--manifest-only",
+        action="store_true",
+        help="Process only images explicitly listed in the manifest",
+    )
     parser.add_argument("--limit", type=int, default=0, help="Optional max image count")
     parser.add_argument("--enforce-gates", action="store_true", help="Exit non-zero if quality gates fail")
     parser.add_argument("--min-labeled-flood", type=int, default=50, help="Minimum labeled flood/non-flood samples")
@@ -494,7 +510,12 @@ def main() -> None:
     manifest_path = Path(args.manifest)
     manifest_labels = load_manifest(manifest_path)
 
-    rows = evaluate_dataset(input_dir=input_dir, limit=args.limit, manifest_labels=manifest_labels)
+    rows = evaluate_dataset(
+        input_dir=input_dir,
+        limit=args.limit,
+        manifest_labels=manifest_labels,
+        manifest_only=args.manifest_only,
+    )
     summary = build_summary(rows)
     gates = evaluate_quality_gates(summary, args)
 
@@ -503,6 +524,7 @@ def main() -> None:
         "input_dir": str(input_dir.resolve()),
         "manifest_path": str(manifest_path.resolve()),
         "manifest_labels_loaded": len(manifest_labels),
+        "manifest_only": bool(args.manifest_only),
         "summary": summary,
         "quality_gates": gates,
         "rows": rows,
@@ -523,3 +545,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

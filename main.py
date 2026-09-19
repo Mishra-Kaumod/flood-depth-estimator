@@ -89,7 +89,8 @@ def write_final_prediction_record(result: dict[str, Any], image_name: str | None
     final_decision = payload.get("final_decision", {}) or {}
     llm_judge = payload.get("llm_judge") or payload.get("llm_judge_result") or {}
 
-    depth_cm = _safe_float(
+    depth_skipped = bool(final_decision.get("depth_estimation_skipped", False))
+    depth_cm = None if depth_skipped else _safe_float(
         final_decision.get("estimated_depth_cm"),
         _safe_float(payload.get("estimated_depth_meters")) * 100.0,
     )
@@ -99,8 +100,9 @@ def write_final_prediction_record(result: dict[str, Any], image_name: str | None
         "camera_id": payload.get("camera_id"),
         "latitude": payload.get("latitude"),
         "longitude": payload.get("longitude"),
-        "water_present": bool(payload.get("water_present", depth_cm > 0.0)),
-        "final_depth_cm": round(depth_cm, 2),
+        "water_present": bool(payload.get("water_present", (depth_cm or 0.0) > 0.0)),
+        "final_depth_cm": round(depth_cm, 2) if depth_cm is not None else None,
+        "final_depth_display": "NA" if depth_cm is None else f"{depth_cm:.2f} cm",
         "final_severity": final_decision.get("severity_label") or payload.get("severity_label"),
         "final_severity_score": final_decision.get("severity") or payload.get("severity"),
         "final_action": final_decision.get("action_trigger") or payload.get("action_trigger"),
@@ -110,6 +112,7 @@ def write_final_prediction_record(result: dict[str, Any], image_name: str | None
         "agreement_status": structured.get("model_agreement_status"),
         "agreement_depth_cm": structured.get("model_agreement_depth_cm"),
         "final_reason": structured.get("final_output_reason"),
+        "depth_estimation_status": final_decision.get("depth_estimation_status") or structured.get("depth_estimation_status", "ESTIMATED"),
         "review_required": bool(payload.get("review_required", structured.get("review_required", False))),
         "review_reason": payload.get("review_reason") or structured.get("review_reason"),
         "llm_status": "available" if llm_judge else "unavailable",
@@ -143,11 +146,12 @@ def summarize_event_result(result: dict[str, Any], image_name: str | None = None
     trace = metadata.get("pipeline_trace", []) or []
 
     final_decision = payload.get("final_decision", {}) or {}
-    depth_cm = _safe_float(final_decision.get("estimated_depth_cm"), _safe_float(payload.get("estimated_depth_meters")) * 100.0)
+    depth_skipped = bool(final_decision.get("depth_estimation_skipped", False))
+    depth_cm = None if depth_skipped else _safe_float(final_decision.get("estimated_depth_cm"), _safe_float(payload.get("estimated_depth_meters")) * 100.0)
     confidence_pct = float(payload.get("confidence_score", 0.0) * 100.0)
     severity = final_decision.get("severity_label") or payload.get("severity_label", "Unknown")
     action = final_decision.get("action_trigger") or payload.get("action_trigger", "Unknown")
-    water_present = bool(payload.get("water_present", depth_cm > 0.0))
+    water_present = bool(payload.get("water_present", (depth_cm or 0.0) > 0.0))
     water_coverage = structured.get("water_coverage_pct")
     reference_count = int(structured.get("reference_count", 0))
     reference_depth = structured.get("reference_depth_cm")
@@ -164,7 +168,8 @@ def summarize_event_result(result: dict[str, Any], image_name: str | None = None
     print(f"Image: {image_name or '<unknown>'}")
     print(f"Camera: {payload.get('camera_id', 'unknown')}")
     print(f"Water present: {'Yes' if water_present else 'No'}")
-    print(f"Final depth: {depth_cm:.2f} cm")
+    depth_display = "NA" if depth_cm is None else f"{depth_cm:.2f} cm"
+    print(f"Final depth: {depth_display}")
     print(f"Final severity: {severity}")
     print(f"Final action: {action}")
     if final_decision.get("decision_source") or payload.get("decision_source"):

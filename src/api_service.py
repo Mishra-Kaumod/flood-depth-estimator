@@ -76,13 +76,17 @@ class FloodApiService:
         result_payload["detected_reference_objects"] = reference_objects
         result_payload["visual_cues"] = result.metadata.get("visual_cues", [])
         structured_features = result.metadata.get("structured_features", {}) or {}
+        reference_count = self._reference_count(structured_features)
+        skip_depth_estimation = reference_count == 0
         if structured_features.get("review_required"):
             result_payload["review_required"] = True
             result_payload["review_reason"] = structured_features.get("review_reason")
             result_payload["operational_decision_source"] = "pipeline_review_required"
 
         llm_judge_result = None
-        if self.llm_judge is not None:
+        if skip_depth_estimation:
+            result_payload["llm_judge_error"] = "LLM judge skipped: no reference object detected"
+        elif self.llm_judge is not None:
             result_payload["llm_judge_enabled"] = bool(self.llm_judge.enabled)
             if self.llm_judge.enabled:
                 structured = result_payload.get("metadata", {}).get("structured_features", {}) or {}
@@ -181,16 +185,26 @@ class FloodApiService:
                 result_payload["llm_judge_decision_source"] = (
                     "pipeline" if llm_judge_result.get("prediction_correct") else "judge"
                 )
-        else:
+        elif not skip_depth_estimation:
             result_payload["llm_judge_error"] = self.llm_judge_error or "LLM judge unavailable; no validator instance was created"
 
-        final_decision_source = "pipeline"
-        if result_payload.get("llm_judge_applied"):
-            final_decision_source = "llm_judge"
-        elif result_payload.get("review_required"):
-            final_decision_source = "pipeline_review_required"
-
-        final_decision = self._build_final_decision(depth_cm, final_decision_source)
+        if skip_depth_estimation:
+            raw_depth_cm = depth_cm
+            skip_reason = "No reference object detected; flood depth was not estimated."
+            structured_features["depth_estimation_status"] = "SKIPPED_NO_REFERENCE"
+            structured_features["depth_estimation_skipped"] = True
+            structured_features["final_output_reason"] = skip_reason
+            structured_features["raw_pipeline_depth_cm"] = raw_depth_cm
+            structured_features["final_aggregation_source"] = "reference_requirement"
+            final_decision_source = "insufficient_reference"
+            final_decision = self._build_insufficient_reference_decision(final_decision_source, bool(result_payload.get("water_present", raw_depth_cm > 0.0)), skip_reason)
+        else:
+            final_decision_source = "pipeline"
+            if result_payload.get("llm_judge_applied"):
+                final_decision_source = "llm_judge"
+            elif result_payload.get("review_required"):
+                final_decision_source = "pipeline_review_required"
+            final_decision = self._build_final_decision(depth_cm, final_decision_source)
         result_payload["final_decision"] = final_decision
         result_payload["decision_source"] = final_decision_source
         result_payload["estimated_depth_meters"] = final_decision["estimated_depth_meters"]
@@ -299,6 +313,21 @@ class FloodApiService:
             "water_present": depth_cm > 0.0,
         }
 
+    def _build_insufficient_reference_decision(self, decision_source: str, water_present: bool, reason: str) -> dict[str, Any]:
+        return {
+            "estimated_depth_cm": None,
+            "estimated_depth_meters": None,
+            "severity": "NA",
+            "severity_label": "NA",
+            "color_code": "#6B7280",
+            "action_trigger": "NA",
+            "decision_source": decision_source,
+            "water_present": water_present,
+            "depth_estimation_skipped": True,
+            "depth_estimation_status": "SKIPPED_NO_REFERENCE",
+            "reason": reason,
+        }
+
     def _pipeline_evidence(self, result_payload: dict[str, Any]) -> dict[str, Any]:
         metadata = result_payload.get("metadata", {}) or {}
         structured = metadata.get("structured_features", {}) or {}
@@ -309,6 +338,8 @@ class FloodApiService:
             "mid_water_coverage_pct": structured.get("mid_water_coverage_pct"),
             "far_water_coverage_pct": structured.get("far_water_coverage_pct"),
             "reference_count": structured.get("reference_count"),
+            "depth_estimation_status": structured.get("depth_estimation_status"),
+            "depth_estimation_skipped": structured.get("depth_estimation_skipped"),
             "reference_depth_cm": structured.get("reference_depth_cm"),
             "max_reference_submersion": structured.get("max_reference_submersion"),
             "immediate_risk": structured.get("immediate_risk"),
@@ -349,6 +380,13 @@ class FloodApiService:
             if text:
                 return text
         return "unknown"
+
+    def _reference_count(self, structured_features: dict[str, Any]) -> int:
+        try:
+            return max(0, int(float(structured_features.get("reference_count", 0) or 0)))
+        except (TypeError, ValueError):
+            return 0
+
     def _reference_objects_from_metadata(self, metadata: dict[str, Any]) -> list[str]:
         features = metadata.get("structured_features", {})
         objects = features.get("reference_objects") or features.get("objects") or []
