@@ -1,4 +1,4 @@
-﻿# BENGALURU FLOOD DEPTH ESTIMATOR - PRODUCTION CONFIG
+# BENGALURU FLOOD DEPTH ESTIMATOR - PRODUCTION CONFIG
 # Centralized configuration for training, inference, and deployment
 # Designed for AWS EC2, S3, ECR/ECS, and Lambda environments
 
@@ -149,7 +149,7 @@ inference:
   no_water_guard:
     enabled: true
     model_path: "models/candidate/no_water_guard_teammate_augmented.pth"
-    wet_road_guard_model_path: "models/candidate/wet_road_no_water_guard_augmented.pth"
+    wet_road_guard_model_path: "models/candidate/wet_road_no_water_guard_test0916.pth"
     device: "cpu"
     no_water_threshold: 0.99
     max_water_coverage_pct: 5.0
@@ -159,6 +159,17 @@ inference:
     wet_road_guard_threshold: 0.995
     wet_road_guard_max_water_coverage_pct: 12.0
     wet_road_guard_max_near_water_coverage_pct: 8.0
+  road_scene_classifier:
+    enabled: true
+    model_path: "models/candidate/road_scene_classifier_4class_shallow_v2.pth"
+    device: "cpu"
+    advisory_only: false
+    wet_road_cap_enabled: true
+    wet_road_cap_threshold: 0.995
+    wet_road_cap_cm: 3.0
+    wet_road_cap_max_water_coverage_pct: 12.0
+    wet_road_cap_max_near_water_coverage_pct: 8.0
+    wet_road_cap_require_low_risk_evidence: false
   residual_fusion_signal:
     enabled: true
     model_path: "models/candidate/residual_fusion_depth_model_retrain_old_eff_20260816_231536.pt"
@@ -319,10 +330,10 @@ aggregator:
 
   # Depth thresholds for next_action_recommendation (metres)
   thresholds:
-    advisory_m:  0.10        # > 10 cm  ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ ADVISORY
-    warning_m:   0.30        # > 30 cm  ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ WARNING_PUMP_ACTIVATION
-    alert_m:     0.60        # > 60 cm  ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ ALERT_TRAFFIC_MANAGEMENT
-    critical_m:  1.00        # > 100 cm ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ DEPLOY_EMERGENCY_DIVERSION
+    advisory_m:  0.10        # > 10 cm  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ADVISORY
+    warning_m:   0.30        # > 30 cm  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ WARNING_PUMP_ACTIVATION
+    alert_m:     0.60        # > 60 cm  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ALERT_TRAFFIC_MANAGEMENT
+    critical_m:  1.00        # > 100 cm ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ DEPLOY_EMERGENCY_DIVERSION
 
   # Depth thresholds for geospatial intensity bands (centimetres)
   # Used by src/geospatial_classifier.py
@@ -352,6 +363,7 @@ secrets: {}
 # Local persistent storage for API-triggered camera workflows.
 storage:
   sqlite_path: "data/flood_app.sqlite3"
+
 
 
 

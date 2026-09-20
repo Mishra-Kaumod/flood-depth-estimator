@@ -1,4 +1,4 @@
-﻿"""
+"""
 Stage-aligned flood inference pipeline:
 RGB -> SegFormer water mask -> YOLOv8 reference objects ->
 Depth Anything V2 dense depth proxy -> Fusion engine ->
@@ -182,6 +182,11 @@ class SegformerYoloDepthV2Pipeline:
         self._wet_road_guard_model = None
         self._wet_road_guard_transform = None
         self._wet_road_guard_backend = "disabled"
+        self._road_scene_model = None
+        self._road_scene_transform = None
+        self._road_scene_device = torch.device("cpu")
+        self._road_scene_backend = "disabled"
+        self._road_scene_class_names: list[str] = []
         self._residual_fusion_model = None
         self._residual_fusion_backend = "disabled"
         self._residual_fusion_device = torch.device("cpu")
@@ -196,6 +201,7 @@ class SegformerYoloDepthV2Pipeline:
         self._load_efficientnet_signal_if_available()
         self._load_mask_conditioned_fusion_if_available()
         self._load_no_water_guard_if_available()
+        self._load_road_scene_classifier_if_available()
         self._load_residual_fusion_if_available()
         self._load_depth_teachers_if_available()
 
@@ -370,6 +376,48 @@ class SegformerYoloDepthV2Pipeline:
         model.classifier[-1] = nn.Linear(in_features, 2)
         return model
 
+    def _build_road_scene_model(self, class_count: int) -> nn.Module:
+        model = models.mobilenet_v3_small(weights=None)
+        model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, class_count)
+        return model
+
+    def _load_road_scene_classifier_if_available(self) -> None:
+        try:
+            cfg = load_settings_dict().get("inference", {}).get("road_scene_classifier", {})
+        except Exception as exc:
+            logger.info("Road-scene classifier config unavailable: %s", exc)
+            return
+        if not bool(cfg.get("enabled", False)):
+            return
+        model_path = Path(str(cfg.get("model_path", "models/candidate/road_scene_classifier_4class_shallow_v2.pth")))
+        if not model_path.exists():
+            logger.warning("Road-scene classifier checkpoint missing at %s", model_path)
+            self._road_scene_backend = "unavailable"
+            return
+        try:
+            device = torch.device("cuda" if torch.cuda.is_available() and str(cfg.get("device", "cpu")) == "cuda" else "cpu")
+            checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+            class_names = list(checkpoint.get("class_names", [])) if isinstance(checkpoint, dict) else []
+            if class_names != ["dry_road", "wet_road", "shallow_flood", "meaningful_flood"]:
+                raise ValueError(f"Unexpected road-scene classes: {class_names}")
+            model = self._build_road_scene_model(len(class_names)).to(device)
+            model.load_state_dict(checkpoint["model_state_dict"], strict=True)
+            model.eval()
+            self._road_scene_model = model
+            self._road_scene_device = device
+            self._road_scene_backend = str(model_path)
+            self._road_scene_class_names = class_names
+            self._road_scene_transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
+            logger.info("Loaded road-scene classifier from %s", model_path)
+        except Exception as exc:
+            logger.warning("Road-scene classifier unavailable: %s", exc)
+            self._road_scene_model = None
+            self._road_scene_transform = None
+            self._road_scene_backend = "unavailable"
     def _load_no_water_guard_if_available(self) -> None:
         try:
             cfg = load_settings_dict().get("inference", {}).get("no_water_guard", {})
@@ -727,6 +775,21 @@ class SegformerYoloDepthV2Pipeline:
             logger.warning("Wet-road no-water guard inference failed: %s", exc)
             return None
 
+    def _road_scene_classifier_signal(self, image_rgb: np.ndarray) -> Optional[Dict[str, float]]:
+        if self._road_scene_model is None or self._road_scene_transform is None:
+            return None
+        image = Image.fromarray(image_rgb.astype(np.uint8), mode="RGB")
+        tensor = self._road_scene_transform(image).unsqueeze(0).to(self._road_scene_device)
+        try:
+            with torch.no_grad():
+                probabilities = torch.softmax(self._road_scene_model(tensor), dim=1)[0].cpu().numpy()
+            return {
+                class_name: round(float(np.clip(probability, 0.0, 1.0)), 6)
+                for class_name, probability in zip(self._road_scene_class_names, probabilities)
+            }
+        except Exception as exc:
+            logger.warning("Road-scene classifier inference failed: %s", exc)
+            return None
     def _apply_no_water_guard(
         self,
         depth_cm: float,
@@ -736,13 +799,21 @@ class SegformerYoloDepthV2Pipeline:
     ) -> Tuple[float, float, str]:
         probability = features.get("no_water_probability")
         wet_road_probability = features.get("wet_road_no_water_probability", features.get("secondary_no_water_probability"))
-        if probability is None and wet_road_probability is None:
+        road_scene_probabilities = features.get("road_scene_probabilities") or {}
+        scene_wet_probability = None
+        if isinstance(road_scene_probabilities, dict) and road_scene_probabilities.get("wet_road") is not None:
+            scene_wet_probability = float(road_scene_probabilities["wet_road"])
+        if probability is None and wet_road_probability is None and scene_wet_probability is None:
             return depth_cm, confidence, action
 
         try:
             cfg = load_settings_dict().get("inference", {}).get("no_water_guard", {})
         except Exception:
             cfg = {}
+        try:
+            scene_cfg = load_settings_dict().get("inference", {}).get("road_scene_classifier", {})
+        except Exception:
+            scene_cfg = {}
 
         primary_probability = float(probability) if probability is not None else 0.0
         threshold = float(cfg.get("no_water_threshold", 0.92))
@@ -781,6 +852,26 @@ class SegformerYoloDepthV2Pipeline:
             and common_low_risk_scene
         )
         corroborated = primary_corroborated or wet_road_corroborated or background_mask_only
+        scene_cap_enabled = bool(scene_cfg.get("wet_road_cap_enabled", False))
+        scene_wet_threshold = float(scene_cfg.get("wet_road_cap_threshold", 0.995))
+        scene_cap_cm = float(scene_cfg.get("wet_road_cap_cm", 3.0))
+        scene_max_coverage_pct = float(scene_cfg.get("wet_road_cap_max_water_coverage_pct", 12.0))
+        scene_max_near_coverage_pct = float(scene_cfg.get("wet_road_cap_max_near_water_coverage_pct", 8.0))
+        require_low_risk_evidence = bool(scene_cfg.get("wet_road_cap_require_low_risk_evidence", True))
+        scene_cap_visual_ok = (
+            not require_low_risk_evidence
+            or (
+                coverage_pct <= scene_max_coverage_pct
+                and near_coverage_pct <= scene_max_near_coverage_pct
+                and common_low_risk_scene
+            )
+        )
+        scene_cap_applied = bool(
+            scene_cap_enabled
+            and scene_wet_probability is not None
+            and scene_wet_probability >= scene_wet_threshold
+            and scene_cap_visual_ok
+        )
 
         features["primary_no_water_guard_status"] = self._guard_status(probability, primary_match, primary_corroborated)
         features["primary_no_water_guard_corroborated"] = bool(primary_corroborated)
@@ -792,8 +883,21 @@ class SegformerYoloDepthV2Pipeline:
         features["no_water_guard_corroborated"] = bool(corroborated)
         features["secondary_no_water_override"] = bool(wet_road_corroborated)
         features["no_water_guard_blocked_by_flood_evidence"] = bool((primary_match or wet_road_match) and not corroborated)
+        features["road_scene_wet_road_probability"] = scene_wet_probability
+        features["road_scene_wet_road_cap_status"] = "applied" if scene_cap_applied else ("blocked_by_flood_evidence" if scene_wet_probability is not None and scene_wet_probability >= scene_wet_threshold else "below_threshold")
 
         if not corroborated:
+            if scene_cap_applied:
+                capped_depth_cm = round(min(float(depth_cm), scene_cap_cm), 2)
+                features["road_scene_wet_road_cap_applied"] = True
+                features["final_output_reason"] = (
+                    f"four-class road-scene model predicted wet_road with probability {scene_wet_probability:.3f}; "
+                    f"low-risk visual evidence capped depth from {depth_cm:.2f} cm to {capped_depth_cm:.2f} cm."
+                )
+                features["final_aggregation_source"] = "road_scene_wet_road_cap"
+                features["review_required"] = False
+                features["review_reason"] = ""
+                return capped_depth_cm, round(float(max(confidence, scene_wet_probability)), 4), self._action_for_final_depth(capped_depth_cm, features, action)
             return depth_cm, confidence, action
 
         use_wet_road_guard = wet_road_corroborated and not primary_corroborated
@@ -1752,6 +1856,7 @@ class SegformerYoloDepthV2Pipeline:
 
         no_water_probability = self._no_water_guard_signal(image_rgb)
         wet_road_no_water_probability = self._wet_road_no_water_guard_signal(image_rgb)
+        road_scene_probabilities = self._road_scene_classifier_signal(image_rgb)
         trace.append(
             {
                 "stage": "No-Water Guard",
@@ -1770,6 +1875,16 @@ class SegformerYoloDepthV2Pipeline:
                 }
             )
 
+        if road_scene_probabilities is not None:
+            scene_name = max(road_scene_probabilities, key=road_scene_probabilities.get)
+            trace.append(
+                {
+                    "stage": "Road Scene Classifier",
+                    "backend": self._road_scene_backend,
+                    "status": "advisory",
+                    "summary": f"scene={scene_name} probability={road_scene_probabilities[scene_name]:.3f}",
+                }
+            )
         efficientnet_depth_cm = self._efficientnet_depth_signal(image_rgb)
         if efficientnet_depth_cm is not None:
             trace.append(
@@ -1866,6 +1981,10 @@ class SegformerYoloDepthV2Pipeline:
         features["secondary_no_water_probability"] = wet_road_no_water_probability
         features["wet_road_guard_backend"] = self._wet_road_guard_backend
         features["no_water_guard_backend"] = self._no_water_backend
+        features["road_scene_classifier_backend"] = self._road_scene_backend
+        features["road_scene_probabilities"] = road_scene_probabilities
+        if road_scene_probabilities is not None:
+            features["road_scene_prediction"] = max(road_scene_probabilities, key=road_scene_probabilities.get)
         if teacher_features:
             features["depth_teacher_available_count"] = int(teacher_meta.get("available_teacher_count", 0) or 0)
             features["depth_teacher_total_count"] = int(teacher_meta.get("total_teachers", 3) or 3)

@@ -1,0 +1,78 @@
+{
+  "validation": {
+    "loss": 0.46029796436721204,
+    "accuracy": 0.8431372549019608,
+    "macro_recall": 0.8263888888888888,
+    "class_recall": {
+      "dry_road": 1.0,
+      "wet_road": 0.75,
+      "shallow_flood": 0.6666666666666666,
+      "meaningful_flood": 0.8888888888888888
+    },
+    "confusion_matrix": [
+      [
+        7,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        6,
+        2,
+        0
+      ],
+      [
+        0,
+        1,
+        6,
+        2
+      ],
+      [
+        1,
+        0,
+        2,
+        24
+      ]
+    ],
+    "samples": 51
+  },
+  "test": {
+    "loss": 0.7496297846710871,
+    "accuracy": 0.7936507936507936,
+    "macro_recall": 0.7477272727272727,
+    "class_recall": {
+      "dry_road": 1.0,
+      "wet_road": 0.5454545454545454,
+      "shallow_flood": 0.5454545454545454,
+      "meaningful_flood": 0.9
+    },
+    "confusion_matrix": [
+      [
+        11,
+        0,
+        0,
+        0
+      ],
+      [
+        3,
+        6,
+        2,
+        0
+      ],
+      [
+        3,
+        2,
+        6,
+        0
+      ],
+      [
+        1,
+        0,
+        2,
+        27
+      ]
+    ],
+    "samples": 63
+  }
+}

@@ -161,6 +161,8 @@ def summarize_event_result(result: dict[str, Any], image_name: str | None = None
     model_signals = structured.get("model_signals") or []
     agreement_status = structured.get("model_agreement_status")
     final_reason = structured.get("final_output_reason")
+    road_scene_prediction = structured.get("road_scene_prediction")
+    road_scene_probabilities = structured.get("road_scene_probabilities") or {}
 
     print("\n" + "=" * 60)
     print("FINAL DECISION")
@@ -177,6 +179,11 @@ def summarize_event_result(result: dict[str, Any], image_name: str | None = None
     print(f"Confidence: {confidence_pct:.2f}%")
     if agreement_status:
         print(f"Model agreement: {agreement_status}")
+    if road_scene_prediction:
+        probability_text = ", ".join(
+            f"{name}={float(value):.1%}" for name, value in road_scene_probabilities.items()
+        )
+        print(f"Road scene: {road_scene_prediction} ({probability_text})")
     if final_reason:
         print(f"Why this final output: {final_reason}")
     print("\nEVIDENCE SUMMARY")
