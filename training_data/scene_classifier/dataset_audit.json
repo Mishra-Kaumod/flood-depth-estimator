@@ -1,0 +1,48 @@
+{
+  "source_manifest": "C:\\Users\\Shweatlana Mahapatra\\Desktop\\Force For Good\\flood-depth-estimator-v3-SM_Sep\\training_data\\road_scene_classifier\\scene_classifier_manifest.csv",
+  "output_dir": "C:\\Users\\Shweatlana Mahapatra\\Desktop\\Force For Good\\flood-depth-estimator-v3-SM_Sep\\training_data\\scene_classifier",
+  "seed": 42,
+  "total_counts": {
+    "dry_road": 59,
+    "wet_road": 61,
+    "shallow_flood": 66,
+    "meaningful_flood": 190
+  },
+  "split_counts": {
+    "train": {
+      "dry_road": 35,
+      "wet_road": 36,
+      "shallow_flood": 39,
+      "meaningful_flood": 113
+    },
+    "validation": {
+      "dry_road": 6,
+      "wet_road": 6,
+      "shallow_flood": 7,
+      "meaningful_flood": 20
+    },
+    "test": {
+      "dry_road": 18,
+      "wet_road": 19,
+      "shallow_flood": 20,
+      "meaningful_flood": 57
+    }
+  },
+  "test_fraction": {
+    "dry_road": 0.3050847457627119,
+    "wet_road": 0.3114754098360656,
+    "shallow_flood": 0.30303030303030304,
+    "meaningful_flood": 0.3
+  },
+  "duplicate_count": 10,
+  "missing_manifest_paths": [],
+  "shortfalls": {
+    "dry_road": 21,
+    "wet_road": 39,
+    "shallow_flood": 34
+  },
+  "named_wet_road_files_present": {
+    "wet road _11.jpg": true,
+    "wet road _12.jpg": true
+  }
+}

@@ -163,6 +163,15 @@ inference:
     enabled: true
     model_path: "models/candidate/road_scene_classifier_4class_shallow_v2.pth"
     device: "cpu"
+    scene_guard_enabled: false
+    scene_guard_confidence_threshold: 0.80
+    scene_guard_margin_threshold: 0.15
+    scene_guard_strong_water_coverage_pct: 20.0
+    scene_guard_strong_near_water_coverage_pct: 12.0
+    scene_guard_strong_submersion: 0.35
+    scene_guard_max_reference_submersion: 0.20
+    scene_guard_max_water_coverage_pct: 12.0
+    scene_guard_max_near_water_coverage_pct: 8.0
     advisory_only: false
     wet_road_cap_enabled: true
     wet_road_cap_threshold: 0.995

@@ -82,22 +82,42 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, device:
     loss_total = 0.0
     total = 0
     confusion = np.zeros((len(CLASS_NAMES), len(CLASS_NAMES)), dtype=int)
+    confidences: list[float] = []
+    margins: list[float] = []
     with torch.no_grad():
         for images, labels in loader:
             images, labels = images.to(device), labels.to(device)
             logits = model(images)
             loss_total += criterion(logits, labels).item() * labels.size(0)
             total += labels.size(0)
+            probabilities = torch.softmax(logits, dim=1)
+            top_values = torch.topk(probabilities, k=min(2, len(CLASS_NAMES)), dim=1).values
+            confidences.extend(top_values[:, 0].cpu().tolist())
+            margins.extend((top_values[:, 0] - top_values[:, 1]).cpu().tolist())
             predictions = logits.argmax(dim=1)
             for actual, predicted in zip(labels.cpu().tolist(), predictions.cpu().tolist()):
                 confusion[actual, predicted] += 1
     recalls = np.divide(np.diag(confusion), np.maximum(1, confusion.sum(axis=1)))
+    precisions = np.divide(np.diag(confusion), np.maximum(1, confusion.sum(axis=0)))
     return {
         "loss": loss_total / max(1, total),
         "accuracy": float(np.trace(confusion) / max(1, total)),
         "macro_recall": float(recalls.mean()),
         "class_recall": dict(zip(CLASS_NAMES, recalls.tolist())),
+        "class_precision": dict(zip(CLASS_NAMES, precisions.tolist())),
         "confusion_matrix": confusion.tolist(),
+        "confidence_summary": {
+            "mean": float(np.mean(confidences)) if confidences else 0.0,
+            "p10": float(np.percentile(confidences, 10)) if confidences else 0.0,
+            "p50": float(np.percentile(confidences, 50)) if confidences else 0.0,
+            "p90": float(np.percentile(confidences, 90)) if confidences else 0.0,
+        },
+        "margin_summary": {
+            "mean": float(np.mean(margins)) if margins else 0.0,
+            "p10": float(np.percentile(margins, 10)) if margins else 0.0,
+            "p50": float(np.percentile(margins, 50)) if margins else 0.0,
+            "p90": float(np.percentile(margins, 90)) if margins else 0.0,
+        },
         "samples": total,
     }
 
@@ -190,8 +210,8 @@ def main(args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a four-class MobileNetV3 road-scene classifier")
-    parser.add_argument("--data-dir", default="training_data/road_scene_classifier")
-    parser.add_argument("--output", default="models/candidate/road_scene_classifier_4class_initial.pth")
+    parser.add_argument("--data-dir", default="training_data/scene_classifier")
+    parser.add_argument("--output", default="models/candidate/road_scene_classifier_4class_scene_guard.pth")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--learning-rate", type=float, default=1e-4)

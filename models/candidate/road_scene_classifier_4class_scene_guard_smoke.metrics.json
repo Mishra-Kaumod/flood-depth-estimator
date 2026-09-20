@@ -1,0 +1,78 @@
+{
+  "validation": {
+    "loss": 1.3929686301793807,
+    "accuracy": 0.1794871794871795,
+    "macro_recall": 0.25,
+    "class_recall": {
+      "dry_road": 0.0,
+      "wet_road": 0.0,
+      "shallow_flood": 1.0,
+      "meaningful_flood": 0.0
+    },
+    "confusion_matrix": [
+      [
+        0,
+        0,
+        6,
+        0
+      ],
+      [
+        0,
+        0,
+        6,
+        0
+      ],
+      [
+        0,
+        0,
+        7,
+        0
+      ],
+      [
+        0,
+        0,
+        20,
+        0
+      ]
+    ],
+    "samples": 39
+  },
+  "test": {
+    "loss": 1.410573403040568,
+    "accuracy": 0.15789473684210525,
+    "macro_recall": 0.25,
+    "class_recall": {
+      "dry_road": 1.0,
+      "wet_road": 0.0,
+      "shallow_flood": 0.0,
+      "meaningful_flood": 0.0
+    },
+    "confusion_matrix": [
+      [
+        18,
+        0,
+        0,
+        0
+      ],
+      [
+        19,
+        0,
+        0,
+        0
+      ],
+      [
+        20,
+        0,
+        0,
+        0
+      ],
+      [
+        57,
+        0,
+        0,
+        0
+      ]
+    ],
+    "samples": 114
+  }
+}

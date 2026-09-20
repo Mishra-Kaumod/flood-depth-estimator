@@ -24,6 +24,7 @@ from PIL import Image
 from torchvision import models, transforms
 
 from src.reference_depth_estimator import ReferenceDepthEstimator
+from src.scene_guard import evaluate_scene_guard
 from src.settings import load_settings_dict
 from src.water_region_detector import WaterRegionDetector
 
@@ -797,9 +798,49 @@ class SegformerYoloDepthV2Pipeline:
         action: str,
         features: Dict[str, Any],
     ) -> Tuple[float, float, str]:
+        road_scene_probabilities = features.get("road_scene_probabilities") or {}
+        try:
+            scene_cfg = load_settings_dict().get("inference", {}).get("road_scene_classifier", {})
+        except Exception:
+            scene_cfg = {}
+
+        scene_decision = evaluate_scene_guard(road_scene_probabilities, depth_cm, features, scene_cfg)
+        if scene_decision is not None:
+            features.update(
+                {
+                    "road_scene_prediction": scene_decision["scene"],
+                    "road_scene_top_probability": scene_decision["probability"],
+                    "road_scene_runner_up_probability": scene_decision["runner_up_probability"],
+                    "road_scene_probability_margin": scene_decision["margin"],
+                    "road_scene_guard_confident": scene_decision["confident"],
+                    "road_scene_guard_low_risk_visuals": scene_decision["low_risk_visuals"],
+                    "road_scene_guard_strong_flood_evidence": scene_decision["strong_flood_evidence"],
+                    "road_scene_guard_status": scene_decision["status"],
+                    "review_required": scene_decision["review_required"],
+                    "review_reason": scene_decision["review_reason"],
+                }
+            )
+            if scene_decision["status"] == "no_flood":
+                features["road_scene_guard_applied"] = True
+                features["no_water_guard_applied"] = True
+                features["water_present_overridden_by_no_water_guard"] = True
+                features["final_aggregation_source"] = "road_scene_guard"
+                features["final_output_reason"] = (
+                    f"Road-scene classifier confidently predicted {scene_decision['scene']} with probability "
+                    f"{scene_decision['probability']:.3f}; low-risk visual evidence forced depth to 0.00 cm."
+                )
+                return 0.0, round(float(max(confidence, scene_decision["probability"])), 4), self._action_for_final_depth(0.0, features, action)
+            if scene_decision["status"] == "flood_pass_through":
+                features["road_scene_guard_applied"] = True
+                features["final_output_reason"] = (
+                    f"Road-scene classifier confidently predicted {scene_decision['scene']} with probability "
+                    f"{scene_decision['probability']:.3f}; normal depth pipeline output was preserved."
+                )
+                return depth_cm, round(float(max(confidence, scene_decision["probability"])), 4), action
+            return depth_cm, confidence, action
+
         probability = features.get("no_water_probability")
         wet_road_probability = features.get("wet_road_no_water_probability", features.get("secondary_no_water_probability"))
-        road_scene_probabilities = features.get("road_scene_probabilities") or {}
         scene_wet_probability = None
         if isinstance(road_scene_probabilities, dict) and road_scene_probabilities.get("wet_road") is not None:
             scene_wet_probability = float(road_scene_probabilities["wet_road"])
@@ -810,11 +851,6 @@ class SegformerYoloDepthV2Pipeline:
             cfg = load_settings_dict().get("inference", {}).get("no_water_guard", {})
         except Exception:
             cfg = {}
-        try:
-            scene_cfg = load_settings_dict().get("inference", {}).get("road_scene_classifier", {})
-        except Exception:
-            scene_cfg = {}
-
         primary_probability = float(probability) if probability is not None else 0.0
         threshold = float(cfg.get("no_water_threshold", 0.92))
         wet_road_threshold = float(cfg.get("wet_road_guard_threshold", cfg.get("secondary_override_threshold", 1.0)))
@@ -852,7 +888,7 @@ class SegformerYoloDepthV2Pipeline:
             and common_low_risk_scene
         )
         corroborated = primary_corroborated or wet_road_corroborated or background_mask_only
-        scene_cap_enabled = bool(scene_cfg.get("wet_road_cap_enabled", False))
+        scene_cap_enabled = bool(scene_cfg.get("wet_road_cap_enabled", False)) and not bool(scene_cfg.get("scene_guard_enabled", True))
         scene_wet_threshold = float(scene_cfg.get("wet_road_cap_threshold", 0.995))
         scene_cap_cm = float(scene_cfg.get("wet_road_cap_cm", 3.0))
         scene_max_coverage_pct = float(scene_cfg.get("wet_road_cap_max_water_coverage_pct", 12.0))
@@ -2089,6 +2125,8 @@ class SegformerYoloDepthV2Pipeline:
         return {
             "depth_cm": depth_cm,
             "confidence": confidence,
+            "review_required": bool(features.get("review_required", False)),
+            "review_reason": features.get("review_reason", ""),
             "severity": severity,
             "method": "segformer_yolov8_depthv2_fusion",
             "visual_cues": visual_cues,
