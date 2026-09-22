@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import inspect
 import logging
+import math
 import os
 import platform
 import tempfile
@@ -355,20 +356,25 @@ class TeacherEnsemble:
         except Exception as exc:
             raise RuntimeError(f"depth_pro import failed: {exc}") from exc
 
+        resolved_checkpoint = self._resolve_depth_pro_checkpoint(model_ref, checkpoint)
         create_fn = getattr(depth_pro, "create_model_and_transforms", None)
         if create_fn is None:
             raise RuntimeError("depth_pro.create_model_and_transforms not found")
 
         kwargs: Dict[str, Any] = {}
         sig = inspect.signature(create_fn)
+        if "config" in sig.parameters:
+            cfg_obj = self._build_depth_pro_config(resolved_checkpoint)
+            if cfg_obj is not None:
+                kwargs["config"] = cfg_obj
         if "device" in sig.parameters:
             kwargs["device"] = torch.device(self.device)
         if "precision" in sig.parameters and self.use_fp16 and self.device == "cuda":
             kwargs["precision"] = torch.float16
-        if checkpoint:
+        if resolved_checkpoint:
             for k in ("checkpoint", "checkpoint_uri", "checkpoint_path"):
                 if k in sig.parameters:
-                    kwargs[k] = checkpoint
+                    kwargs[k] = resolved_checkpoint
                     break
 
         created = create_fn(**kwargs)
@@ -381,7 +387,68 @@ class TeacherEnsemble:
         if hasattr(model, "eval"):
             model.eval()
 
-        return {"kind": "depth_pro", "module": depth_pro, "model": model, "transform": transform, "model_ref": model_ref, "checkpoint": checkpoint}
+        return {
+            "kind": "depth_pro",
+            "module": depth_pro,
+            "model": model,
+            "transform": transform,
+            "model_ref": model_ref,
+            "checkpoint": resolved_checkpoint,
+        }
+
+    def _resolve_depth_pro_checkpoint(self, model_ref: str, checkpoint: Optional[str]) -> str:
+        if checkpoint:
+            ckpt_path = Path(checkpoint)
+            if not ckpt_path.exists():
+                raise RuntimeError(f"DepthPro checkpoint not found: {checkpoint}")
+            return str(ckpt_path)
+
+        if not self.allow_download:
+            raise RuntimeError(
+                "DepthPro checkpoint is not configured and downloads are disabled. "
+                "Set FLOOD_DEPTH_PRO_CHECKPOINT or enable FLOOD_DEPTH_TEACHERS_ALLOW_DOWNLOAD."
+            )
+
+        try:
+            from huggingface_hub import hf_hub_download
+        except Exception as exc:
+            raise RuntimeError(
+                f"DepthPro checkpoint download requires huggingface_hub: {exc}"
+            ) from exc
+
+        cache_dir = os.getenv("HUGGINGFACE_HUB_CACHE") or os.getenv("HF_HOME") or os.getenv("TRANSFORMERS_CACHE")
+        download_errors = []
+        for filename in ("depth_pro.pt", "checkpoints/depth_pro.pt"):
+            try:
+                return hf_hub_download(
+                    repo_id=model_ref,
+                    filename=filename,
+                    local_files_only=False,
+                    cache_dir=cache_dir,
+                )
+            except Exception as exc:
+                download_errors.append(f"{filename}: {exc}")
+
+        raise RuntimeError(
+            "Unable to resolve DepthPro checkpoint from model repository. "
+            + " | ".join(download_errors)
+        )
+
+    @staticmethod
+    def _build_depth_pro_config(checkpoint_path: str) -> Optional[Any]:
+        try:
+            from depth_pro import depth_pro as depth_pro_impl  # type: ignore
+        except Exception:
+            return None
+
+        default_cfg = getattr(depth_pro_impl, "DEFAULT_MONODEPTH_CONFIG_DICT", None)
+        if default_cfg is None:
+            return None
+
+        cfg_obj = copy.deepcopy(default_cfg)
+        if hasattr(cfg_obj, "checkpoint_uri"):
+            setattr(cfg_obj, "checkpoint_uri", checkpoint_path)
+        return cfg_obj
 
     def _load_metric3d(self, model_ref: str, variant: str, checkpoint: Optional[str]) -> Dict[str, Any]:
         if not model_ref:
@@ -406,6 +473,7 @@ class TeacherEnsemble:
                         model = model.to(self.device)
                     if hasattr(model, "eval"):
                         model.eval()
+                    self._patch_metric3d_for_cpu(model)
                     return {"kind": "metric3d_pkg", "module": metric3d, "model": model, "transform": transform, "model_ref": model_ref, "variant": variant, "checkpoint": checkpoint}
         except Exception:
             pass
@@ -418,12 +486,34 @@ class TeacherEnsemble:
                 model.load_state_dict(sd, strict=False)
             model = model.to(self.device)
             model.eval()
+            self._patch_metric3d_for_cpu(model)
             return {"kind": "metric3d_hub", "module": None, "model": model, "transform": None, "model_ref": model_ref, "variant": variant, "checkpoint": checkpoint}
         except Exception as exc:
             raise RuntimeError(
                 "Metric3D load failed. Install official Metric3D dependency or configure a valid checkpoint. "
                 f"Details: {exc}"
             ) from exc
+
+    def _patch_metric3d_for_cpu(self, model: Any) -> None:
+        if self.device != "cpu":
+            return
+        depth_model = getattr(model, "depth_model", None)
+        decoder = getattr(depth_model, "decoder", None)
+        if decoder is None or not hasattr(decoder, "get_bins"):
+            return
+
+        def _get_bins_cpu(dec_self: Any, bins_num: int) -> torch.Tensor:
+            param = next(dec_self.parameters(), None)
+            target_device = param.device if param is not None else torch.device("cpu")
+            depth_bins_vec = torch.linspace(
+                math.log(float(dec_self.min_val)),
+                math.log(float(dec_self.max_val)),
+                int(bins_num),
+                device=target_device,
+            )
+            return torch.exp(depth_bins_vec)
+
+        decoder.get_bins = _get_bins_cpu.__get__(decoder, decoder.__class__)
 
     def _predict_transformers_depth(self, payload: Dict[str, Any], image_rgb: np.ndarray) -> np.ndarray:
         processor = payload["processor"]
@@ -505,24 +595,92 @@ class TeacherEnsemble:
     def _predict_metric3d(self, payload: Dict[str, Any], image_rgb: np.ndarray) -> np.ndarray:
         model = payload["model"]
         transform = payload.get("transform")
-
         if callable(transform):
             x = transform(Image.fromarray(image_rgb))
-        else:
-            x = torch.from_numpy(image_rgb.astype(np.float32) / 255.0).permute(2, 0, 1)
+            x = self._tensorize_depth_input(x)
+            out = self._run_metric3d_model(model, x)
+            depth = self._extract_depth_tensor(out)
+            return self._resize_depth_to_image(depth, image_rgb.shape[:2])
 
+        x, pad_info = self._preprocess_metric3d_image(image_rgb)
+        out = self._run_metric3d_model(model, x)
+        depth = self._extract_depth_tensor(out)
+        if depth.ndim == 4:
+            depth = depth[0, 0]
+        elif depth.ndim == 3:
+            depth = depth[0]
+        if depth.ndim != 2:
+            raise RuntimeError(f"Metric3D returned unsupported depth shape: {tuple(depth.shape)}")
+        top, bottom, left, right = pad_info
+        h, w = depth.shape
+        depth = depth[top : h - bottom, left : w - right]
+        return self._resize_depth_to_image(depth, image_rgb.shape[:2])
+
+    def _run_metric3d_model(self, model: Any, x: torch.Tensor) -> Any:
+        input_map = {"input": x}
+        infer_fn = getattr(model, "inference", None)
+        if not callable(infer_fn):
+            infer_fn = getattr(model, "infer", None)
+        if callable(infer_fn):
+            with torch.inference_mode():
+                return infer_fn(input_map)
+        with torch.inference_mode():
+            try:
+                return model(input_map)
+            except TypeError as exc:
+                if "**" not in str(exc):
+                    raise
+                return model(x)
+
+    def _tensorize_depth_input(self, x: Any) -> torch.Tensor:
         if isinstance(x, np.ndarray):
             x = torch.from_numpy(x)
+        if not torch.is_tensor(x):
+            raise RuntimeError(f"Unsupported teacher transform output type: {type(x)}")
         if x.ndim == 3:
             x = x.unsqueeze(0)
         x = x.to(self.device)
         if self.use_fp16 and self.device == "cuda" and x.dtype == torch.float32:
             x = x.half()
+        return x
 
-        with torch.inference_mode():
-            out = model(x)
-        depth = self._extract_depth_tensor(out)
-        return self._resize_depth_to_image(depth, image_rgb.shape[:2])
+    def _preprocess_metric3d_image(self, image_rgb: np.ndarray) -> Tuple[torch.Tensor, Tuple[int, int, int, int]]:
+        h, w = image_rgb.shape[:2]
+        variant = str(self._cfg.get("Metric3D", {}).get("variant", "")).lower()
+        input_h, input_w = (616, 1064) if "vit" in variant else (544, 1216)
+        scale = min(float(input_h) / float(h), float(input_w) / float(w))
+        resize_h = max(1, int(round(h * scale)))
+        resize_w = max(1, int(round(w * scale)))
+
+        tensor = torch.from_numpy(image_rgb).permute(2, 0, 1).float().unsqueeze(0)
+        tensor = F.interpolate(tensor, size=(resize_h, resize_w), mode="bilinear", align_corners=False)
+
+        pad_h = input_h - resize_h
+        pad_w = input_w - resize_w
+        top = pad_h // 2
+        bottom = pad_h - top
+        left = pad_w // 2
+        right = pad_w - left
+
+        mean = torch.tensor([123.675, 116.28, 103.53], dtype=tensor.dtype).view(1, 3, 1, 1)
+        std = torch.tensor([58.395, 57.12, 57.375], dtype=tensor.dtype).view(1, 3, 1, 1)
+        fill = mean.view(3)
+        tensor = F.pad(tensor, (left, right, top, bottom), mode="constant", value=0.0)
+        if left or right or top or bottom:
+            if top:
+                tensor[:, :, :top, :] = fill.view(1, 3, 1, 1)
+            if bottom:
+                tensor[:, :, input_h - bottom :, :] = fill.view(1, 3, 1, 1)
+            if left:
+                tensor[:, :, :, :left] = fill.view(1, 3, 1, 1)
+            if right:
+                tensor[:, :, :, input_w - right :] = fill.view(1, 3, 1, 1)
+
+        tensor = (tensor - mean) / std
+        tensor = tensor.to(self.device)
+        if self.use_fp16 and self.device == "cuda":
+            tensor = tensor.half()
+        return tensor, (top, bottom, left, right)
 
     @staticmethod
     def _extract_depth_tensor(outputs: Any) -> torch.Tensor:

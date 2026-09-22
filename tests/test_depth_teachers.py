@@ -177,8 +177,13 @@ class TestDepthTeachers(unittest.TestCase):
 class TestDepthTeachersIntegration(unittest.TestCase):
     def test_real_teacher_integration(self):
         repo_root = Path(__file__).resolve().parents[1]
-        candidates = list((repo_root / "test_images").glob("*.jpg")) + list((repo_root / "test_images").glob("*.png"))
-        self.assertTrue(len(candidates) > 0, "No test image found under test_images/")
+        candidates = (
+            list((repo_root / "test_images").glob("*.jpg"))
+            + list((repo_root / "test_images").glob("*.png"))
+            + list((repo_root / "training_data" / "images").glob("*.jpg"))
+            + list((repo_root / "training_data" / "images").glob("*.png"))
+        )
+        self.assertTrue(len(candidates) > 0, "No test image found under test_images/ or training_data/images/")
         image_path = candidates[0]
 
         teachers = TeacherEnsemble(device="cpu", lazy_load=True)

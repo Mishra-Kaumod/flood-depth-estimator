@@ -2,11 +2,11 @@
 Stage-aligned flood inference pipeline:
   Stage 1 — SegFormer (water mask)       — always classical
   Stage 2 — YOLOv8   (reference objects) — always classical
-  Stage 3 — Depth Anything V2            — Gemini-enhanced when key present, else proxy
-  Stage 4 — Fusion Engine                — Gemini-enhanced when key present, else math
-  Stage 5 — Calibration / Severity Model — Gemini-enhanced when key present, else math
+  Stage 3 — Depth Anything V2            — model-backed when available, else proxy
+  Stage 4 — Fusion Engine                — learned multimodal checkpoint
+  Stage 5 — Severity Model               — policy mapping from learned depth
 
-Gemini is OPTIONAL for stages 3-5 only.
+Gemini is OPTIONAL as an auxiliary signal only.
 Set GEMINI_API_KEY in env or pass gemini_api_key to the constructor.
 Stages 1 and 2 are always run with the local classical approach regardless of the key.
 """
@@ -25,6 +25,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 from src.middleware.budget_tracker import ApiBudgetConfig, ApiBudgetTracker
 from src.middleware.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
@@ -107,6 +110,68 @@ KNOWN_REFERENCE_LABELS = {
     "vehicle",
 }
 
+
+class _MaskConditionedFusionRegressor(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        import timm
+
+        self.backbone = timm.create_model(
+            "efficientnetv2_rw_s",
+            pretrained=False,
+            num_classes=0,
+            global_pool="avg",
+        )
+        self.vis_proj = nn.Sequential(
+            nn.Linear(1792, 256),
+            nn.SiLU(),
+            nn.LayerNorm(256),
+        )
+        self.obj_mlp = nn.Sequential(
+            nn.Linear(24, 64),
+            nn.SiLU(),
+            nn.LayerNorm(64),
+            nn.Linear(64, 128),
+            nn.SiLU(),
+            nn.LayerNorm(128),
+        )
+        self.geo_mlp = nn.Sequential(
+            nn.Linear(3, 32),
+            nn.SiLU(),
+            nn.LayerNorm(32),
+            nn.Linear(32, 64),
+            nn.SiLU(),
+            nn.LayerNorm(64),
+        )
+        self.fusion = nn.Sequential(
+            nn.Linear(448, 384),
+            nn.SiLU(),
+            nn.LayerNorm(384),
+            nn.Dropout(0.1),
+            nn.Linear(384, 256),
+            nn.SiLU(),
+            nn.LayerNorm(256),
+        )
+        self.depth_head = nn.Linear(256, 1)
+        self.ordinal_head = nn.Linear(256, 5)
+
+    def forward(
+        self,
+        image_tensor: torch.Tensor,
+        object_features: torch.Tensor,
+        geometry_features: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        visual_features = self.backbone(image_tensor)
+        if visual_features.ndim > 2:
+            visual_features = torch.flatten(visual_features, start_dim=1)
+        visual_features = self.vis_proj(visual_features)
+        object_features = self.obj_mlp(object_features)
+        geometry_features = self.geo_mlp(geometry_features)
+        fused = self.fusion(torch.cat([visual_features, object_features, geometry_features], dim=1))
+        depth_logits = self.depth_head(fused).squeeze(1)
+        ordinal_logits = self.ordinal_head(fused)
+        return depth_logits, ordinal_logits
+
 class SegformerYoloDepthV2Pipeline:
     """
     Structured multi-stage pipeline with deterministic stage order.
@@ -129,8 +194,21 @@ class SegformerYoloDepthV2Pipeline:
         # Gemini — stages 3-5 only
         settings = load_settings_dict()
         inference_cfg = settings.get("inference", {})
-        teacher_device = str(inference_cfg.get("device", "cpu")).strip().lower()
-        self.teacher_ensemble = TeacherEnsemble(device=teacher_device)
+        depth_teacher_cfg = inference_cfg.get("depth_teachers", {}) if isinstance(inference_cfg, dict) else {}
+        teachers_enabled_cfg = bool(depth_teacher_cfg.get("enabled", False)) if isinstance(depth_teacher_cfg, dict) else False
+        teachers_enabled_env = os.environ.get("FLOOD_DEPTH_TEACHERS_ENABLED", "").strip().lower()
+        if teachers_enabled_env in {"1", "true", "yes", "on"}:
+            self.teacher_ensemble = TeacherEnsemble(device=str(inference_cfg.get("device", "cpu")).strip().lower())
+            logger.info("Depth teacher ensemble enabled")
+        elif teachers_enabled_env in {"0", "false", "no", "off"}:
+            self.teacher_ensemble = None
+            logger.info("Depth teacher ensemble disabled via FLOOD_DEPTH_TEACHERS_ENABLED")
+        elif teachers_enabled_cfg:
+            self.teacher_ensemble = TeacherEnsemble(device=str(inference_cfg.get("device", "cpu")).strip().lower())
+            logger.info("Depth teacher ensemble enabled via config")
+        else:
+            self.teacher_ensemble = None
+            logger.info("Depth teacher ensemble disabled")
         gemini_cfg = inference_cfg.get("gemini", {})
         retry_cfg = gemini_cfg.get("retry", {})
         circuit_cfg = gemini_cfg.get("circuit_breaker", {})
@@ -164,6 +242,26 @@ class SegformerYoloDepthV2Pipeline:
         self._gemini_quota_per_minute = int(budget_cfg.get("verified_quota_per_minute", 0))
         if self._gemini_key:
             self._init_gemini()
+
+        # Learned fusion checkpoint used for final depth prediction.
+        self._torch_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._fusion_model: Optional[_MaskConditionedFusionRegressor] = None
+        self._fusion_model_path = self._resolve_fusion_model_path(inference_cfg)
+        self._fusion_image_size = 384
+        self._fusion_target_transform = "identity"
+        self._fusion_load_error: Optional[str] = None
+        self._load_learned_fusion_model()
+
+        # Depth Anything V2 (metric depth feature source). Falls back to proxy if unavailable.
+        self._depthv2_processor: Optional[Any] = None
+        self._depthv2_model: Optional[Any] = None
+        self._depthv2_model_ref = str(
+            depth_teacher_cfg.get("depth_anything_v2", {}).get("model", "depth-anything/Depth-Anything-V2-Small-hf")
+        ).strip()
+        self._depthv2_revision = str(depth_teacher_cfg.get("depth_anything_v2", {}).get("revision", "main")).strip() or None
+        allow_download_env = os.environ.get("FLOOD_DEPTH_TEACHERS_ALLOW_DOWNLOAD", "").strip().lower()
+        self._depthv2_allow_download = allow_download_env in {"1", "true", "yes", "on"}
+        self._depthv2_init_attempted = False
 
     def _init_gemini(self) -> None:
         try:
@@ -230,6 +328,57 @@ class SegformerYoloDepthV2Pipeline:
         except json.JSONDecodeError:
             return None
         return parsed if isinstance(parsed, dict) else None
+
+    @staticmethod
+    def _resolve_fusion_model_path(inference_cfg: Dict[str, Any]) -> Path:
+        configured = str(inference_cfg.get("fusion_model_path", "")).strip()
+        if configured:
+            candidate = Path(configured).expanduser()
+            if not candidate.is_absolute():
+                candidate = (Path(__file__).resolve().parent.parent / candidate).resolve()
+            return candidate
+        return (Path(__file__).resolve().parent.parent / "models" / "FloodDepth-MaskConditionedFusion.pth").resolve()
+
+    def _load_learned_fusion_model(self) -> None:
+        if not self._fusion_model_path.exists():
+            self._fusion_load_error = f"checkpoint not found at {self._fusion_model_path}"
+            logger.warning(
+                "Learned fusion checkpoint missing at %s; depth will use reference fallback.",
+                self._fusion_model_path,
+            )
+            return
+        try:
+            checkpoint = torch.load(self._fusion_model_path, map_location=self._torch_device, weights_only=False)
+        except TypeError:
+            checkpoint = torch.load(self._fusion_model_path, map_location=self._torch_device)
+        except Exception as exc:
+            self._fusion_load_error = str(exc)
+            logger.warning("Failed to load learned fusion checkpoint (%s)", exc)
+            return
+
+        if isinstance(checkpoint, dict):
+            state_dict = checkpoint.get("model_state_dict", checkpoint)
+            self._fusion_image_size = int(checkpoint.get("image_size", self._fusion_image_size))
+            self._fusion_target_transform = str(checkpoint.get("target_transform", "identity")).strip().lower()
+        else:
+            state_dict = checkpoint
+
+        try:
+            model = _MaskConditionedFusionRegressor().to(self._torch_device)
+            model.load_state_dict(state_dict, strict=True)
+            model.eval()
+            self._fusion_model = model
+            self._fusion_load_error = None
+            logger.info(
+                "Loaded learned fusion checkpoint from %s (image_size=%s, target_transform=%s)",
+                self._fusion_model_path,
+                self._fusion_image_size,
+                self._fusion_target_transform,
+            )
+        except Exception as exc:
+            self._fusion_model = None
+            self._fusion_load_error = str(exc)
+            logger.warning("Learned fusion checkpoint is incompatible (%s)", exc)
 
     def _load_yolo_if_available(self) -> None:
         if not self.yolo_weights_path.exists():
@@ -360,26 +509,81 @@ class SegformerYoloDepthV2Pipeline:
                 logger.warning("YOLO runtime failed, reverting to contour proxy: %s", exc)
         return self._extract_reference_from_contours(image_rgb, water_mask), "contour-proxy"
 
-    def _depth_anything_v2_dense_map(self, image_rgb: np.ndarray, water_mask: np.ndarray) -> np.ndarray:
+    def _load_depth_anything_v2_if_available(self) -> None:
+        if self._depthv2_init_attempted:
+            return
+        self._depthv2_init_attempted = True
+        if not self._depthv2_model_ref:
+            logger.info("Depth Anything V2 model identifier missing; using dense-depth proxy.")
+            return
+        try:
+            from transformers import AutoImageProcessor, AutoModelForDepthEstimation
+        except Exception as exc:
+            logger.info("transformers unavailable (%s); using dense-depth proxy.", exc)
+            return
+        try:
+            kwargs: Dict[str, Any] = {"local_files_only": not self._depthv2_allow_download}
+            if self._depthv2_revision:
+                kwargs["revision"] = self._depthv2_revision
+            self._depthv2_processor = AutoImageProcessor.from_pretrained(self._depthv2_model_ref, **kwargs)
+            self._depthv2_model = AutoModelForDepthEstimation.from_pretrained(self._depthv2_model_ref, **kwargs)
+            self._depthv2_model = self._depthv2_model.to(self._torch_device)
+            self._depthv2_model.eval()
+            logger.info("Loaded Depth Anything V2 model for dense metric depth: %s", self._depthv2_model_ref)
+        except Exception as exc:
+            logger.warning("Depth Anything V2 load failed (%s); using dense-depth proxy.", exc)
+            self._depthv2_model = None
+            self._depthv2_processor = None
+
+    def _depth_anything_v2_dense_map(
+        self, image_rgb: np.ndarray, water_mask: np.ndarray
+    ) -> Tuple[np.ndarray, str, bool]:
         """
-        Depth Anything V2 stage-compatible dense map.
-        Uses a deterministic proxy map to keep the stage executable in constrained envs.
+        Returns (depth_map, backend_name, is_metric_depth_map).
+        Metric maps preserve model output scale (no per-image min-max normalization).
         """
-        h, w = image_rgb.shape[:2]
+        self._load_depth_anything_v2_if_available()
+        if self._depthv2_model is not None and self._depthv2_processor is not None:
+            try:
+                inputs = self._depthv2_processor(images=image_rgb, return_tensors="pt")
+                tensor_inputs: Dict[str, Any] = {}
+                for k, v in inputs.items():
+                    tensor_inputs[k] = v.to(self._torch_device) if torch.is_tensor(v) else v
+                with torch.inference_mode():
+                    output = self._depthv2_model(**tensor_inputs)
+                depth_tensor = getattr(output, "predicted_depth", None)
+                if depth_tensor is None:
+                    depth_tensor = getattr(output, "depth", None)
+                if depth_tensor is None:
+                    raise RuntimeError("Depth Anything output does not include predicted_depth/depth")
+                if depth_tensor.ndim == 3:
+                    depth_tensor = depth_tensor.unsqueeze(1)
+                depth_tensor = F.interpolate(
+                    depth_tensor,
+                    size=image_rgb.shape[:2],
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                depth_map = depth_tensor.squeeze().detach().cpu().numpy().astype(np.float32)
+                depth_map = np.where(np.isfinite(depth_map), depth_map, 0.0)
+                depth_map = np.maximum(depth_map, 0.0)
+                return depth_map, "depth-anything-v2", True
+            except Exception as exc:
+                logger.warning("Depth Anything V2 inference failed (%s); falling back to proxy.", exc)
+
+        h, _w = image_rgb.shape[:2]
         gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
         smooth = cv2.GaussianBlur(gray, (0, 0), 1.2)
         inv_luma = 1.0 - smooth
         vertical_prior = np.linspace(0.0, 1.0, h, dtype=np.float32).reshape(h, 1)
-
         texture = np.abs(cv2.Laplacian(gray, cv2.CV_32F))
         tex_max = float(np.max(texture))
         if tex_max > 1e-6:
             texture = texture / tex_max
-
         dense = (0.50 * vertical_prior) + (0.35 * inv_luma) + (0.15 * texture)
         dense = np.clip(dense, 0.0, 1.0)
         depth_map = np.where(water_mask > 0, dense, dense * 0.35)
-        return depth_map.astype(np.float32)
+        return depth_map.astype(np.float32), "dense-depth-proxy", False
 
     def _fusion_engine(
         self,
@@ -388,7 +592,8 @@ class SegformerYoloDepthV2Pipeline:
         references: List[ReferenceObject],
         dense_depth_map: np.ndarray,
         reference_estimate: Dict[str, Any],
-    ) -> Dict[str, float]:
+        dense_depth_is_metric: bool,
+    ) -> Dict[str, Any]:
         water_pixels = dense_depth_map[water_mask > 0]
         if water_pixels.size == 0:
             water_pixels = dense_depth_map.reshape(-1)
@@ -404,47 +609,177 @@ class SegformerYoloDepthV2Pipeline:
             "dense_depth_p90": round(float(np.percentile(water_pixels, 90)), 4),
             "dense_depth_p95": round(float(np.percentile(water_pixels, 95)), 4),
             "reference_depth_cm": round(float(reference_estimate.get("depth_cm", 0.0)), 2),
+            "dense_depth_is_metric": 1.0 if dense_depth_is_metric else 0.0,
         }
         return features
 
-    def _calibration_severity_model(self, features: Dict[str, float]) -> Tuple[float, float, str]:
-        coverage = features["water_coverage_pct"] / 100.0
-        dense_depth_cm = features["dense_depth_p90"] * 120.0
-        yolo_count = int(features.get("reference_count", 0))
+    @staticmethod
+    def _normalize_zero_one(value: float, scale_if_percent: bool = False) -> float:
+        v = float(value)
+        if scale_if_percent and v > 1.0:
+            v = v / 100.0
+        return float(np.clip(v, 0.0, 1.0))
 
-        # Reference object depth ONLY contributes when YOLO detected known objects.
-        # When reference_count == 0 the CV estimator result is unreliable without a
-        # real-world scale anchor, so it is excluded from the depth formula entirely.
-        if yolo_count > 0:
-            reference_depth_cm = features["reference_depth_cm"]
+    @staticmethod
+    def _normalize_depth_feature(depth_value: float, is_metric: bool) -> float:
+        val = max(0.0, float(depth_value))
+        if is_metric:
+            return float(np.clip(np.log1p(val) / np.log1p(5.0), 0.0, 1.0))
+        return float(np.clip(val, 0.0, 1.0))
+
+    def _encode_fusion_image(self, image_rgb: np.ndarray) -> torch.Tensor:
+        size = int(max(64, self._fusion_image_size))
+        resized = cv2.resize(image_rgb, (size, size), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+        std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        normalized = (resized - mean) / std
+        chw = np.transpose(normalized, (2, 0, 1))
+        return torch.from_numpy(chw).unsqueeze(0).to(self._torch_device)
+
+    def _build_object_feature_vector(
+        self,
+        image_rgb: np.ndarray,
+        references: List[ReferenceObject],
+        reference_estimate: Dict[str, Any],
+        water_coverage_pct: float,
+        water_mask: np.ndarray,
+        dense_depth_map: np.ndarray,
+        dense_depth_is_metric: bool,
+        teacher_features: Dict[str, Any],
+    ) -> np.ndarray:
+        h, w = image_rgb.shape[:2]
+        count = len(references)
+        confidences = [float(r.confidence) for r in references]
+        submersions = [float(r.water_submersion_ratio) for r in references]
+        areas = [float(r.area_ratio) for r in references]
+        top_ref = references[0] if references else None
+
+        person_present = 1.0 if any(r.label == "person" for r in references) else 0.0
+        vehicle_present = 1.0 if any(r.label in {"car", "truck", "bus", "motorbike", "motorcycle", "bicycle", "vehicle"} for r in references) else 0.0
+
+        if top_ref is not None:
+            x1, y1, x2, y2 = top_ref.bbox
+            bbox_h = self._normalize_zero_one((y2 - y1) / max(1.0, float(h)))
+            bbox_w = self._normalize_zero_one((x2 - x1) / max(1.0, float(w)))
+            bbox_bottom = self._normalize_zero_one(y2 / max(1.0, float(h)))
+            bbox_cx = self._normalize_zero_one(((x1 + x2) * 0.5) / max(1.0, float(w)))
+            bbox_cy = self._normalize_zero_one(((y1 + y2) * 0.5) / max(1.0, float(h)))
         else:
-            reference_depth_cm = 0.0
+            bbox_h = bbox_w = bbox_bottom = bbox_cx = bbox_cy = 0.0
 
-        if coverage < 0.02:
-            depth_cm = 0.0
-        elif reference_depth_cm > 0:
-            depth_cm = (0.65 * reference_depth_cm) + (0.35 * dense_depth_cm)
+        water_pixels = dense_depth_map[water_mask > 0]
+        if water_pixels.size == 0:
+            water_pixels = dense_depth_map.reshape(-1)
+        dense_p50 = float(np.percentile(water_pixels, 50))
+        dense_p90 = float(np.percentile(water_pixels, 90))
+
+        ref_depth_cm = float(reference_estimate.get("depth_cm", 0.0) or 0.0)
+        ref_depth_valid = 1.0 if ref_depth_cm > 0.0 else 0.0
+        ref_depth_norm = float(np.clip(ref_depth_cm / 200.0, 0.0, 1.0))
+        waterline_norm = self._normalize_zero_one(float(reference_estimate.get("waterline_pct", 0.0) or 0.0), scale_if_percent=True)
+
+        teacher_meta = teacher_features.get("meta", {})
+        teacher_ensemble = teacher_features.get("ensemble", {})
+        teacher_available_ratio = float(
+            teacher_meta.get("available_teacher_count", 0)
+        ) / max(1.0, float(teacher_meta.get("total_teachers", 3)))
+        teacher_agreement = self._normalize_zero_one(float(teacher_ensemble.get("teacher_agreement", 0.0) or 0.0))
+        teacher_spread = self._normalize_zero_one(float(teacher_ensemble.get("teacher_spread", 0.0) or 0.0))
+
+        vector = np.array(
+            [
+                self._normalize_zero_one(float(count) / 5.0),
+                self._normalize_zero_one(max(submersions) if submersions else 0.0),
+                self._normalize_zero_one(float(np.mean(submersions)) if submersions else 0.0),
+                self._normalize_zero_one(max(areas) if areas else 0.0),
+                self._normalize_zero_one(float(np.mean(areas)) if areas else 0.0),
+                self._normalize_zero_one(max(confidences) if confidences else 0.0),
+                self._normalize_zero_one(float(np.mean(confidences)) if confidences else 0.0),
+                ref_depth_norm,
+                ref_depth_valid,
+                person_present,
+                vehicle_present,
+                bbox_h,
+                bbox_w,
+                bbox_bottom,
+                bbox_cx,
+                bbox_cy,
+                waterline_norm,
+                self._normalize_zero_one(water_coverage_pct, scale_if_percent=True),
+                self._normalize_depth_feature(dense_p50, dense_depth_is_metric),
+                self._normalize_depth_feature(dense_p90, dense_depth_is_metric),
+                teacher_agreement,
+                teacher_spread,
+                self._normalize_zero_one(teacher_available_ratio),
+                1.0 if count == 0 else 0.0,
+            ],
+            dtype=np.float32,
+        )
+        return vector
+
+    def _build_geo_feature_vector(
+        self,
+        water_coverage_pct: float,
+        water_mask: np.ndarray,
+        dense_depth_map: np.ndarray,
+        dense_depth_is_metric: bool,
+    ) -> np.ndarray:
+        water_pixels = dense_depth_map[water_mask > 0]
+        if water_pixels.size == 0:
+            water_pixels = dense_depth_map.reshape(-1)
+        p50 = float(np.percentile(water_pixels, 50))
+        p90 = float(np.percentile(water_pixels, 90))
+        geo = np.array(
+            [
+                self._normalize_zero_one(water_coverage_pct, scale_if_percent=True),
+                self._normalize_depth_feature(p50, dense_depth_is_metric),
+                self._normalize_depth_feature(p90, dense_depth_is_metric),
+            ],
+            dtype=np.float32,
+        )
+        return geo
+
+    def _predict_depth_with_learned_fusion(
+        self,
+        image_rgb: np.ndarray,
+        object_features: np.ndarray,
+        geometry_features: np.ndarray,
+    ) -> Tuple[float, float]:
+        if self._fusion_model is None:
+            raise RuntimeError(
+                "learned fusion checkpoint unavailable"
+                + (f": {self._fusion_load_error}" if self._fusion_load_error else "")
+            )
+        image_tensor = self._encode_fusion_image(image_rgb)
+        object_tensor = torch.from_numpy(object_features).unsqueeze(0).to(self._torch_device)
+        geo_tensor = torch.from_numpy(geometry_features).unsqueeze(0).to(self._torch_device)
+        with torch.inference_mode():
+            depth_logits, ordinal_logits = self._fusion_model(image_tensor, object_tensor, geo_tensor)
+
+        depth_value = float(depth_logits.squeeze().detach().cpu().item())
+        if self._fusion_target_transform == "log1p":
+            depth_cm = float(np.expm1(depth_value))
         else:
-            depth_cm = dense_depth_cm
+            depth_cm = depth_value
+        if not np.isfinite(depth_cm):
+            raise RuntimeError("learned fusion produced non-finite depth")
+        depth_cm = max(depth_cm, 0.0)
 
-        depth_cm = float(np.clip(depth_cm, 0.0, 180.0))
-        reference_count_norm = min(yolo_count / 4.0, 1.0)
-        # Confidence is lower when no YOLO reference objects found
-        base_conf = 0.30 if yolo_count == 0 else 0.40
-        confidence = float(np.clip(base_conf + (coverage * 0.35) + (reference_count_norm * 0.30), 0.2, 0.98))
+        ordinal_probs = torch.softmax(ordinal_logits, dim=1)
+        confidence = float(ordinal_probs.max().detach().cpu().item())
+        return depth_cm, float(np.clip(confidence, 0.0, 1.0))
 
-        if depth_cm >= 100.0:
-            action = "Deploy Emergency Diversion"
-        elif depth_cm >= 60.0:
-            action = "Activate Traffic Management"
-        elif depth_cm >= 30.0:
-            action = "Issue Municipal Warning"
-        elif depth_cm >= 10.0:
-            action = "Advisory Monitoring"
-        else:
-            action = "Monitor"
-
-        return round(depth_cm, 2), round(confidence, 4), action
+    @staticmethod
+    def _severity_action_model(depth_cm: float) -> Tuple[Dict[str, Any], str]:
+        severity = _depth_to_severity(depth_cm)
+        action_by_level = {
+            "SAFE": "Monitor",
+            "LOW": "Advisory Monitoring",
+            "MEDIUM": "Issue Municipal Warning",
+            "HIGH": "Activate Traffic Management",
+            "CRITICAL": "Deploy Emergency Diversion",
+        }
+        return severity, action_by_level.get(str(severity.get("level", "")).upper(), "Monitor")
 
 
     def _segformer_scene_comment(
@@ -452,6 +787,7 @@ class SegformerYoloDepthV2Pipeline:
         water_mask: "np.ndarray",
         water_coverage_pct: float,
         dense_depth_map: "np.ndarray",
+        dense_depth_is_metric: bool = False,
         water_confidence: float = 1.0,
         water_flags: Optional[List[str]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
@@ -465,7 +801,7 @@ class SegformerYoloDepthV2Pipeline:
           water_position str     — short distribution label
           bot_pct        float   — % of bottom-half image that is water
           top_pct        float   — % of top-half image that is water
-          depth_p90      float   — normalised p90 proxy (0-1)
+          depth_p90      float   — p90 depth cue (relative proxy or meters)
           depth_level    str     — "shallow" | "moderate" | "significant" | "deep"
         """
         h = water_mask.shape[0]
@@ -500,12 +836,25 @@ class SegformerYoloDepthV2Pipeline:
             position = "evenly distributed"
             pos_icon = "↔"
 
-        # --- DepthV2 relative depth signal ---
+        # --- DepthV2 depth signal ---
         water_pixels = dense_depth_map[water_mask > 0]
         if water_pixels.size == 0:
             water_pixels = dense_depth_map.reshape(-1)
         p90 = float(np.percentile(water_pixels, 90))
-        if p90 < 0.20:
+        if dense_depth_is_metric:
+            if p90 < 0.15:
+                depth_signal = "shallow depth cues (~<15cm)"
+                depth_level = "shallow"
+            elif p90 < 0.40:
+                depth_signal = "moderate depth cues (~{:.2f}m)".format(p90)
+                depth_level = "moderate"
+            elif p90 < 1.00:
+                depth_signal = "significant depth cues (~{:.2f}m)".format(p90)
+                depth_level = "significant"
+            else:
+                depth_signal = "deep flood cues (~{:.2f}m)".format(p90)
+                depth_level = "deep"
+        elif p90 < 0.20:
             depth_signal = "shallow depth cues"
             depth_level = "shallow"
         elif p90 < 0.40:
@@ -564,7 +913,7 @@ class SegformerYoloDepthV2Pipeline:
         return comment, detail
 
     # ------------------------------------------------------------------
-    # Gemini enhancement helpers — stages 3, 4, 5 only
+    # Gemini enhancement helpers — optional advisory side-channel
     # ------------------------------------------------------------------
 
     def _gemini_dense_depth(self, image_rgb: np.ndarray) -> Optional[Dict[str, Any]]:
@@ -702,13 +1051,15 @@ class SegformerYoloDepthV2Pipeline:
                 "Confidence will be capped at 0.55."
             )
 
-        dense_depth_map = self._depth_anything_v2_dense_map(image_rgb, water_mask)
+        dense_depth_map, stage3_backend, dense_depth_is_metric = self._depth_anything_v2_dense_map(
+            image_rgb,
+            water_mask,
+        )
         # Stage 3: optional Gemini depth refinement
         gemini_depth_data = self._gemini_dense_depth(image_rgb)
-        stage3_backend = "dense-depth-proxy"
         stage3_gemini_note = ""
         if gemini_depth_data:
-            stage3_backend = "gemini-1.5-flash+proxy"
+            stage3_backend = f"gemini-1.5-flash+{stage3_backend}"
             stage3_gemini_note = (
                 f" gemini_max_depth={gemini_depth_data.get('max_depth_cm', '?')}cm"
                 f" gemini_coverage={gemini_depth_data.get('water_coverage_pct', '?')}%"
@@ -722,41 +1073,49 @@ class SegformerYoloDepthV2Pipeline:
             }
         )
 
-        teacher_features: Dict[str, Any] = {}
+        teacher_features: Dict[str, Any] = {
+            "water_region_valid": False,
+            "teachers": {},
+            "ensemble": {},
+            "meta": {"available_teacher_count": 0, "total_teachers": 3},
+        }
         teacher_ensemble_metrics: Dict[str, Any] = {}
-        try:
-            teacher_features = self.teacher_ensemble.predict(image_rgb, water_mask=(water_mask > 0))
-            teacher_ensemble_metrics = teacher_features.get("ensemble", {})
-            teacher_meta = teacher_features.get("meta", {})
+        if self.teacher_ensemble is not None:
+            try:
+                teacher_features = self.teacher_ensemble.predict(image_rgb, water_mask=(water_mask > 0))
+                teacher_ensemble_metrics = teacher_features.get("ensemble", {})
+                teacher_meta = teacher_features.get("meta", {})
+                trace.append(
+                    {
+                        "stage": "Depth Teachers",
+                        "backend": "DepthAnythingV2+DepthPro+Metric3D",
+                        "status": "ok",
+                        "summary": (
+                            f"available={teacher_meta.get('available_teacher_count', 0)}/"
+                            f"{teacher_meta.get('total_teachers', 3)} "
+                            f"agreement={teacher_ensemble_metrics.get('teacher_agreement', 0.0):.3f}"
+                        ),
+                    }
+                )
+            except Exception as exc:
+                logger.warning("Depth teacher feature extraction failed: %s", exc)
+                trace.append(
+                    {
+                        "stage": "Depth Teachers",
+                        "backend": "DepthAnythingV2+DepthPro+Metric3D",
+                        "status": "degraded",
+                        "summary": f"teacher extraction failed: {exc}",
+                    }
+                )
+        else:
             trace.append(
                 {
                     "stage": "Depth Teachers",
                     "backend": "DepthAnythingV2+DepthPro+Metric3D",
-                    "status": "ok",
-                    "summary": (
-                        f"available={teacher_meta.get('available_teacher_count', 0)}/"
-                        f"{teacher_meta.get('total_teachers', 3)} "
-                        f"agreement={teacher_ensemble_metrics.get('teacher_agreement', 0.0):.3f}"
-                    ),
+                    "status": "skipped",
+                    "summary": "teacher ensemble disabled",
                 }
             )
-        except Exception as exc:
-            logger.warning("Depth teacher feature extraction failed: %s", exc)
-            trace.append(
-                {
-                    "stage": "Depth Teachers",
-                    "backend": "DepthAnythingV2+DepthPro+Metric3D",
-                    "status": "degraded",
-                    "summary": f"teacher extraction failed: {exc}",
-                }
-            )
-            teacher_features = {
-                "water_region_valid": False,
-                "teachers": {},
-                "ensemble": {},
-                "meta": {"available_teacher_count": 0, "total_teachers": 3},
-            }
-            teacher_ensemble_metrics = {}
 
         reference_estimate = self.reference_estimator.estimate(image_rgb)
         features = self._fusion_engine(
@@ -765,6 +1124,7 @@ class SegformerYoloDepthV2Pipeline:
             references=references,
             dense_depth_map=dense_depth_map,
             reference_estimate=reference_estimate,
+            dense_depth_is_metric=dense_depth_is_metric,
         )
 
         if teacher_ensemble_metrics:
@@ -790,19 +1150,45 @@ class SegformerYoloDepthV2Pipeline:
                     if isinstance(val, (int, float)):
                         features[f"{slug}_{metric}"] = round(float(val), 6)
 
-        # Stage 4: optional Gemini fusion override
-        gemini_fusion_data = self._gemini_fusion(features, image_rgb)
-        stage4_backend = "feature-fusion-v1"
-        if gemini_fusion_data and "fused_depth_cm" in gemini_fusion_data:
-            # Blend Gemini fused estimate with sensor features (70/30 Gemini/sensor)
-            features["reference_depth_cm"] = round(
-                0.70 * float(gemini_fusion_data["fused_depth_cm"])
-                + 0.30 * features["reference_depth_cm"],
-                2,
+        object_vector = self._build_object_feature_vector(
+            image_rgb=image_rgb,
+            references=references,
+            reference_estimate=reference_estimate,
+            water_coverage_pct=water_coverage_pct,
+            water_mask=water_mask,
+            dense_depth_map=dense_depth_map,
+            dense_depth_is_metric=dense_depth_is_metric,
+            teacher_features=teacher_features,
+        )
+        geometry_vector = self._build_geo_feature_vector(
+            water_coverage_pct=water_coverage_pct,
+            water_mask=water_mask,
+            dense_depth_map=dense_depth_map,
+            dense_depth_is_metric=dense_depth_is_metric,
+        )
+        features["fusion_object_features"] = [round(float(v), 6) for v in object_vector.tolist()]
+        features["fusion_geometry_features"] = [round(float(v), 6) for v in geometry_vector.tolist()]
+        features["fusion_model_path"] = str(self._fusion_model_path)
+        features["fusion_target_transform"] = self._fusion_target_transform
+        features["depth_backbone"] = stage3_backend
+
+        stage4_backend = "learned-mask-conditioned-fusion"
+        depth_cm: float
+        confidence: float
+        try:
+            depth_cm, confidence = self._predict_depth_with_learned_fusion(
+                image_rgb=image_rgb,
+                object_features=object_vector,
+                geometry_features=geometry_vector,
             )
-            features["gemini_fused_depth_cm"] = round(float(gemini_fusion_data["fused_depth_cm"]), 2)
-            features["gemini_key_signal"] = gemini_fusion_data.get("key_signal", "")
-            stage4_backend = "gemini-1.5-flash+feature-fusion-v1"
+            features["fusion_model_active"] = 1.0
+        except Exception as exc:
+            logger.warning("Learned fusion inference failed (%s); using reference fallback.", exc)
+            depth_cm = float(reference_estimate.get("depth_cm", 0.0) or 0.0)
+            confidence = float(reference_estimate.get("confidence", 0.35) or 0.35)
+            stage4_backend = "reference-depth-fallback"
+            features["fusion_model_active"] = 0.0
+            features["fusion_fallback_reason"] = str(exc)
         trace.append(
             {
                 "stage": "Fusion Engine",
@@ -810,64 +1196,15 @@ class SegformerYoloDepthV2Pipeline:
                 "status": "ok",
                 "summary": (
                     f"coverage={features['water_coverage_pct']:.2f}% "
-                    f"refs={int(features['reference_count'])} p90={features['dense_depth_p90']:.3f}"
+                    f"refs={int(features['reference_count'])} depth_cm={depth_cm:.2f}"
                 ),
             }
         )
 
-        depth_cm, confidence, action = self._calibration_severity_model(features)
-        severity = _depth_to_severity(depth_cm)
-        # Stage 5: optional Gemini evaluator after classical 5-bucket grading.
-        # Final result is Gemini-weighted (75% Gemini, 25% classical).
-        classical_depth_cm = depth_cm
-        classical_confidence = confidence
-        classical_severity = severity
-        gemini_cal_data = self._gemini_calibration(features, depth_cm, confidence)
-        stage5_backend = "calibration-v1"
-        if gemini_cal_data:
-            gemini_depth_raw = gemini_cal_data.get("calibrated_depth_cm")
-            gemini_level = str(
-                gemini_cal_data.get("bucket_level", gemini_cal_data.get("severity", ""))
-            ).strip().upper()
-            gemini_depth_cm: Optional[float] = None
-
-            if gemini_depth_raw is not None:
-                try:
-                    gemini_depth_cm = float(gemini_depth_raw)
-                except (TypeError, ValueError):
-                    gemini_depth_cm = None
-            if gemini_depth_cm is None and gemini_level:
-                gemini_depth_cm = _severity_anchor_depth(gemini_level)
-
-            if gemini_depth_cm is not None:
-                blended_depth = (0.75 * gemini_depth_cm) + (0.25 * classical_depth_cm)
-                depth_cm = round(float(np.clip(blended_depth, 0.0, 180.0)), 2)
-
-            base_idx = classical_severity["stage"] - 1
-            gemini_idx = _severity_level_to_index(gemini_level)
-            if gemini_idx is not None:
-                final_idx = int(round((0.75 * gemini_idx) + (0.25 * base_idx)))
-                severity = _severity_from_index(final_idx)
-            else:
-                severity = _depth_to_severity(depth_cm)
-
-            gemini_confidence_raw = gemini_cal_data.get("confidence", classical_confidence)
-            try:
-                gemini_confidence = float(gemini_confidence_raw)
-            except (TypeError, ValueError):
-                gemini_confidence = classical_confidence
-            confidence = round(
-                float(np.clip((0.75 * gemini_confidence) + (0.25 * classical_confidence), 0.2, 0.98)),
-                4,
-            )
-            action = gemini_cal_data.get("next_action", action)
-
-            features["classical_bucket"] = classical_severity["level"]
-            features["gemini_bucket"] = gemini_level if gemini_idx is not None else ""
-            features["gemini_evaluator_weight"] = 0.75
-            features["classical_weight"] = 0.25
-            features["gemini_calibration_rationale"] = gemini_cal_data.get("rationale", "")
-            stage5_backend = "gemini-evaluator(75%)+calibration-v1(25%)"
+        depth_cm = round(float(depth_cm), 2)
+        confidence = round(float(np.clip(confidence, 0.0, 1.0)), 4)
+        severity, action = self._severity_action_model(depth_cm)
+        stage5_backend = "severity-mapping-only"
         trace.append(
             {
                 "stage": "Calibration/Severity Model",
@@ -875,7 +1212,6 @@ class SegformerYoloDepthV2Pipeline:
                 "status": "ok",
                 "summary": (
                     f"depth_cm={depth_cm:.2f} severity={severity['level']}"
-                    f" classical={classical_severity['level']}"
                 ),
             }
         )
@@ -903,6 +1239,7 @@ class SegformerYoloDepthV2Pipeline:
                 water_mask=water_mask,
                 water_coverage_pct=water_coverage_pct,
                 dense_depth_map=dense_depth_map,
+                dense_depth_is_metric=dense_depth_is_metric,
                 water_confidence=water_confidence,
                 water_flags=water_flags,
             )
