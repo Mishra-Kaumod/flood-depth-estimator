@@ -933,8 +933,10 @@ class SegformerYoloDepthV2Pipeline:
         effective_submersion = gemma_submersion if gemma_submersion is not None else max_ref_submersion
 
         # --- RULE 1: Ankle/foot level shallow water (tiny coverage, near-zero submersion) ---
-        if (effective_submersion <= 0.12 or is_shallow_scene or coverage_pct <= 2.0) and max_ref_submersion <= 0.15:
-            target_shallow_depth = 12.0 if effective_submersion <= 0.05 or coverage_pct <= 1.0 else 14.5
+        # Relaxed thresholds to prefer Gemma when it reports shallow submersion or a shallow scene.
+        if (effective_submersion <= 0.20 or is_shallow_scene or coverage_pct <= 2.0) and max_ref_submersion <= 0.20:
+            # Slightly higher shallow cap to capture ankle-to-calf depths (typical ~15-20cm)
+            target_shallow_depth = 15.0 if effective_submersion <= 0.08 or coverage_pct <= 1.0 else 18.0
             if depth_cm > target_shallow_depth:
                 corrected_depth = round(target_shallow_depth, 2)
                 features["gemma_semantic_correction_applied"] = True
@@ -944,33 +946,31 @@ class SegformerYoloDepthV2Pipeline:
                     f"Ankle/foot level submersion evidence (submersion={effective_submersion:.2f}, coverage={coverage_pct:.2f}%) "
                     f"refined depth prediction to shallow ankle water ({corrected_depth} cm)."
                 )
-                return corrected_depth, max(confidence, 0.85), self._action_for_final_depth(corrected_depth, features, action)
+                return corrected_depth, max(confidence, 0.88), self._action_for_final_depth(corrected_depth, features, action)
 
-        # --- RULE 2: Broad road water WITH NO reference object submersion = shallow spread layer ---
-        # Primary gate: YOLO found NO reference objects AND no measured submersion.
-        # Secondary gate: Gemma submersion fraction — but ONLY relevant when Gemma has an actual
-        #   object to measure. When YOLO reference_count=0, Gemma's water_reaches_reference
-        #   is unreliable (it may flag road surface contact). Trust YOLO reference_count=0.
+        # --- RULE 2: Broad road water WITH NO (or non-submerged) reference object submersion = shallow spread layer ---
+        # Primary gate previously required YOLO to find no references. Relax gate to allow Gemma to veto
+        # reference-based submersion when Gemma reports water not reaching reference objects or reports low submersion.
         yolo_no_submersion = reference_count == 0 and max_ref_submersion <= 0.05
-        # Only use Gemma's water_reaches_ref if YOLO actually found reference objects
-        effective_water_reaches = gemma_water_reaches_ref and reference_count > 0
-        gemma_no_submersion = (
-            not effective_water_reaches
-            and (gemma_submersion is None or gemma_submersion <= 0.30)
-        )
+        # Treat Gemma's water_reaches_ref as authoritative regardless of reference_count when available
+        effective_water_reaches = bool(gemma_water_reaches_ref)
+        # Allow Gemma to indicate "no significant submersion" more permissively
+        gemma_no_submersion = (not effective_water_reaches) and (gemma_submersion is None or gemma_submersion <= 0.40)
+
+        # Broad coverage OR Gemma-shallow scene qualifies for this rule
         broad_coverage_no_submersion = (
-            yolo_no_submersion
+            (yolo_no_submersion or is_shallow_scene or (water_present and scene_type.startswith("flood")))
             and gemma_no_submersion
-            and coverage_pct >= 20.0
-            and far_pct <= 5.0  # No far-field flooding = shallow near/mid spread
+            and coverage_pct >= 15.0
+            and far_pct <= 10.0  # tolerate a small amount of far-field noise
         )
         logger.info(
             f"[GemmaRule2] yolo_no_sub={yolo_no_submersion} gemma_no_sub={gemma_no_submersion} "
             f"effective_water_reaches={effective_water_reaches} gemma_submersion={gemma_submersion} "
             f"coverage={coverage_pct:.1f}% far={far_pct:.1f}% near={near_pct:.1f}% depth_cm={depth_cm:.1f} "
-            f"fires={broad_coverage_no_submersion and depth_cm > 25.0}"
+            f"fires={broad_coverage_no_submersion and depth_cm > 22.0}"
         )
-        if broad_coverage_no_submersion and depth_cm > 25.0:
+        if broad_coverage_no_submersion and depth_cm > 22.0:
             # Estimate based on near-field ratio: more near coverage = slightly deeper spread
             if near_pct >= 60.0:
                 cap = 22.0  # Well-flooded near-field → up to 22 cm
@@ -990,7 +990,7 @@ class SegformerYoloDepthV2Pipeline:
                     f"Gemma: water_reaches_ref={gemma_water_reaches_ref}, submersion={effective_submersion:.2f}). "
                     f"Interpreted as thin surface water layer; depth capped at {corrected_depth} cm."
                 )
-                return corrected_depth, max(confidence, 0.80), self._action_for_final_depth(corrected_depth, features, action)
+                return corrected_depth, max(confidence, 0.82), self._action_for_final_depth(corrected_depth, features, action)
 
         # --- RULE 3: Deep Flood — only trigger when ACTUAL submersion evidence exists ---
         # Require at least one of: object submerged, Gemma confirms submersion, waterline visible + deep p90
@@ -1807,31 +1807,99 @@ class SegformerYoloDepthV2Pipeline:
             or (coverage >= 0.08 and not (no_reference_uncertain and candidate_value_for_trust is not None and candidate_value_for_trust > 35.0))
             or (candidate_value_for_trust is not None and candidate_value_for_trust < 15.0)
         )
-        add_signal("efficientnet_candidate", candidate_depth, candidate_trusted, "trained depth model", 0.50)
+        add_signal("efficientnet_candidate", candidate_depth, candidate_trusted, "trained depth model", 0.35)
 
         mask_conditioned_depth = features.get("mask_conditioned_fusion_depth_cm")
         mask_conditioned_trusted = bool(features.get("mask_conditioned_fusion_trusted", False))
-        add_signal("mask_conditioned_fusion", mask_conditioned_depth, mask_conditioned_trusted, "experimental mask-conditioned trained model", 0.20)
+        # Prefer Gemma: if Gemma semantics indicate shallow flood and mask model predicts shallow depth, promote mask model trust
+        gemma_feats = features.get("gemma_semantic_features") if isinstance(features.get("gemma_semantic_features"), dict) else {}
+        gemma_water_present = bool(gemma_feats.get("water_present", False)) if gemma_feats else False
+        gemma_scene = str(gemma_feats.get("scene_type", "")).lower() if gemma_feats else ""
+        try:
+            mask_depth_val = float(mask_conditioned_depth) if mask_conditioned_depth is not None else None
+        except Exception:
+            mask_depth_val = None
+        if gemma_water_present and mask_depth_val is not None and mask_depth_val < 35.0 and float(features.get("max_reference_submersion", 0.0)) < 0.4:
+            mask_conditioned_trusted = True
+        add_signal("mask_conditioned_fusion", mask_conditioned_depth, mask_conditioned_trusted, "experimental mask-conditioned trained model (promoted by Gemma)", 0.20)
+        # Add gemma numeric signal to model_signals. If Gemma provides a numeric depth and a high confidence,
+        # allow it to be trusted in agreement; otherwise add as a log-only supportive signal.
+        gemma_numeric_depth = None
+        gemma_depth_conf = None
+        try:
+            if isinstance(gemma_feats, dict):
+                gemma_numeric_depth = gemma_feats.get("gemma_depth_cm")
+                # prefer explicit gemma_depth_confidence, fall back to semantic_confidence
+                gemma_depth_conf = gemma_feats.get("gemma_depth_confidence") or gemma_feats.get("semantic_confidence")
+        except Exception:
+            gemma_numeric_depth = None
+            gemma_depth_conf = None
+
+        gemma_trusted = False
+        try:
+            if gemma_depth_conf is not None:
+                gemma_trusted = float(gemma_depth_conf) >= 0.80
+        except Exception:
+            gemma_trusted = False
+
+        if gemma_numeric_depth is not None:
+            try:
+                gval = float(gemma_numeric_depth)
+                # User override: always trust Gemma numeric and increase weight
+                gemma_trusted_for_pipeline = True
+                weight = 0.60
+                add_signal("gemma_numeric", gval, gemma_trusted_for_pipeline, "Gemma numeric depth estimate (user-trusted override)", weight)
+            except Exception:
+                pass
+        else:
+            # If no numeric gemma value, still add mask-derived gemma suggestion as log-only for calibration
+            if mask_depth_val is not None:
+                try:
+                    add_signal("gemma_semantics", mask_depth_val, False, "Gemma semantic shallow suggestion (mask fallback)", 0.15)
+                except Exception:
+                    pass
 
         reference_depth = features.get("reference_depth_cm")
         reference_trusted = reference_count > 0 and not low_water_gate and (max_submersion >= 0.15 or coverage >= 0.20 or immediate_risk)
-        add_signal("reference_objects", reference_depth, reference_trusted, "object/reference depth estimate", 0.15)
+        # Reduce reference weight to allow Gemma to influence agreement more
+        add_signal("reference_objects", reference_depth, reference_trusted, "object/reference depth estimate", 0.10)
 
         dense_depth = float(features.get("dense_depth_p90", 0.0)) * 120.0
         dense_trusted = ((not low_water_gate and (coverage >= 0.20 or near_pct >= 0.10 or immediate_risk)) or shallow_exception) and not (no_reference_uncertain and dense_depth > 35.0)
-        add_signal("depth_anything_dense", dense_depth, dense_trusted, "monocular dense-depth support", 0.10)
+        # Slightly lower dense-depth weight
+        add_signal("depth_anything_dense", dense_depth, dense_trusted, "monocular dense-depth support", 0.08)
 
         trusted = [signal for signal in signals if signal["trusted"]]
         tolerance_cm = 25.0
         best_cluster: List[Dict[str, Any]] = []
 
-        candidate_signal = next((signal for signal in trusted if signal["name"] == "efficientnet_candidate"), None)
-        if candidate_signal is not None:
-            candidate_cluster = [signal for signal in trusted if abs(signal["depth_cm"] - candidate_signal["depth_cm"]) <= tolerance_cm]
-            if len(candidate_cluster) >= 2:
-                best_cluster = candidate_cluster
+        # Build unique clusters of trusted signals where members are within tolerance_cm of each other.
+        clusters: List[List[Dict[str, Any]]] = []
+        seen_keys = set()
+        for signal in trusted:
+            cluster = [candidate for candidate in trusted if abs(candidate["depth_cm"] - signal["depth_cm"]) <= tolerance_cm]
+            if not cluster:
+                continue
+            # Create a deterministic key for the cluster to avoid duplicates: use (name, depth_cm) pairs
+            key = frozenset((c["name"], float(c["depth_cm"])) for c in cluster)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            clusters.append(cluster)
 
-        if not best_cluster:
+        # Prefer clusters with at least two signals. Choose the cluster with highest total weight.
+        valid_clusters = [c for c in clusters if len(c) >= 2]
+        if valid_clusters:
+            def _cluster_sort_key(c: List[Dict[str, Any]]):
+                total_weight = sum(float(s.get("weight", 0.0)) for s in c)
+                # Tie-breaker: prefer larger cluster, then deterministic lexicographic order of names
+                names = tuple(sorted(s["name"] for s in c))
+                return (total_weight, len(c), names)
+
+            # max with the key above selects the cluster with highest total weight; deterministic ties resolved by len and names
+            best_cluster = max(valid_clusters, key=_cluster_sort_key)
+        else:
+            # Fallback to previous behaviour: choose the cluster with the largest number of signals
             for signal in trusted:
                 cluster = [candidate for candidate in trusted if abs(candidate["depth_cm"] - signal["depth_cm"]) <= tolerance_cm]
                 if len(cluster) > len(best_cluster):
@@ -1840,6 +1908,68 @@ class SegformerYoloDepthV2Pipeline:
         output_depth = float(final_depth_cm)
         output_confidence = float(confidence)
         output_action = action
+
+        # Gemma shallow-override: if Gemma reports low submersion fraction and the
+        # mask-conditioned model predicts a shallow depth, prefer the Gemma/mask
+        # shallow outcome over a high candidate when the candidate is much deeper.
+        gemma_feats = features.get("gemma_semantic_features") if isinstance(features.get("gemma_semantic_features"), dict) else {}
+        gemma_sub = None
+        if gemma_feats:
+            gemma_sub = gemma_feats.get("approximate_submersion_fraction")
+            try:
+                gemma_sub = float(gemma_sub) if gemma_sub is not None else None
+            except Exception:
+                gemma_sub = None
+
+        try:
+            mask_depth_val = float(features.get("mask_conditioned_fusion_depth_cm")) if features.get("mask_conditioned_fusion_depth_cm") is not None else None
+        except Exception:
+            mask_depth_val = None
+
+        # candidate_signal already computed above — re-evaluate here for clarity
+        candidate_signal = next((signal for signal in trusted if signal["name"] == "efficientnet_candidate"), None)
+
+        # --- Gemma deep-override: when Gemma reports substantial submersion on a visible reference
+        # and the mask-conditioned model predicts deep water, prefer gemma/mask depth.
+        if (
+            gemma_sub is not None
+            and gemma_sub >= 0.40
+            and mask_depth_val is not None
+            and mask_depth_val >= 35.0
+        ):
+            output_depth = round(float(np.clip(mask_depth_val, 0.0, 180.0)), 2)
+            output_confidence = max(float(confidence), 0.90)
+            output_action = self._action_for_final_depth(output_depth, features, action)
+            status = "gemma_deep_override"
+            reason = (
+                f"Gemma reported substantial submersion ({gemma_sub:.2f}) and mask suggested deep water {mask_depth_val:.2f} cm; "
+                "preferring Gemma/mask deep outcome."
+            )
+            features["final_aggregation_source"] = "gemma_deep_override"
+            features["final_output_reason"] = reason
+
+        # --- Gemma shallow-override: if Gemma reports low submersion fraction and the
+        # mask-conditioned model predicts a shallow depth, prefer the Gemma/mask
+        # shallow outcome over a high candidate when the candidate is much deeper.
+        if (
+            gemma_sub is not None
+            and gemma_sub <= 0.25
+            and mask_depth_val is not None
+            and mask_depth_val < 35.0
+            and candidate_signal is not None
+            and float(candidate_signal["depth_cm"]) > 40.0
+        ):
+            override_depth = max(mask_depth_val, 15.0)
+            output_depth = round(float(np.clip(override_depth, 0.0, 180.0)), 2)
+            output_confidence = max(float(confidence), 0.86)
+            output_action = self._action_for_final_depth(output_depth, features, action)
+            status = "gemma_shallow_override"
+            reason = (
+                f"Gemma reported shallow submersion ({gemma_sub:.2f}) and mask/Gemma suggested shallow depth {mask_depth_val:.2f} cm; "
+                "preferring shallow outcome."
+            )
+            features["final_aggregation_source"] = "gemma_shallow_override"
+            features["final_output_reason"] = reason
 
         if low_water_gate:
             status = "low_water_gate"
@@ -2007,10 +2137,59 @@ class SegformerYoloDepthV2Pipeline:
                 trace_stage["features"] = gemma_feats
                 trace_stage["latency_ms"] = gemma_lat
                 gemma_semantic_result = gemma_feats
+                # If Gemma did not return explicit numeric depths but provided per-object submersion
+                # derive best-effort per-object depth estimates using YOLO reference object classes.
+                try:
+                    if gemma_feats.get("gemma_depth_cm") is None and gemma_feats.get("per_object_submersion") and references:
+                        class_heights = {
+                            "car": 70.0,
+                            "truck": 90.0,
+                            "bus": 100.0,
+                            "motorcycle": 60.0,
+                            "bicycle": 60.0,
+                            "person": 75.0,
+                        }
+                        per_sub = gemma_feats.get("per_object_submersion")
+                        per_depths = []
+                        for i, sub in enumerate(per_sub):
+                            try:
+                                subf = float(sub)
+                            except Exception:
+                                continue
+                            label = None
+                            if i < len(references):
+                                ref = references[i]
+                                label = getattr(ref, "label", None) if not isinstance(ref, dict) else ref.get("label")
+                                label = str(label).lower() if label is not None else ""
+                            # Choose a height mapping by keyword match, default to person height if unknown
+                            mapped = next((k for k in class_heights.keys() if k in label), None) if label else None
+                            height = class_heights.get(mapped, 75.0)
+                            per_depths.append(round(float(subf) * float(height), 2))
+                        if per_depths:
+                            gemma_feats["per_object_depth_cm"] = per_depths
+                            gemma_feats["gemma_depth_cm"] = max(per_depths)
+                            gemma_feats["gemma_depth_confidence"] = gemma_feats.get("semantic_confidence") or 0.60
+                            gemma_feats["_derived_from_submersion"] = True
+                except Exception:
+                    pass
+
+                # expose raw response for debugging
+                try:
+                    gemma_raw = gemma_res.get("raw_response")
+                    if gemma_raw:
+                        trace_stage["raw_response"] = gemma_raw
+                except Exception:
+                    pass
             else:
                 trace_stage["summary"] = gemma_res.get("reason", "Gemma analysis unavailable or skipped")
                 if gemma_lat is not None:
                     trace_stage["latency_ms"] = gemma_lat
+                try:
+                    gemma_raw = gemma_res.get("raw_response")
+                    if gemma_raw:
+                        trace_stage["raw_response"] = gemma_raw
+                except Exception:
+                    pass
 
             trace.append(trace_stage)
 
@@ -2039,6 +2218,39 @@ class SegformerYoloDepthV2Pipeline:
             dense_depth_map=dense_depth_map,
             reference_estimate=reference_estimate,
         )
+
+        # Quick YOLO-based override: if a detected reference object shows heavy submersion,
+        # estimate depth heuristically from typical object dimensions and bypass full agreement.
+        try:
+            override_applied = False
+            for obj in references:
+                try:
+                    label = getattr(obj, "label", str(getattr(obj, "label", ""))).lower()
+                    sub = float(getattr(obj, "water_submersion_ratio", 0.0))
+                except Exception:
+                    continue
+                if sub >= 0.65:
+                    # Heuristic per-class typical dimensions (cm)
+                    if label in ("car", "truck"):
+                        wheel_dia = 55.0 if label == "car" else 70.0
+                        est = round(min(sub * wheel_dia, 120.0), 2)
+                    elif label in ("bus",):
+                        est = round(min(sub * 80.0, 160.0), 2)
+                    elif label in ("motorbike", "motorcycle"):
+                        est = round(min(sub * 50.0, 100.0), 2)
+                    elif label == "person":
+                        # Assume knee/leg reference height ~ 50cm
+                        est = round(min(max(25.0, sub * 60.0), 120.0), 2)
+                    else:
+                        est = round(min(sub * 60.0, 120.0), 2)
+
+                    features["yolo_ref_override_applied"] = True
+                    features["yolo_ref_override_depth_cm"] = est
+                    features["yolo_ref_override_label"] = label
+                    override_applied = True
+                    break
+        except Exception:
+            override_applied = False
         if efficientnet_depth_cm is not None:
             features["efficientnet_candidate_depth_cm"] = efficientnet_depth_cm
             features["fusion_candidate_delta_cm"] = round(abs(float(features.get("region_depth_cm", 0.0)) - efficientnet_depth_cm), 2)
@@ -2095,20 +2307,117 @@ class SegformerYoloDepthV2Pipeline:
         )
 
         if gemma_semantic_result is not None:
-            features["gemma_semantic_features"] = gemma_semantic_result
+            # Ensure Gemma numeric depth is present. If Gemma did not provide gemma_depth_cm,
+            # derive per-object depths from Gemma's per-object outputs or from YOLO reference
+            # object submersion ratios and inject them into the gemma feature bag so the
+            # downstream model-signals always see a Gemma numeric signal (marked as injected).
+            gemma_feats = dict(gemma_semantic_result) if isinstance(gemma_semantic_result, dict) else {"raw": gemma_semantic_result}
+            try:
+                if gemma_feats.get("gemma_depth_cm") is None:
+                    per_depths = None
+                    # 1) Prefer Gemma-supplied per_object_depth_cm when present
+                    pod = gemma_feats.get("per_object_depth_cm")
+                    if isinstance(pod, list) and pod:
+                        try:
+                            per_depths = [float(x) for x in pod if x is not None]
+                        except Exception:
+                            per_depths = None
 
-        depth_cm, confidence, action = self._calibration_severity_model(features)
-        features["calibration_depth_cm"] = round(depth_cm, 2)
-        if efficientnet_depth_cm is not None:
-            features["final_candidate_delta_cm"] = round(abs(depth_cm - efficientnet_depth_cm), 2)
-        depth_cm, confidence, action = self._apply_efficientnet_correction(depth_cm, confidence, action, features)
-        depth_cm, confidence, action = self._record_model_agreement(depth_cm, confidence, action, features)
-        depth_cm, confidence, action = self._apply_residual_fusion_model(depth_cm, confidence, action, features)
-        depth_cm, confidence, action = self._apply_mask_conditioned_high_flood_correction(depth_cm, confidence, action, features)
-        depth_cm, confidence, action = self._apply_strong_deep_flood_correction(depth_cm, confidence, action, features)
-        depth_cm, confidence, action = self._apply_gemma_semantic_correction(depth_cm, confidence, action, features)
-        depth_cm, confidence, action = self._apply_dry_land_guard(depth_cm, confidence, action, image_rgb, features)
-        depth_cm, confidence, action = self._apply_no_water_guard(depth_cm, confidence, action, features)
+                    # 2) If not, map Gemma-provided per_object_submersion -> depth using typical heights
+                    if per_depths is None:
+                        per_sub = gemma_feats.get("per_object_submersion")
+                        if isinstance(per_sub, list) and per_sub:
+                            class_heights = {
+                                "car": 70.0,
+                                "truck": 90.0,
+                                "bus": 100.0,
+                                "motorcycle": 60.0,
+                                "bicycle": 60.0,
+                                "person": 75.0,
+                            }
+                            derived = []
+                            for i, sub in enumerate(per_sub):
+                                try:
+                                    subf = float(sub)
+                                except Exception:
+                                    derived.append(None)
+                                    continue
+                                label = None
+                                if i < len(references):
+                                    ref = references[i]
+                                    label = getattr(ref, "label", None) if not isinstance(ref, dict) else ref.get("label")
+                                    label = str(label).lower() if label is not None else ""
+                                mapped = next((k for k in class_heights.keys() if k in label), None) if label else None
+                                height = class_heights.get(mapped, 75.0)
+                                derived.append(round(float(subf) * float(height), 2))
+                            per_depths = [x for x in derived if x is not None]
+
+                    # 3) Final fallback: build per-object depths directly from YOLO reference objects
+                    if (per_depths is None or not per_depths) and references:
+                        class_heights = {
+                            "car": 70.0,
+                            "truck": 90.0,
+                            "bus": 100.0,
+                            "motorcycle": 60.0,
+                            "bicycle": 60.0,
+                            "person": 75.0,
+                        }
+                        derived = []
+                        for ref in references:
+                            try:
+                                sub = float(getattr(ref, "water_submersion_ratio", None) if not isinstance(ref, dict) else ref.get("water_submersion_ratio"))
+                            except Exception:
+                                derived.append(None)
+                                continue
+                            label = getattr(ref, "label", None) if not isinstance(ref, dict) else ref.get("label")
+                            label = str(label).lower() if label is not None else ""
+                            mapped = next((k for k in class_heights.keys() if k in label), None) if label else None
+                            height = class_heights.get(mapped, 75.0)
+                            derived.append(round(float(sub) * float(height), 2))
+                        per_depths = [x for x in derived if x is not None]
+
+                    if per_depths:
+                        gemma_feats["per_object_depth_cm"] = per_depths
+                        gemma_feats["gemma_depth_cm"] = float(max(per_depths))
+                        gemma_feats["gemma_depth_confidence"] = gemma_feats.get("gemma_depth_confidence") or gemma_feats.get("semantic_confidence") or 0.60
+                        gemma_feats["_injected_from_yolo"] = True
+            except Exception:
+                # don't fail the pipeline for injected logic
+                pass
+
+            features["gemma_semantic_features"] = gemma_feats
+
+        # If YOLO override applied, use that depth and skip model-agreement/residual fusion stages
+        if features.get("yolo_ref_override_applied"):
+            # Ensure gemma numeric appears in model_signals even when YOLO override short-circuits agreement
+            try:
+                gemma_feats = features.get("gemma_semantic_features") if isinstance(features.get("gemma_semantic_features"), dict) else None
+                if gemma_feats:
+                    gemma_val = gemma_feats.get("gemma_depth_cm")
+                    gemma_conf = gemma_feats.get("gemma_depth_confidence") or gemma_feats.get("semantic_confidence")
+                    if gemma_val is not None:
+                        features["model_signals"] = features.get("model_signals", []) + [
+                            {"name": "gemma_numeric", "depth_cm": round(float(gemma_val), 2), "trusted": True, "reason": "Gemma numeric depth (injected during YOLO override)", "weight": 0.60}
+                        ]
+            except Exception:
+                pass
+
+            depth_cm = float(features.get("yolo_ref_override_depth_cm", 0.0))
+            confidence = float(max(0.80, float(features.get("semantic_confidence", 0.5))))
+            action = self._action_for_final_depth(depth_cm, features, "Advisory Monitoring")
+        else:
+            depth_cm, confidence, action = self._calibration_severity_model(features)
+            features["calibration_depth_cm"] = round(depth_cm, 2)
+            if efficientnet_depth_cm is not None:
+                features["final_candidate_delta_cm"] = round(abs(depth_cm - efficientnet_depth_cm), 2)
+            depth_cm, confidence, action = self._apply_efficientnet_correction(depth_cm, confidence, action, features)
+            depth_cm, confidence, action = self._record_model_agreement(depth_cm, confidence, action, features)
+            depth_cm, confidence, action = self._apply_residual_fusion_model(depth_cm, confidence, action, features)
+            depth_cm, confidence, action = self._apply_mask_conditioned_high_flood_correction(depth_cm, confidence, action, features)
+            depth_cm, confidence, action = self._apply_strong_deep_flood_correction(depth_cm, confidence, action, features)
+            depth_cm, confidence, action = self._apply_gemma_semantic_correction(depth_cm, confidence, action, features)
+            depth_cm, confidence, action = self._apply_dry_land_guard(depth_cm, confidence, action, image_rgb, features)
+            depth_cm, confidence, action = self._apply_no_water_guard(depth_cm, confidence, action, features)
         if features.get("gemma_semantic_correction_applied"):
             trace.append(
                 {
