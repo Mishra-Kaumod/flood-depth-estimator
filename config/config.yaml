@@ -164,22 +164,64 @@ inference:
     model_path: "models/candidate/road_scene_classifier_4class_shallow_v2.pth"
     device: "cpu"
     advisory_only: false
+    dry_road_override_enabled: true
+    dry_road_override_threshold: 0.995
     wet_road_cap_enabled: true
     wet_road_cap_threshold: 0.995
     wet_road_cap_cm: 3.0
     wet_road_cap_max_water_coverage_pct: 12.0
     wet_road_cap_max_near_water_coverage_pct: 8.0
     wet_road_cap_require_low_risk_evidence: false
+    # Conservative correction for scenes confidently identified as shallow flood.
+    # Meaningful-flood predictions are explicitly excluded from this cap.
+    shallow_flood_cap_enabled: false
+    shallow_flood_cap_threshold: 0.90
+    shallow_flood_cap_cm: 20.0
+    shallow_flood_cap_max_meaningful_probability: 0.05
+  dynamic_broad_mask_resolver:
+    enabled: true
+    load_classifier: true
+    classifier_model_path: "models/candidate/depth_regime_classifier_v6_targeted_conservative.pt"
+    device: "cpu"
+    min_image_flood_probability: 0.65
+    min_physical_evidence_count: 5
+    min_near_coverage_pct: 50.0
+    min_mid_coverage_pct: 50.0
+    min_reference_submersion: 0.70
+    strong_reference_min_count: 3
+    strong_reference_min_submersion: 0.70
+    strong_reference_min_water_coverage_pct: 40.0
+    strong_reference_min_mid_coverage_pct: 45.0
+    strong_reference_min_physical_evidence_count: 4
+    strong_reference_min_deep_probability: 0.60
+    strong_reference_max_input_depth_cm: 30.0
+    full_evidence_count: 5
+    region_scale: 0.65
+    reference_scale: 0.50
+    dense_scale: 0.60
+    max_signal_iqr_cm: 25.0
+    min_confidence: 0.35
+    max_blend: 0.85
+    automatic_confidence_threshold: 0.70
   residual_fusion_signal:
     enabled: true
-    model_path: "models/candidate/residual_fusion_depth_model_retrain_old_eff_20260816_231536.pt"
+    model_path: "models/candidate/residual_fusion_depth_model_ankle_v14_no_leak.pt"
     device: "cpu"
     apply_corrections: true
     skip_low_water_gate: true
-    max_live_adjustment_cm: 30.0
+    max_live_adjustment_cm: 120.0
     allow_large_candidate_aligned_adjustment: true
     large_adjustment_candidate_alignment_cm: 15.0
     review_delta_cm: 20.0
+    moderate_flood_safety_fallback:
+      enabled: true
+      collapse_max_cm: 0.5
+      min_base_cm: 20.0
+      min_mask_depth_cm: 20.0
+      max_agreement_spread_cm: 8.0
+      max_dry_probability: 0.80
+      max_wet_probability: 0.70
+      max_no_water_probability: 0.90
   strong_deep_flood_correction:
     enabled: false
     min_water_coverage_pct: 60.0
@@ -363,9 +405,3 @@ secrets: {}
 # Local persistent storage for API-triggered camera workflows.
 storage:
   sqlite_path: "data/flood_app.sqlite3"
-
-
-
-
-
-

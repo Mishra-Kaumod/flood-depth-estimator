@@ -41,10 +41,17 @@ logger = logging.getLogger(__name__)
 
 RESIDUAL_FUSION_FEATURE_NAMES = [
     "pipeline_depth_cm",
+    "pre_output_cap_depth_cm",
+    "output_cap_capped_depth_cm",
+    "pre_residual_output_cap_capped_depth_cm",
     "efficientnet_candidate_depth_cm",
     "reference_depth_cm",
     "reference_count",
     "max_reference_submersion",
+    "person_reference_count",
+    "max_person_submersion",
+    "vehicle_reference_count",
+    "max_vehicle_submersion",
     "dense_depth_cm",
     "water_coverage_pct",
     "near_water_coverage_pct",
@@ -60,6 +67,20 @@ RESIDUAL_FUSION_FEATURE_NAMES = [
     "shallow_water_gate_exception",
     "muddy_water_fallback_applied",
     "full_road_water_no_reference",
+    "road_scene_dry_road_probability",
+    "road_scene_wet_road_probability",
+    "road_scene_shallow_flood_probability",
+    "road_scene_meaningful_flood_probability",
+    "no_water_probability",
+    "wet_road_no_water_probability",
+    "no_reference_depth_uncertain",
+    "reference_available",
+    "depth_signal_spread_cm",
+    "efficientnet_uncapped_delta_cm",
+    "reference_uncapped_delta_cm",
+    "output_cap_applied",
+    "output_cap_wet_road",
+    "output_cap_shallow_flood",
 ]
 
 RESIDUAL_FUSION_BOOL_FEATURES = {
@@ -70,6 +91,11 @@ RESIDUAL_FUSION_BOOL_FEATURES = {
     "shallow_water_gate_exception",
     "muddy_water_fallback_applied",
     "full_road_water_no_reference",
+    "no_reference_depth_uncertain",
+    "reference_available",
+    "output_cap_applied",
+    "output_cap_wet_road",
+    "output_cap_shallow_flood",
 }
 
 
@@ -90,6 +116,22 @@ class ResidualFusionDepthModel(nn.Module):
     def forward(self, x: torch.Tensor, base_depth_cm: torch.Tensor) -> torch.Tensor:
         residual_cm = self.net(x) * self.max_residual_cm
         return torch.clamp(base_depth_cm + residual_cm, min=0.0, max=180.0)
+
+
+class DepthRegimeHead(nn.Module):
+    def __init__(self, input_dim: int, class_count: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.LayerNorm(input_dim),
+            nn.Dropout(0.15),
+            nn.Linear(input_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(0.15),
+            nn.Linear(128, class_count),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
 
 class MaskConditionedFusionDepthModel(nn.Module):
     """Checkpoint-compatible loader for FloodDepth-MaskConditionedFusion.pth."""
@@ -122,6 +164,7 @@ class ReferenceObject:
     bbox: Tuple[int, int, int, int]
     area_ratio: float
     water_submersion_ratio: float
+    waterline_height_ratio: float
 
 
 def _depth_to_severity(depth_cm: float, features: Dict[str, float]) -> Dict[str, Any]:
@@ -187,12 +230,20 @@ class SegformerYoloDepthV2Pipeline:
         self._road_scene_device = torch.device("cpu")
         self._road_scene_backend = "disabled"
         self._road_scene_class_names: list[str] = []
+        self._depth_regime_backbone = None
+        self._depth_regime_head = None
+        self._depth_regime_transform = None
+        self._depth_regime_device = torch.device("cpu")
+        self._depth_regime_backend = "disabled"
+        self._depth_regime_class_names: list[str] = []
         self._residual_fusion_model = None
         self._residual_fusion_backend = "disabled"
         self._residual_fusion_device = torch.device("cpu")
         self._residual_fusion_feature_names = RESIDUAL_FUSION_FEATURE_NAMES
         self._residual_fusion_feature_mean = None
         self._residual_fusion_feature_std = None
+        self._residual_fusion_base_depth_feature = "efficientnet_candidate_depth_cm"
+        self._residual_fusion_meaningful_flood_floor: Dict[str, Any] = {}
         self._teacher_ensemble = None
         self._teacher_backend = "disabled"
         self._load_yolo_if_available()
@@ -202,6 +253,7 @@ class SegformerYoloDepthV2Pipeline:
         self._load_mask_conditioned_fusion_if_available()
         self._load_no_water_guard_if_available()
         self._load_road_scene_classifier_if_available()
+        self._load_depth_regime_classifier_if_available()
         self._load_residual_fusion_if_available()
         self._load_depth_teachers_if_available()
 
@@ -418,6 +470,46 @@ class SegformerYoloDepthV2Pipeline:
             self._road_scene_model = None
             self._road_scene_transform = None
             self._road_scene_backend = "unavailable"
+
+    def _load_depth_regime_classifier_if_available(self) -> None:
+        try:
+            cfg = load_settings_dict().get("inference", {}).get("dynamic_broad_mask_resolver", {})
+        except Exception:
+            return
+        if not bool(cfg.get("load_classifier", False)):
+            return
+        model_path = Path(str(cfg.get("classifier_model_path", "models/candidate/depth_regime_classifier_v2_packaged.pt")))
+        if not model_path.exists():
+            self._depth_regime_backend = "unavailable"
+            return
+        try:
+            device = torch.device("cuda" if torch.cuda.is_available() and str(cfg.get("device", "cpu")) == "cuda" else "cpu")
+            checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+            class_names = list(checkpoint["class_names"])
+            backbone = models.efficientnet_b0(weights=None).to(device)
+            backbone.load_state_dict(checkpoint["backbone_state_dict"], strict=True)
+            head = DepthRegimeHead(int(checkpoint["embedding_dim"]), len(class_names)).to(device)
+            head.load_state_dict(checkpoint["head_state_dict"], strict=True)
+            backbone.eval()
+            head.eval()
+            self._depth_regime_backbone = backbone
+            self._depth_regime_head = head
+            self._depth_regime_device = device
+            self._depth_regime_class_names = class_names
+            self._depth_regime_backend = str(model_path)
+            self._depth_regime_transform = transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
+        except Exception as exc:
+            logger.warning("Depth-regime classifier unavailable: %s", exc)
+            self._depth_regime_backbone = None
+            self._depth_regime_head = None
+            self._depth_regime_transform = None
+            self._depth_regime_backend = "unavailable"
+
     def _load_no_water_guard_if_available(self) -> None:
         try:
             cfg = load_settings_dict().get("inference", {}).get("no_water_guard", {})
@@ -532,6 +624,7 @@ class SegformerYoloDepthV2Pipeline:
             checkpoint = torch.load(model_path, map_location=device, weights_only=False)
             feature_names = list(checkpoint.get("feature_names", RESIDUAL_FUSION_FEATURE_NAMES))
             max_residual_cm = float(checkpoint.get("max_residual_cm", cfg.get("max_residual_cm", 35.0)))
+            base_depth_feature = str(checkpoint.get("base_depth_feature", cfg.get("base_depth_feature", "efficientnet_candidate_depth_cm")))
             model = ResidualFusionDepthModel(len(feature_names), max_residual_cm).to(device)
             model.load_state_dict(checkpoint["model_state_dict"], strict=True)
             model.eval()
@@ -548,6 +641,8 @@ class SegformerYoloDepthV2Pipeline:
             self._residual_fusion_feature_names = feature_names
             self._residual_fusion_feature_mean = feature_mean
             self._residual_fusion_feature_std = feature_std
+            self._residual_fusion_base_depth_feature = base_depth_feature
+            self._residual_fusion_meaningful_flood_floor = dict(checkpoint.get("meaningful_flood_floor", {}))
             logger.info("Loaded residual fusion depth model from %s", model_path)
         except Exception as exc:
             logger.warning("Residual fusion depth model unavailable: %s", exc)
@@ -555,6 +650,8 @@ class SegformerYoloDepthV2Pipeline:
             self._residual_fusion_backend = "unavailable"
             self._residual_fusion_feature_mean = None
             self._residual_fusion_feature_std = None
+            self._residual_fusion_base_depth_feature = "efficientnet_candidate_depth_cm"
+            self._residual_fusion_meaningful_flood_floor = {}
 
     @staticmethod
     def _feature_float(value: Any, default: float = 0.0) -> float:
@@ -569,6 +666,26 @@ class SegformerYoloDepthV2Pipeline:
             return default
 
     def _residual_fusion_feature_vector(self, pipeline_depth_cm: float, features: Dict[str, Any]) -> np.ndarray:
+        pre_output_depth = self._feature_float(features.get("pre_output_cap_depth_cm"), pipeline_depth_cm)
+        efficientnet_depth = self._feature_float(features.get("efficientnet_candidate_depth_cm"))
+        reference_depth = self._feature_float(features.get("reference_depth_cm"))
+        reference_available = self._feature_float(features.get("reference_count")) > 0.0
+        depth_signals = [
+            pre_output_depth,
+            efficientnet_depth,
+            self._feature_float(features.get("dense_depth_p90")) * 120.0,
+            reference_depth,
+            self._feature_float(features.get("region_depth_cm")),
+        ]
+        valid_depth_signals = [value for value in depth_signals if value > 0.0]
+        derived = {
+            "reference_available": 1.0 if reference_available else 0.0,
+            "depth_signal_spread_cm": (
+                max(valid_depth_signals) - min(valid_depth_signals) if len(valid_depth_signals) >= 2 else 0.0
+            ),
+            "efficientnet_uncapped_delta_cm": abs(efficientnet_depth - pre_output_depth),
+            "reference_uncapped_delta_cm": abs(reference_depth - pre_output_depth) if reference_available else 0.0,
+        }
         values: List[float] = []
         for name in self._residual_fusion_feature_names:
             if name == "pipeline_depth_cm":
@@ -576,7 +693,9 @@ class SegformerYoloDepthV2Pipeline:
             elif name == "dense_depth_cm":
                 value = self._feature_float(features.get("dense_depth_p90")) * 120.0
             elif name in RESIDUAL_FUSION_BOOL_FEATURES:
-                value = 1.0 if bool(features.get(name, False)) else 0.0
+                value = derived.get(name, 1.0 if bool(features.get(name, False)) else 0.0)
+            elif name in derived:
+                value = derived[name]
             else:
                 value = self._feature_float(features.get(name))
             values.append(value)
@@ -598,9 +717,15 @@ class SegformerYoloDepthV2Pipeline:
             features["residual_fusion_status"] = self._residual_fusion_backend
             return depth_cm, confidence, action
 
-        candidate_depth = features.get("efficientnet_candidate_depth_cm")
+        base_depth_feature = self._residual_fusion_base_depth_feature or "efficientnet_candidate_depth_cm"
+        if base_depth_feature == "pipeline_depth_cm":
+            candidate_depth = depth_cm
+        elif base_depth_feature == "uncapped_pipeline_depth_cm":
+            candidate_depth = features.get("pre_output_cap_depth_cm", depth_cm)
+        else:
+            candidate_depth = features.get(base_depth_feature)
         if candidate_depth is None:
-            features["residual_fusion_status"] = "skipped_no_efficientnet_depth"
+            features["residual_fusion_status"] = f"skipped_no_{base_depth_feature}"
             return depth_cm, confidence, action
 
         try:
@@ -650,6 +775,74 @@ class SegformerYoloDepthV2Pipeline:
 
         original_depth = round(float(depth_cm), 2)
         fusion_depth = round(float(np.clip(fusion_depth, 0.0, 180.0)), 2)
+        safety_cfg = cfg.get("moderate_flood_safety_fallback", {})
+        if bool(safety_cfg.get("enabled", False)):
+            agreement_signals = np.asarray(
+                [
+                    self._feature_float(features.get("pre_output_cap_depth_cm"), original_depth),
+                    self._feature_float(features.get("efficientnet_candidate_depth_cm")),
+                    self._feature_float(features.get("model_cluster_depth_cm")),
+                ],
+                dtype=np.float32,
+            )
+            agreement_spread = float(np.max(agreement_signals) - np.min(agreement_signals))
+            safety_applies = (
+                fusion_depth <= float(safety_cfg.get("collapse_max_cm", 0.5))
+                and agreement_signals[0] >= float(safety_cfg.get("min_base_cm", 20.0))
+                and self._feature_float(features.get("mask_conditioned_fusion_depth_cm"))
+                >= float(safety_cfg.get("min_mask_depth_cm", 20.0))
+                and agreement_spread <= float(safety_cfg.get("max_agreement_spread_cm", 8.0))
+                and self._feature_float(features.get("road_scene_dry_road_probability"))
+                < float(safety_cfg.get("max_dry_probability", 0.80))
+                and self._feature_float(features.get("road_scene_wet_road_probability"))
+                < float(safety_cfg.get("max_wet_probability", 0.90))
+                and self._feature_float(features.get("no_water_probability"))
+                < float(safety_cfg.get("max_no_water_probability", 0.90))
+                and self._feature_float(features.get("wet_road_no_water_probability"))
+                < float(safety_cfg.get("max_no_water_probability", 0.90))
+            )
+            if safety_applies:
+                fallback_depth = round(float(np.median(agreement_signals)), 2)
+                features["residual_fusion_raw_depth_cm"] = fusion_depth
+                features["residual_fusion_safety_fallback_applied"] = True
+                features["residual_fusion_safety_fallback_depth_cm"] = fallback_depth
+                features["residual_fusion_safety_fallback_reason"] = (
+                    "Near-zero residual prediction conflicted with agreeing uncapped, EfficientNet, "
+                    "model-cluster, and mask-conditioned flood evidence."
+                )
+                fusion_depth = fallback_depth
+        floor_cfg = self._residual_fusion_meaningful_flood_floor
+        if bool(floor_cfg.get("enabled", False)):
+            min_base_cm = float(floor_cfg.get("min_base_cm", 20.0))
+            max_no_water_probability = float(floor_cfg.get("max_no_water_probability", 0.90))
+            evidence_count = sum(
+                [
+                    self._feature_float(features.get("water_coverage_pct")) >= 40.0,
+                    self._feature_float(features.get("near_water_coverage_pct")) >= 25.0,
+                    self._feature_float(features.get("reference_count")) >= 1.0
+                    and self._feature_float(features.get("max_reference_submersion")) >= 0.50,
+                    bool(features.get("immediate_risk", False)),
+                    self._feature_float(features.get("road_scene_meaningful_flood_probability")) >= 0.35,
+                ]
+            )
+            efficientnet_depth = self._feature_float(features.get("efficientnet_candidate_depth_cm"))
+            no_water_probability = self._feature_float(features.get("no_water_probability"))
+            wet_no_water_probability = self._feature_float(features.get("wet_road_no_water_probability"))
+            floor_applies = (
+                self._feature_float(features.get("pre_output_cap_depth_cm"), original_depth) >= min_base_cm
+                and efficientnet_depth >= min_base_cm
+                and evidence_count >= int(floor_cfg.get("min_evidence_count", 2))
+                and no_water_probability < max_no_water_probability
+                and wet_no_water_probability < max_no_water_probability
+            )
+            if floor_applies:
+                flood_floor = min(
+                    self._feature_float(features.get("pre_output_cap_depth_cm"), original_depth),
+                    efficientnet_depth,
+                )
+                if fusion_depth < flood_floor:
+                    fusion_depth = round(flood_floor, 2)
+                    features["residual_fusion_meaningful_flood_floor_applied"] = True
         max_change_cm = float(cfg.get("max_live_adjustment_cm", 30.0))
         candidate_depth_value = float(candidate_depth)
         candidate_alignment_cm = float(cfg.get("large_adjustment_candidate_alignment_cm", 15.0))
@@ -668,6 +861,7 @@ class SegformerYoloDepthV2Pipeline:
         features["residual_fusion_applied_depth_cm"] = applied_depth
         features["residual_fusion_delta_cm"] = round(applied_depth - original_depth, 2)
         features["residual_fusion_large_adjustment_allowed"] = bool(allow_large_adjustment)
+        features["residual_fusion_base_depth_feature"] = base_depth_feature
         features["residual_fusion_status"] = "applied"
         features["residual_fusion_model_path"] = self._residual_fusion_backend
         features["final_aggregation_source"] = "residual_fusion_model"
@@ -790,20 +984,163 @@ class SegformerYoloDepthV2Pipeline:
         except Exception as exc:
             logger.warning("Road-scene classifier inference failed: %s", exc)
             return None
-    def _apply_no_water_guard(
+
+    def _depth_regime_classifier_signal(self, image_rgb: np.ndarray) -> Optional[Dict[str, float]]:
+        if (
+            self._depth_regime_backbone is None
+            or self._depth_regime_head is None
+            or self._depth_regime_transform is None
+        ):
+            return None
+        image = Image.fromarray(image_rgb.astype(np.uint8), mode="RGB")
+        tensor = self._depth_regime_transform(image).unsqueeze(0).to(self._depth_regime_device)
+        try:
+            with torch.no_grad():
+                embedding = self._depth_regime_backbone.avgpool(
+                    self._depth_regime_backbone.features(tensor)
+                ).flatten(1)
+                probabilities = torch.softmax(self._depth_regime_head(embedding), dim=1)[0].cpu().numpy()
+            return {
+                name: round(float(np.clip(probability, 0.0, 1.0)), 6)
+                for name, probability in zip(self._depth_regime_class_names, probabilities)
+            }
+        except Exception as exc:
+            logger.warning("Depth-regime classifier inference failed: %s", exc)
+            return None
+
+    def _apply_dynamic_broad_mask_resolver(
         self,
         depth_cm: float,
         confidence: float,
         action: str,
         features: Dict[str, Any],
     ) -> Tuple[float, float, str]:
+        try:
+            cfg = load_settings_dict().get("inference", {}).get("dynamic_broad_mask_resolver", {})
+        except Exception:
+            cfg = {}
+        features["dynamic_broad_mask_resolver_applied"] = False
+        features["dynamic_broad_mask_resolver_status"] = "disabled"
+        if not bool(cfg.get("enabled", False)):
+            return depth_cm, confidence, action
+        probabilities = features.get("depth_regime_probabilities") or {}
+        deep_flood_probability = self._feature_float(probabilities.get("deep_over_50"))
+        strong_reference_scene = (
+            self._feature_float(features.get("reference_count"))
+            >= float(cfg.get("strong_reference_min_count", 3))
+            and self._feature_float(features.get("max_reference_submersion"))
+            >= float(cfg.get("strong_reference_min_submersion", 0.70))
+            and self._feature_float(features.get("water_coverage_pct"))
+            >= float(cfg.get("strong_reference_min_water_coverage_pct", 40.0))
+            and self._feature_float(features.get("mid_water_coverage_pct"))
+            >= float(cfg.get("strong_reference_min_mid_coverage_pct", 45.0))
+            and bool(features.get("immediate_risk", False))
+            and deep_flood_probability >= float(cfg.get("strong_reference_min_deep_probability", 0.60))
+            and float(depth_cm) <= float(cfg.get("strong_reference_max_input_depth_cm", 30.0))
+        )
+        features["dynamic_broad_mask_strong_reference_scene"] = bool(strong_reference_scene)
+        if not bool(features.get("broad_mask_warning", False)) and not strong_reference_scene:
+            features["dynamic_broad_mask_resolver_status"] = "not_broad_mask"
+            return depth_cm, confidence, action
+
+        image_flood_probability = self._feature_float(probabilities.get("moderate_20_50")) + self._feature_float(
+            probabilities.get("deep_over_50")
+        )
+        physical_evidence = sum(
+            [
+                self._feature_float(features.get("near_water_coverage_pct")) >= float(cfg.get("min_near_coverage_pct", 50.0)),
+                self._feature_float(features.get("mid_water_coverage_pct")) >= float(cfg.get("min_mid_coverage_pct", 50.0)),
+                self._feature_float(features.get("max_reference_submersion")) >= float(cfg.get("min_reference_submersion", 0.70)),
+                self._feature_float(features.get("reference_count")) >= 1.0,
+                bool(features.get("immediate_risk", False)),
+            ]
+        )
+        dense_depth = self._feature_float(features.get("dense_depth_p90")) * 120.0
+        candidates = np.asarray(
+            [
+                self._feature_float(features.get("efficientnet_candidate_depth_cm")),
+                self._feature_float(features.get("region_depth_cm")) * float(cfg.get("region_scale", 0.65)),
+                self._feature_float(features.get("reference_depth_cm")) * float(cfg.get("reference_scale", 0.50)),
+                dense_depth * float(cfg.get("dense_scale", 0.60)),
+            ],
+            dtype=np.float32,
+        )
+        candidates = candidates[np.isfinite(candidates) & (candidates > 0.0)]
+        if len(candidates) < 3:
+            features["dynamic_broad_mask_resolver_status"] = "insufficient_depth_signals"
+            return depth_cm, confidence, action
+
+        lower = float(np.percentile(candidates, 25))
+        estimate = float(np.percentile(candidates, 40))
+        upper = float(np.percentile(candidates, 75))
+        spread = upper - lower
+        max_spread = float(cfg.get("max_signal_iqr_cm", 25.0))
+        agreement = float(np.clip(1.0 - (spread / max(max_spread, 1e-6)), 0.0, 1.0))
+        evidence_strength = min(1.0, physical_evidence / max(float(cfg.get("full_evidence_count", 5)), 1.0))
+        resolver_confidence = float(np.clip(image_flood_probability * (0.55 + 0.45 * evidence_strength) * (0.65 + 0.35 * agreement), 0.0, 1.0))
+
+        features["dynamic_broad_mask_estimated_depth_cm"] = round(estimate, 2)
+        features["dynamic_broad_mask_confidence"] = round(resolver_confidence, 4)
+        features["dynamic_broad_mask_range_min_cm"] = round(lower, 2)
+        features["dynamic_broad_mask_range_max_cm"] = round(upper, 2)
+        features["dynamic_broad_mask_image_flood_probability"] = round(image_flood_probability, 4)
+        features["dynamic_broad_mask_physical_evidence_count"] = int(physical_evidence)
+        features["dynamic_broad_mask_signal_iqr_cm"] = round(spread, 2)
+
+        required_evidence = int(cfg.get("min_physical_evidence_count", 3))
+        if strong_reference_scene:
+            required_evidence = min(
+                required_evidence,
+                int(cfg.get("strong_reference_min_physical_evidence_count", 4)),
+            )
+        applies = (
+            image_flood_probability >= float(cfg.get("min_image_flood_probability", 0.65))
+            and physical_evidence >= required_evidence
+            and resolver_confidence >= float(cfg.get("min_confidence", 0.35))
+            and estimate > depth_cm
+        )
+        if not applies:
+            features["dynamic_broad_mask_resolver_status"] = "insufficient_consensus"
+            return depth_cm, confidence, action
+
+        blend = float(np.clip(resolver_confidence, 0.0, float(cfg.get("max_blend", 0.85))))
+        resolved_depth = round(float(np.clip(depth_cm + blend * (estimate - depth_cm), 0.0, 180.0)), 2)
+        features["dynamic_broad_mask_resolver_applied"] = True
+        features["dynamic_broad_mask_resolver_status"] = "applied"
+        features["dynamic_broad_mask_input_depth_cm"] = round(float(depth_cm), 2)
+        features["dynamic_broad_mask_resolved_depth_cm"] = resolved_depth
+        features["review_required"] = bool(resolver_confidence < float(cfg.get("automatic_confidence_threshold", 0.70)))
+        if features["review_required"]:
+            features["review_reason"] = "Dynamic broad-mask evidence is useful but not confident enough for an unreviewed correction."
+        return resolved_depth, max(confidence, resolver_confidence), self._action_for_final_depth(resolved_depth, features, action)
+    def _apply_no_water_guard(
+        self,
+        depth_cm: float,
+        confidence: float,
+        action: str,
+        features: Dict[str, Any],
+        apply_cap: bool = True,
+    ) -> Tuple[float, float, str]:
+        if not apply_cap or "pre_output_cap_depth_cm" not in features:
+            features["pre_output_cap_depth_cm"] = round(float(depth_cm), 2)
+        features["output_cap_capped_depth_cm"] = round(float(depth_cm), 2)
+        features["output_cap_applied"] = False
+        features["output_cap_reason"] = "none"
+        features["output_cap_wet_road"] = False
+        features["output_cap_shallow_flood"] = False
         probability = features.get("no_water_probability")
         wet_road_probability = features.get("wet_road_no_water_probability", features.get("secondary_no_water_probability"))
         road_scene_probabilities = features.get("road_scene_probabilities") or {}
         scene_wet_probability = None
+        scene_shallow_probability = None
+        scene_meaningful_probability = None
         if isinstance(road_scene_probabilities, dict) and road_scene_probabilities.get("wet_road") is not None:
             scene_wet_probability = float(road_scene_probabilities["wet_road"])
-        if probability is None and wet_road_probability is None and scene_wet_probability is None:
+        if isinstance(road_scene_probabilities, dict) and road_scene_probabilities.get("shallow_flood") is not None:
+            scene_shallow_probability = float(road_scene_probabilities["shallow_flood"])
+        if isinstance(road_scene_probabilities, dict) and road_scene_probabilities.get("meaningful_flood") is not None:
+            scene_meaningful_probability = float(road_scene_probabilities["meaningful_flood"])
+        if probability is None and wet_road_probability is None and scene_wet_probability is None and scene_shallow_probability is None:
             return depth_cm, confidence, action
 
         try:
@@ -872,6 +1209,17 @@ class SegformerYoloDepthV2Pipeline:
             and scene_wet_probability >= scene_wet_threshold
             and scene_cap_visual_ok
         )
+        shallow_cap_enabled = bool(scene_cfg.get("shallow_flood_cap_enabled", False))
+        shallow_threshold = float(scene_cfg.get("shallow_flood_cap_threshold", 0.98))
+        shallow_cap_cm = float(scene_cfg.get("shallow_flood_cap_cm", 15.0))
+        meaningful_max_probability = float(scene_cfg.get("shallow_flood_cap_max_meaningful_probability", 0.05))
+        shallow_cap_applied = bool(
+            shallow_cap_enabled
+            and scene_shallow_probability is not None
+            and scene_shallow_probability >= shallow_threshold
+            and (scene_meaningful_probability is None or scene_meaningful_probability <= meaningful_max_probability)
+            and float(depth_cm) > shallow_cap_cm
+        )
 
         features["primary_no_water_guard_status"] = self._guard_status(probability, primary_match, primary_corroborated)
         features["primary_no_water_guard_corroborated"] = bool(primary_corroborated)
@@ -885,11 +1233,20 @@ class SegformerYoloDepthV2Pipeline:
         features["no_water_guard_blocked_by_flood_evidence"] = bool((primary_match or wet_road_match) and not corroborated)
         features["road_scene_wet_road_probability"] = scene_wet_probability
         features["road_scene_wet_road_cap_status"] = "applied" if scene_cap_applied else ("blocked_by_flood_evidence" if scene_wet_probability is not None and scene_wet_probability >= scene_wet_threshold else "below_threshold")
+        features["road_scene_shallow_flood_probability"] = scene_shallow_probability
+        features["road_scene_meaningful_flood_probability"] = scene_meaningful_probability
+        features["road_scene_shallow_flood_cap_status"] = "applied" if shallow_cap_applied else ("blocked_by_meaningful_flood_probability" if scene_shallow_probability is not None and scene_shallow_probability >= shallow_threshold and scene_meaningful_probability is not None and scene_meaningful_probability > meaningful_max_probability else "below_threshold")
 
         if not corroborated:
             if scene_cap_applied:
                 capped_depth_cm = round(min(float(depth_cm), scene_cap_cm), 2)
                 features["road_scene_wet_road_cap_applied"] = True
+                features["output_cap_applied"] = True
+                features["output_cap_reason"] = "wet_road"
+                features["output_cap_wet_road"] = True
+                features["output_cap_capped_depth_cm"] = capped_depth_cm
+                if not apply_cap:
+                    return depth_cm, confidence, action
                 features["final_output_reason"] = (
                     f"four-class road-scene model predicted wet_road with probability {scene_wet_probability:.3f}; "
                     f"low-risk visual evidence capped depth from {depth_cm:.2f} cm to {capped_depth_cm:.2f} cm."
@@ -898,6 +1255,22 @@ class SegformerYoloDepthV2Pipeline:
                 features["review_required"] = False
                 features["review_reason"] = ""
                 return capped_depth_cm, round(float(max(confidence, scene_wet_probability)), 4), self._action_for_final_depth(capped_depth_cm, features, action)
+            if shallow_cap_applied:
+                capped_depth_cm = round(min(float(depth_cm), shallow_cap_cm), 2)
+                features["road_scene_shallow_flood_cap_applied"] = True
+                features["output_cap_applied"] = True
+                features["output_cap_reason"] = "shallow_flood"
+                features["output_cap_shallow_flood"] = True
+                features["output_cap_capped_depth_cm"] = capped_depth_cm
+                if not apply_cap:
+                    return depth_cm, confidence, action
+                features["final_output_reason"] = (
+                    f"four-class road-scene model predicted shallow_flood with probability {scene_shallow_probability:.3f} "
+                    f"and meaningful_flood probability {scene_meaningful_probability or 0.0:.3f}; "
+                    f"shallow-flood safety cap reduced depth from {depth_cm:.2f} cm to {capped_depth_cm:.2f} cm."
+                )
+                features["final_aggregation_source"] = "road_scene_shallow_flood_cap"
+                return capped_depth_cm, round(float(max(confidence, scene_shallow_probability)), 4), self._action_for_final_depth(capped_depth_cm, features, action)
             return depth_cm, confidence, action
 
         use_wet_road_guard = wet_road_corroborated and not primary_corroborated
@@ -1114,6 +1487,7 @@ class SegformerYoloDepthV2Pipeline:
             area_ratio = bbox_area / float(h * w)
             bbox_mask = water_mask[y1:y2, x1:x2]
             submersion = float((bbox_mask > 0).mean()) if bbox_mask.size else 0.0
+            waterline_ratio = self._object_waterline_height_ratio(bbox_mask)
             refs.append(
                 ReferenceObject(
                     label=label,
@@ -1121,6 +1495,7 @@ class SegformerYoloDepthV2Pipeline:
                     bbox=(x1, y1, x2, y2),
                     area_ratio=round(area_ratio, 4),
                     water_submersion_ratio=round(submersion, 4),
+                    waterline_height_ratio=round(waterline_ratio, 4),
                 )
             )
 
@@ -1158,6 +1533,7 @@ class SegformerYoloDepthV2Pipeline:
             area_ratio = bbox_area / float(h * w)
             bbox_mask = water_mask[y1:y2, x1:x2]
             submersion = float((bbox_mask > 0).mean()) if bbox_mask.size else 0.0
+            waterline_ratio = self._object_waterline_height_ratio(bbox_mask)
             refs.append(
                 ReferenceObject(
                     label=label,
@@ -1165,6 +1541,7 @@ class SegformerYoloDepthV2Pipeline:
                     bbox=(x1, y1, x2, y2),
                     area_ratio=round(area_ratio, 4),
                     water_submersion_ratio=round(submersion, 4),
+                    waterline_height_ratio=round(waterline_ratio, 4),
                 )
             )
 
@@ -1186,6 +1563,7 @@ class SegformerYoloDepthV2Pipeline:
             x2 = min(w, x + bw)
             bbox_mask = water_mask[y:y2, x:x2]
             submersion = float((bbox_mask > 0).mean()) if bbox_mask.size else 0.0
+            waterline_ratio = self._object_waterline_height_ratio(bbox_mask)
             refs.append(
                 ReferenceObject(
                     label="vehicle",
@@ -1193,6 +1571,7 @@ class SegformerYoloDepthV2Pipeline:
                     bbox=(x, y, x2, y2),
                     area_ratio=round((bw * bh) / float(h * w), 4),
                     water_submersion_ratio=round(submersion, 4),
+                    waterline_height_ratio=round(waterline_ratio, 4),
                 )
             )
 
@@ -1202,6 +1581,7 @@ class SegformerYoloDepthV2Pipeline:
             x2 = min(w, x + bw)
             bbox_mask = water_mask[y:y2, x:x2]
             submersion = float((bbox_mask > 0).mean()) if bbox_mask.size else 0.0
+            waterline_ratio = self._object_waterline_height_ratio(bbox_mask)
             refs.append(
                 ReferenceObject(
                     label="person",
@@ -1209,11 +1589,22 @@ class SegformerYoloDepthV2Pipeline:
                     bbox=(x, y, x2, y2),
                     area_ratio=round((bw * bh) / float(h * w), 4),
                     water_submersion_ratio=round(submersion, 4),
+                    waterline_height_ratio=round(waterline_ratio, 4),
                 )
             )
 
         refs.sort(key=lambda item: item.area_ratio, reverse=True)
         return refs
+
+    @staticmethod
+    def _object_waterline_height_ratio(bbox_mask: np.ndarray) -> float:
+        if bbox_mask.size == 0 or bbox_mask.shape[0] == 0:
+            return 0.0
+        row_coverage = (bbox_mask > 0).mean(axis=1)
+        water_rows = np.flatnonzero(row_coverage >= 0.35)
+        if water_rows.size == 0:
+            return 0.0
+        return float(np.clip((bbox_mask.shape[0] - int(water_rows[0])) / bbox_mask.shape[0], 0.0, 1.0))
 
     def _yolov8_reference_stage(
         self,
@@ -1434,12 +1825,32 @@ class SegformerYoloDepthV2Pipeline:
         )
 
         zone_features = self._water_zone_features(water_mask)
+        person_references = [obj for obj in references if obj.label == "person"]
+        vehicle_references = [obj for obj in references if obj.label != "person"]
 
         features = {
             "water_coverage_pct": round(float(water_coverage_pct), 4),
             "reference_count": float(len(references)),
             "max_reference_submersion": round(
                 max((obj.water_submersion_ratio for obj in references), default=0.0),
+                4,
+            ),
+            "person_reference_count": float(len(person_references)),
+            "max_person_submersion": round(
+                max((obj.water_submersion_ratio for obj in person_references), default=0.0),
+                4,
+            ),
+            "max_person_waterline_ratio": round(
+                max((obj.waterline_height_ratio for obj in person_references), default=0.0),
+                4,
+            ),
+            "vehicle_reference_count": float(len(vehicle_references)),
+            "max_vehicle_submersion": round(
+                max((obj.water_submersion_ratio for obj in vehicle_references), default=0.0),
+                4,
+            ),
+            "max_vehicle_waterline_ratio": round(
+                max((obj.waterline_height_ratio for obj in vehicle_references), default=0.0),
                 4,
             ),
             "dense_depth_mean": round(float(np.mean(water_pixels)), 4),
@@ -1857,6 +2268,7 @@ class SegformerYoloDepthV2Pipeline:
         no_water_probability = self._no_water_guard_signal(image_rgb)
         wet_road_no_water_probability = self._wet_road_no_water_guard_signal(image_rgb)
         road_scene_probabilities = self._road_scene_classifier_signal(image_rgb)
+        depth_regime_probabilities = self._depth_regime_classifier_signal(image_rgb)
         trace.append(
             {
                 "stage": "No-Water Guard",
@@ -1983,8 +2395,18 @@ class SegformerYoloDepthV2Pipeline:
         features["no_water_guard_backend"] = self._no_water_backend
         features["road_scene_classifier_backend"] = self._road_scene_backend
         features["road_scene_probabilities"] = road_scene_probabilities
+        features["depth_regime_classifier_backend"] = self._depth_regime_backend
+        features["depth_regime_probabilities"] = depth_regime_probabilities
+        if depth_regime_probabilities is not None:
+            features["depth_regime_prediction"] = max(depth_regime_probabilities, key=depth_regime_probabilities.get)
+            for regime_name, regime_probability in depth_regime_probabilities.items():
+                features[f"depth_regime_{regime_name}_probability"] = float(regime_probability)
         if road_scene_probabilities is not None:
             features["road_scene_prediction"] = max(road_scene_probabilities, key=road_scene_probabilities.get)
+        for scene_class in ("dry_road", "wet_road", "shallow_flood", "meaningful_flood"):
+            features[f"road_scene_{scene_class}_probability"] = float(
+                road_scene_probabilities.get(scene_class, 0.0) if road_scene_probabilities else 0.0
+            )
         if teacher_features:
             features["depth_teacher_available_count"] = int(teacher_meta.get("available_teacher_count", 0) or 0)
             features["depth_teacher_total_count"] = int(teacher_meta.get("total_teachers", 3) or 3)
@@ -2027,11 +2449,46 @@ class SegformerYoloDepthV2Pipeline:
             features["final_candidate_delta_cm"] = round(abs(depth_cm - efficientnet_depth_cm), 2)
         depth_cm, confidence, action = self._apply_efficientnet_correction(depth_cm, confidence, action, features)
         depth_cm, confidence, action = self._record_model_agreement(depth_cm, confidence, action, features)
+        depth_cm, confidence, action = self._apply_no_water_guard(
+            depth_cm,
+            confidence,
+            action,
+            features,
+            apply_cap=False,
+        )
+        # Preserve the scene/no-water cap computed before residual inference.
+        # The final guard pass may update output_cap_capped_depth_cm afterward.
+        features["pre_residual_output_cap_capped_depth_cm"] = round(
+            self._feature_float(features.get("output_cap_capped_depth_cm"), depth_cm),
+            2,
+        )
         depth_cm, confidence, action = self._apply_residual_fusion_model(depth_cm, confidence, action, features)
+        depth_cm, confidence, action = self._apply_dynamic_broad_mask_resolver(
+            depth_cm,
+            confidence,
+            action,
+            features,
+        )
         depth_cm, confidence, action = self._apply_mask_conditioned_high_flood_correction(depth_cm, confidence, action, features)
         depth_cm, confidence, action = self._apply_strong_deep_flood_correction(depth_cm, confidence, action, features)
         depth_cm, confidence, action = self._apply_dry_land_guard(depth_cm, confidence, action, image_rgb, features)
         depth_cm, confidence, action = self._apply_no_water_guard(depth_cm, confidence, action, features)
+        try:
+            scene_cfg = load_settings_dict().get("inference", {}).get("road_scene_classifier", {})
+        except Exception:
+            scene_cfg = {}
+        dry_probability = self._feature_float(features.get("road_scene_dry_road_probability"))
+        if (
+            bool(scene_cfg.get("dry_road_override_enabled", False))
+            and dry_probability >= float(scene_cfg.get("dry_road_override_threshold", 0.995))
+        ):
+            features["pre_dry_road_override_depth_cm"] = round(float(depth_cm), 2)
+            features["dry_road_override_applied"] = True
+            features["dry_road_override_probability"] = dry_probability
+            features["final_output_reason"] = "High-confidence dry-road scene classification forced depth to zero."
+            depth_cm = 0.0
+            confidence = max(float(confidence), dry_probability)
+            action = "MONITOR"
         if features.get("dry_land_guard_applied"):
             trace.append(
                 {
@@ -2048,6 +2505,15 @@ class SegformerYoloDepthV2Pipeline:
                     "backend": str(features.get("no_water_decision_backend", self._no_water_backend)),
                     "status": "applied",
                     "summary": "dry/wet-road guard forced depth=0.00 cm",
+                }
+            )
+        elif features.get("dry_road_override_applied"):
+            trace.append(
+                {
+                    "stage": "Dry-Road Classifier Override",
+                    "backend": self._road_scene_backend,
+                    "status": "applied",
+                    "summary": f"dry_probability={dry_probability:.3f}; forced depth=0.00 cm",
                 }
             )
         if features.get("residual_fusion_status") in {"applied", "skipped_low_water_gate"}:
@@ -2110,15 +2576,3 @@ def get_segformer_yolo_depthv2_pipeline() -> SegformerYoloDepthV2Pipeline:
     if _PIPELINE is None:
         _PIPELINE = SegformerYoloDepthV2Pipeline()
     return _PIPELINE
-
-
-
-
-
-
-
-
-
-
-
-
