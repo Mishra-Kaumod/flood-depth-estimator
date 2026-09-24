@@ -1025,6 +1025,7 @@ class SegformerYoloDepthV2Pipeline:
             return depth_cm, confidence, action
         probabilities = features.get("depth_regime_probabilities") or {}
         deep_flood_probability = self._feature_float(probabilities.get("deep_over_50"))
+        image_flood_probability = self._feature_float(probabilities.get("moderate_20_50")) + deep_flood_probability
         strong_reference_scene = (
             self._feature_float(features.get("reference_count"))
             >= float(cfg.get("strong_reference_min_count", 3))
@@ -1038,14 +1039,29 @@ class SegformerYoloDepthV2Pipeline:
             and deep_flood_probability >= float(cfg.get("strong_reference_min_deep_probability", 0.60))
             and float(depth_cm) <= float(cfg.get("strong_reference_max_input_depth_cm", 30.0))
         )
+        collapse_recovery_scene = (
+            float(depth_cm) <= float(cfg.get("collapse_recovery_max_input_depth_cm", 20.0))
+            and self._feature_float(features.get("pre_output_cap_depth_cm"))
+            >= float(cfg.get("collapse_recovery_min_pre_output_depth_cm", 35.0))
+            and self._feature_float(features.get("mask_conditioned_fusion_depth_cm"))
+            >= float(cfg.get("collapse_recovery_min_mask_depth_cm", 30.0))
+            and self._feature_float(features.get("model_cluster_depth_cm"))
+            >= float(cfg.get("collapse_recovery_min_model_cluster_depth_cm", 30.0))
+            and image_flood_probability >= float(cfg.get("collapse_recovery_min_image_flood_probability", 0.80))
+            and self._feature_float(features.get("water_coverage_pct"))
+            >= float(cfg.get("collapse_recovery_min_water_coverage_pct", 40.0))
+            and bool(features.get("immediate_risk", False))
+            and self._feature_float(features.get("no_water_probability"))
+            < float(cfg.get("collapse_recovery_max_no_water_probability", 0.20))
+            and self._feature_float(features.get("wet_road_no_water_probability"))
+            < float(cfg.get("collapse_recovery_max_no_water_probability", 0.20))
+        )
         features["dynamic_broad_mask_strong_reference_scene"] = bool(strong_reference_scene)
-        if not bool(features.get("broad_mask_warning", False)) and not strong_reference_scene:
+        features["dynamic_broad_mask_collapse_recovery_scene"] = bool(collapse_recovery_scene)
+        if not bool(features.get("broad_mask_warning", False)) and not strong_reference_scene and not collapse_recovery_scene:
             features["dynamic_broad_mask_resolver_status"] = "not_broad_mask"
             return depth_cm, confidence, action
 
-        image_flood_probability = self._feature_float(probabilities.get("moderate_20_50")) + self._feature_float(
-            probabilities.get("deep_over_50")
-        )
         physical_evidence = sum(
             [
                 self._feature_float(features.get("near_water_coverage_pct")) >= float(cfg.get("min_near_coverage_pct", 50.0)),
@@ -1092,6 +1108,11 @@ class SegformerYoloDepthV2Pipeline:
             required_evidence = min(
                 required_evidence,
                 int(cfg.get("strong_reference_min_physical_evidence_count", 4)),
+            )
+        if collapse_recovery_scene:
+            required_evidence = min(
+                required_evidence,
+                int(cfg.get("collapse_recovery_min_physical_evidence_count", 2)),
             )
         applies = (
             image_flood_probability >= float(cfg.get("min_image_flood_probability", 0.65))

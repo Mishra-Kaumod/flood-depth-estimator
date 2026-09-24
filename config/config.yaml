@@ -195,6 +195,14 @@ inference:
     strong_reference_min_physical_evidence_count: 4
     strong_reference_min_deep_probability: 0.60
     strong_reference_max_input_depth_cm: 30.0
+    collapse_recovery_max_input_depth_cm: 20.0
+    collapse_recovery_min_pre_output_depth_cm: 35.0
+    collapse_recovery_min_mask_depth_cm: 30.0
+    collapse_recovery_min_model_cluster_depth_cm: 30.0
+    collapse_recovery_min_image_flood_probability: 0.80
+    collapse_recovery_min_water_coverage_pct: 40.0
+    collapse_recovery_max_no_water_probability: 0.20
+    collapse_recovery_min_physical_evidence_count: 2
     full_evidence_count: 5
     region_scale: 0.65
     reference_scale: 0.50
