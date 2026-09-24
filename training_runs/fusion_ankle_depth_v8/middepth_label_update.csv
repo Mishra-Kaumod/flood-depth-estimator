@@ -1,0 +1,16 @@
+filename,depth_cm,split
+027_30CM.jpg,30,test
+028_40CM.jpg,40,val
+029_30CM.jpg,30,val
+030_35CM.jpg,35,train
+031_25CM.jpg,25,train
+032_40CM.jpg,40,train
+033_35CM.jpg,35,train
+033_40CM.jpg,40,train
+034_40CM.jpg,40,train
+035_40CM.jpg,40,train
+036_45CM.jpg,45,train
+037_50CM.jpg,50,test
+038_35CM.jpg,35,train
+039_40CM.jpg,40,train
+040_50CM.jpg,50,train
