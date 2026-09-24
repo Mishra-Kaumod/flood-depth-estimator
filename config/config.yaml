@@ -1,4 +1,4 @@
-﻿# BENGALURU FLOOD DEPTH ESTIMATOR - PRODUCTION CONFIG
+# BENGALURU FLOOD DEPTH ESTIMATOR - PRODUCTION CONFIG
 # Centralized configuration for training, inference, and deployment
 # Designed for AWS EC2, S3, ECR/ECS, and Lambda environments
 
@@ -201,14 +201,22 @@ inference:
   output_format: "json"
   confidence_threshold: 0.5
   llm_judge:
-    enabled: True
-    provider: "google"
-    model: "gemini-flash-latest"
+    enabled: true
+    provider: "local_gemma"  # "local_gemma" | "google"
+    model: "google/paligemma-3b-pt-224"
+    gemma_model: "google/paligemma-3b-pt-224"
+    hf_token: ""
+    device: "auto"  # "auto" uses PyTorch MPS on Apple Silicon, CUDA, or CPU
     endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
     google_api_key: ""
     temperature: 0.0
-    max_output_tokens: 2048
+    max_output_tokens: 128
     apply_corrections: true
+  gemma_semantics:
+    enabled: true
+    model: "gemma3:4b"
+    ollama_url: "http://localhost:11434"
+    timeout_seconds: 35.0
   health_check_interval: 30  # seconds
   ready_timeout: 60  # seconds on startup
 

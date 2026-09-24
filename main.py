@@ -5,6 +5,8 @@ This file runs the new AWS/event-driven pipeline by default.
 The legacy CLI implementation is preserved in legacy_main.py.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os

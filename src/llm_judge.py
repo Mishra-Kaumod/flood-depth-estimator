@@ -13,6 +13,7 @@ import mimetypes
 import os
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict
 
 DEFAULT_MODEL = "gemini-flash-latest"
@@ -24,6 +25,7 @@ DEFAULT_ENDPOINT = (
 
 class LLMJudge:
     def __init__(self, config: Dict[str, Any]) -> None:
+        self.config = config
         self.enabled = bool(config.get("enabled", False))
         self.provider = str(config.get("provider", "google")).lower()
         self.model = str(config.get("model", DEFAULT_MODEL))
@@ -32,14 +34,32 @@ class LLMJudge:
         self.max_output_tokens = int(config.get("max_output_tokens", 2048))
         self.apply_corrections = bool(config.get("apply_corrections", False))
 
-        self.api_key = config.get("google_api_key") or os.getenv("GOOGLE_API_KEY")
-        if self.enabled and not self.api_key:
-            raise ValueError(
-                "LLM judge enabled but GOOGLE_API_KEY is missing in the environment"
-            )
+        self._local_gemma_judge = None
 
-        if self.enabled and self.provider != "google":
-            raise ValueError("Only Google provider is supported by this LLM judge module")
+        if self.enabled:
+            if self.provider in ("local_gemma", "local", "gemma"):
+                try:
+                    from src.local_gemma_judge import LocalGemmaJudge
+                    model_name = config.get("gemma_model") or self.model
+                    if model_name == DEFAULT_MODEL:
+                        model_name = "google/paligemma-3b-pt-224"
+                    device = config.get("device", "auto")
+                    self._local_gemma_judge = LocalGemmaJudge(
+                        model_name=model_name,
+                        device=device,
+                        lazy_load=True,
+                        hf_token=config.get("hf_token"),
+                    )
+                except Exception as exc:
+                    raise RuntimeError(f"Could not initialize LocalGemmaJudge: {exc}")
+            elif self.provider == "google":
+                self.api_key = config.get("google_api_key") or os.getenv("GOOGLE_API_KEY")
+                if not self.api_key:
+                    raise ValueError(
+                        "LLM judge enabled with Google provider but GOOGLE_API_KEY is missing in the environment"
+                    )
+            else:
+                raise ValueError(f"Unsupported LLM judge provider: '{self.provider}'. Use 'google' or 'local_gemma'.")
 
     def judge(
         self,
@@ -49,6 +69,13 @@ class LLMJudge:
     ) -> Dict[str, Any]:
         if not self.enabled:
             return {"enabled": False}
+
+        if self.provider in ("local_gemma", "local", "gemma") and self._local_gemma_judge is not None:
+            return self._local_gemma_judge.judge(
+                prediction=prediction,
+                image_bytes=image_bytes,
+                image_path=filename if isinstance(filename, (str, Path)) else None,
+            )
 
         request_payload = self._build_payload(
             prediction,

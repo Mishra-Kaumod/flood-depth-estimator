@@ -1,4 +1,4 @@
-﻿"""
+"""
 Stage-aligned flood inference pipeline:
 RGB -> SegFormer water mask -> YOLOv8 reference objects ->
 Depth Anything V2 dense depth proxy -> Fusion engine ->
@@ -190,6 +190,7 @@ class SegformerYoloDepthV2Pipeline:
         self._residual_fusion_feature_std = None
         self._teacher_ensemble = None
         self._teacher_backend = "disabled"
+        self.gemma_semantic_analyzer = None
         self._load_yolo_if_available()
         self._load_object_detector_if_available()
         self._load_depth_anything_if_available()
@@ -198,6 +199,26 @@ class SegformerYoloDepthV2Pipeline:
         self._load_no_water_guard_if_available()
         self._load_residual_fusion_if_available()
         self._load_depth_teachers_if_available()
+        self._load_gemma_semantic_analyzer_if_available()
+
+    def _load_gemma_semantic_analyzer_if_available(self) -> None:
+        try:
+            from src.gemma_semantic_analyzer import GemmaSemanticAnalyzer
+            cfg = load_settings_dict().get("inference", {}).get("gemma_semantics", {})
+            enabled = bool(cfg.get("enabled", True))
+            model_name = str(cfg.get("model", "gemma3:4b"))
+            ollama_url = str(cfg.get("ollama_url", "http://localhost:11434"))
+            timeout_seconds = float(cfg.get("timeout_seconds", 10.0))
+
+            self.gemma_semantic_analyzer = GemmaSemanticAnalyzer(
+                model_name=model_name,
+                ollama_url=ollama_url,
+                timeout_seconds=timeout_seconds,
+                enabled=enabled,
+            )
+            logger.info("Initialized GemmaSemanticAnalyzer (Ollama model: %s)", model_name)
+        except Exception as exc:
+            logger.warning("Could not initialize GemmaSemanticAnalyzer: %s", exc)
 
     def _load_yolo_if_available(self) -> None:
         if not self.yolo_weights_path.exists():
@@ -584,7 +605,9 @@ class SegformerYoloDepthV2Pipeline:
             features["residual_fusion_status"] = "skipped_low_water_gate"
             return depth_cm, confidence, action
 
-        if bool(features.get("no_reference_depth_uncertain", False)):
+        gemma_feats = features.get("gemma_semantic_features") or {}
+        gemma_flooded = bool(gemma_feats.get("water_present", False)) and str(gemma_feats.get("scene_type", "")).lower() in ("flooded_road", "flooded_indoor")
+        if bool(features.get("no_reference_depth_uncertain", False)) and not gemma_flooded:
             features["residual_fusion_status"] = "skipped_no_reference_depth_uncertain"
             return depth_cm, confidence, action
 
@@ -862,6 +885,144 @@ class SegformerYoloDepthV2Pipeline:
         features["strong_deep_flood_depth_cm"] = corrected_depth
         features["final_output_reason"] = "Strong broad-water, near-field, reference-object, and region-depth evidence overruled a conservative deep-flood estimate."
         return corrected_depth, round(float(max(confidence, 0.85)), 4), self._action_for_final_depth(corrected_depth, features, action)
+
+    def _apply_gemma_semantic_correction(
+        self,
+        depth_cm: float,
+        confidence: float,
+        action: str,
+        features: Dict[str, Any],
+    ) -> Tuple[float, float, str]:
+        gemma_feats = features.get("gemma_semantic_features")
+        max_ref_submersion = float(features.get("max_reference_submersion", 0.0))
+        reference_count = int(features.get("reference_count", 0))
+        coverage_pct = float(features.get("water_coverage_pct", 0.0))
+        near_pct = float(features.get("near_water_coverage_pct", 0.0))
+        far_pct = float(features.get("far_water_coverage_pct", 0.0))
+        dense_p90 = float(features.get("dense_depth_p90", 0.0))
+        dense_depth_cm = float(features.get("depth_anything_dense_depth_cm", 0.0))
+        candidate_depth_cm = float(features.get("efficientnet_candidate_depth_cm", 0.0))
+        mask_conditioned_depth_cm = float(features.get("mask_conditioned_fusion_depth_cm", 0.0))
+        immediate_risk = bool(features.get("immediate_risk", False))
+
+        # Parse Gemma features
+        gemma_submersion = None
+        is_flooded_scene = False
+        is_shallow_scene = False
+        gemma_ref_visible = False
+        gemma_water_reaches_ref = False
+        gemma_waterline_visible = False
+        scene_type = "unknown"
+        water_present = False
+
+        if gemma_feats and isinstance(gemma_feats, dict):
+            water_present = bool(gemma_feats.get("water_present", False))
+            scene_type = str(gemma_feats.get("scene_type", "")).lower()
+            submersion_frac = gemma_feats.get("approximate_submersion_fraction")
+            if submersion_frac is not None:
+                gemma_submersion = float(submersion_frac)
+
+            gemma_ref_visible = bool(gemma_feats.get("reference_object_visible", False))
+            gemma_water_reaches_ref = bool(gemma_feats.get("water_reaches_reference", False))
+            gemma_waterline_visible = bool(gemma_feats.get("waterline_visible", False))
+            is_flooded_scene = water_present and scene_type in ("flooded_road", "flooded_indoor")
+            is_shallow_scene = scene_type in ("wet_puddle", "dry_land") or (
+                gemma_submersion is not None and gemma_submersion <= 0.20
+            )
+
+        effective_submersion = gemma_submersion if gemma_submersion is not None else max_ref_submersion
+
+        # --- RULE 1: Ankle/foot level shallow water (tiny coverage, near-zero submersion) ---
+        if (effective_submersion <= 0.12 or is_shallow_scene or coverage_pct <= 2.0) and max_ref_submersion <= 0.15:
+            target_shallow_depth = 12.0 if effective_submersion <= 0.05 or coverage_pct <= 1.0 else 14.5
+            if depth_cm > target_shallow_depth:
+                corrected_depth = round(target_shallow_depth, 2)
+                features["gemma_semantic_correction_applied"] = True
+                features["pre_gemma_semantic_depth_cm"] = round(float(depth_cm), 2)
+                features["gemma_semantic_depth_cm"] = corrected_depth
+                features["final_output_reason"] = (
+                    f"Ankle/foot level submersion evidence (submersion={effective_submersion:.2f}, coverage={coverage_pct:.2f}%) "
+                    f"refined depth prediction to shallow ankle water ({corrected_depth} cm)."
+                )
+                return corrected_depth, max(confidence, 0.85), self._action_for_final_depth(corrected_depth, features, action)
+
+        # --- RULE 2: Broad road water WITH NO reference object submersion = shallow spread layer ---
+        # Primary gate: YOLO found NO reference objects AND no measured submersion.
+        # Secondary gate: Gemma submersion fraction — but ONLY relevant when Gemma has an actual
+        #   object to measure. When YOLO reference_count=0, Gemma's water_reaches_reference
+        #   is unreliable (it may flag road surface contact). Trust YOLO reference_count=0.
+        yolo_no_submersion = reference_count == 0 and max_ref_submersion <= 0.05
+        # Only use Gemma's water_reaches_ref if YOLO actually found reference objects
+        effective_water_reaches = gemma_water_reaches_ref and reference_count > 0
+        gemma_no_submersion = (
+            not effective_water_reaches
+            and (gemma_submersion is None or gemma_submersion <= 0.30)
+        )
+        broad_coverage_no_submersion = (
+            yolo_no_submersion
+            and gemma_no_submersion
+            and coverage_pct >= 20.0
+            and far_pct <= 5.0  # No far-field flooding = shallow near/mid spread
+        )
+        logger.info(
+            f"[GemmaRule2] yolo_no_sub={yolo_no_submersion} gemma_no_sub={gemma_no_submersion} "
+            f"effective_water_reaches={effective_water_reaches} gemma_submersion={gemma_submersion} "
+            f"coverage={coverage_pct:.1f}% far={far_pct:.1f}% near={near_pct:.1f}% depth_cm={depth_cm:.1f} "
+            f"fires={broad_coverage_no_submersion and depth_cm > 25.0}"
+        )
+        if broad_coverage_no_submersion and depth_cm > 25.0:
+            # Estimate based on near-field ratio: more near coverage = slightly deeper spread
+            if near_pct >= 60.0:
+                cap = 22.0  # Well-flooded near-field → up to 22 cm
+            elif near_pct >= 40.0:
+                cap = 18.0
+            else:
+                cap = 15.0
+
+            corrected_depth = round(min(depth_cm, cap), 2)
+            if corrected_depth < depth_cm:
+                features["gemma_semantic_correction_applied"] = True
+                features["pre_gemma_semantic_depth_cm"] = round(float(depth_cm), 2)
+                features["gemma_semantic_depth_cm"] = corrected_depth
+                features["final_output_reason"] = (
+                    f"Broad road water coverage ({coverage_pct:.1f}%, near={near_pct:.1f}%) "
+                    f"with no submerged reference objects (YOLO refs={reference_count}, max_sub={max_ref_submersion:.2f}; "
+                    f"Gemma: water_reaches_ref={gemma_water_reaches_ref}, submersion={effective_submersion:.2f}). "
+                    f"Interpreted as thin surface water layer; depth capped at {corrected_depth} cm."
+                )
+                return corrected_depth, max(confidence, 0.80), self._action_for_final_depth(corrected_depth, features, action)
+
+        # --- RULE 3: Deep Flood — only trigger when ACTUAL submersion evidence exists ---
+        # Require at least one of: object submerged, Gemma confirms submersion, waterline visible + deep p90
+        has_confirmed_submersion = (
+            effective_submersion >= 0.30
+            or gemma_water_reaches_ref
+            or (gemma_ref_visible and effective_submersion > 0.20)
+            or max_ref_submersion >= 0.35
+        )
+        has_broad_deep_water = (
+            coverage_pct >= 40.0 and near_pct >= 50.0
+            and (gemma_waterline_visible or dense_p90 >= 0.60)
+            and has_confirmed_submersion  # Must have submersion evidence for deep correction
+        )
+
+        if (is_flooded_scene and has_confirmed_submersion) or has_broad_deep_water:
+            if dense_p90 >= 0.45:
+                candidates = [d for d in [dense_depth_cm, candidate_depth_cm, mask_conditioned_depth_cm] if d >= 35.0]
+                if candidates:
+                    expected_depth = float(np.median(candidates))
+                    if depth_cm < expected_depth:
+                        corrected_depth = round(expected_depth, 2)
+                        features["gemma_semantic_correction_applied"] = True
+                        features["pre_gemma_semantic_depth_cm"] = round(float(depth_cm), 2)
+                        features["gemma_semantic_depth_cm"] = corrected_depth
+                        features["final_output_reason"] = (
+                            f"Gemma confirmed active flood with submersion evidence (submersion={effective_submersion:.2f}); "
+                            f"overruled conservative depth clamp using visual candidate signals."
+                        )
+                        return corrected_depth, max(confidence, 0.85), self._action_for_final_depth(corrected_depth, features, action)
+
+        return depth_cm, confidence, action
 
     def _apply_mask_conditioned_high_flood_correction(
         self,
@@ -1398,10 +1559,12 @@ class SegformerYoloDepthV2Pipeline:
                 depth_cm = min(depth_cm, 65.0 if single_strong_vehicle_evidence else 55.0)
             if max_reference_submersion < 0.70 and coverage < 0.65:
                 depth_cm = min(depth_cm, 65.0 if single_strong_vehicle_evidence else 45.0)
-            if max_reference_submersion < 0.60 and coverage < 0.55:
-                depth_cm = min(depth_cm, 35.0)
             if max_reference_submersion < 0.50 and coverage < 0.50:
                 depth_cm = min(depth_cm, 25.0)
+            if max_reference_submersion < 0.20 or coverage < 0.03:
+                depth_cm = min(depth_cm, 15.0)
+            if max_reference_submersion <= 0.05 and coverage < 0.01:
+                depth_cm = min(depth_cm, 12.0)
         elif region_depth_cm > 0:
             depth_cm = max(region_depth_cm, min(dense_depth_cm * 0.8, 40.0))
         else:
@@ -1425,9 +1588,8 @@ class SegformerYoloDepthV2Pipeline:
         candidate_depth_value = float(candidate_depth_cm) if candidate_depth_cm is not None else None
         shallow_model_agreement = (
             candidate_depth_value is not None
-            and 8.0 <= candidate_depth_value <= 35.0
-            and 8.0 <= dense_depth_cm <= 35.0
-            and abs(candidate_depth_value - dense_depth_cm) <= 12.0
+            and 2.0 <= candidate_depth_value <= 50.0
+            and (abs(candidate_depth_value - dense_depth_cm) <= 25.0 or dense_depth_cm <= 60.0)
         )
         trace_water_evidence = (
             coverage < 0.05
@@ -1441,7 +1603,7 @@ class SegformerYoloDepthV2Pipeline:
             features["low_water_gate_applied"] = not shallow_water_gate_exception
             features["shallow_water_gate_exception"] = shallow_water_gate_exception
             if shallow_water_gate_exception:
-                features["low_water_gate_reason"] = "Tiny water mask, but EfficientNet and dense depth agree on shallow flood water."
+                features["low_water_gate_reason"] = "Small water mask, but candidate model and depth signals confirm shallow flood water."
             else:
                 features["low_water_gate_reason"] = "Very small water mask with no near-field risk or meaningful vehicle submersion."
         full_road_water_no_reference = (
@@ -1822,6 +1984,36 @@ class SegformerYoloDepthV2Pipeline:
             }
         )
 
+        gemma_semantic_result = None
+        if self.gemma_semantic_analyzer is not None:
+            gemma_res = self.gemma_semantic_analyzer.analyze(
+                image_rgb=image_rgb,
+                water_mask=water_mask,
+                detected_objects=references,
+                water_coverage_pct=water_coverage_pct,
+            )
+            gemma_status = gemma_res.get("status", "skipped")
+            gemma_model = gemma_res.get("model", getattr(self.gemma_semantic_analyzer, "model_name", "gemma3:4b"))
+            gemma_feats = gemma_res.get("features")
+            gemma_lat = gemma_res.get("latency_ms")
+
+            trace_stage: Dict[str, Any] = {
+                "stage": "gemma_semantic_analysis",
+                "status": gemma_status,
+                "model": gemma_model,
+            }
+            if gemma_status == "success" and gemma_feats:
+                trace_stage["summary"] = f"water_present={gemma_feats.get('water_present')}, scene={gemma_feats.get('scene_type')}"
+                trace_stage["features"] = gemma_feats
+                trace_stage["latency_ms"] = gemma_lat
+                gemma_semantic_result = gemma_feats
+            else:
+                trace_stage["summary"] = gemma_res.get("reason", "Gemma analysis unavailable or skipped")
+                if gemma_lat is not None:
+                    trace_stage["latency_ms"] = gemma_lat
+
+            trace.append(trace_stage)
+
         teacher_features = self._depth_teacher_features(image_rgb, water_mask)
         teacher_ensemble_metrics = teacher_features.get("ensemble", {}) if teacher_features else {}
         teacher_meta = teacher_features.get("meta", {}) if teacher_features else {}
@@ -1902,6 +2094,9 @@ class SegformerYoloDepthV2Pipeline:
             }
         )
 
+        if gemma_semantic_result is not None:
+            features["gemma_semantic_features"] = gemma_semantic_result
+
         depth_cm, confidence, action = self._calibration_severity_model(features)
         features["calibration_depth_cm"] = round(depth_cm, 2)
         if efficientnet_depth_cm is not None:
@@ -1911,8 +2106,18 @@ class SegformerYoloDepthV2Pipeline:
         depth_cm, confidence, action = self._apply_residual_fusion_model(depth_cm, confidence, action, features)
         depth_cm, confidence, action = self._apply_mask_conditioned_high_flood_correction(depth_cm, confidence, action, features)
         depth_cm, confidence, action = self._apply_strong_deep_flood_correction(depth_cm, confidence, action, features)
+        depth_cm, confidence, action = self._apply_gemma_semantic_correction(depth_cm, confidence, action, features)
         depth_cm, confidence, action = self._apply_dry_land_guard(depth_cm, confidence, action, image_rgb, features)
         depth_cm, confidence, action = self._apply_no_water_guard(depth_cm, confidence, action, features)
+        if features.get("gemma_semantic_correction_applied"):
+            trace.append(
+                {
+                    "stage": "Gemma Semantic Decision",
+                    "backend": "gemma-semantics-v1",
+                    "status": "applied",
+                    "summary": f"gemma semantic analysis corrected depth to {depth_cm:.2f} cm",
+                }
+            )
         if features.get("dry_land_guard_applied"):
             trace.append(
                 {
@@ -1967,6 +2172,9 @@ class SegformerYoloDepthV2Pipeline:
             stage_cues.append(f"Model Agreement: {features.get('model_agreement_status')} - {features.get('final_output_reason')}")
         visual_cues = stage_cues + ref_cues
 
+        if gemma_semantic_result is not None:
+            features["gemma_semantic_features"] = gemma_semantic_result
+
         return {
             "depth_cm": depth_cm,
             "confidence": confidence,
@@ -1978,6 +2186,7 @@ class SegformerYoloDepthV2Pipeline:
             "water_coverage": round(water_coverage_pct / 100.0, 4),
             "action_trigger": action,
             "structured_features": features,
+            "semantic_features": gemma_semantic_result,
             "pipeline_trace": trace,
             "depth_teachers": teacher_features,
         }
