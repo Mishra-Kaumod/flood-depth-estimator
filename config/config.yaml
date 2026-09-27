@@ -205,6 +205,7 @@ inference:
     provider: "local_gemma"  # "local_gemma" | "google"
     model: "google/paligemma-3b-pt-224"
     gemma_model: "google/paligemma-3b-pt-224"
+
 #    hf_token: ""
     device: "auto"  # "auto" uses PyTorch MPS on Apple Silicon, CUDA, or CPU
     endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
