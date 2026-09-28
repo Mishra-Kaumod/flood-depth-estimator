@@ -11,3 +11,17 @@ data/final_predictions.parquet
 # Recovery archive kept locally, not for git
 archive_cleanup/
 replace.txt
+
+# Local experiment datasets and checkpoints
+models/candidate/*.pth
+models/candidate/*.pt
+training_runs/
+training_data/road_scene_classifier/
+training_data/test0916_training/
+evaluation_data/atharva_manual_tests/
+evaluation_data/drive_test_images/
+evaluation_data/test0916_holdout/
+evaluation_data/test0916_renamed/
+generated_docs/
+data/*.sqlite3
+data/*_detailed_backup.*
