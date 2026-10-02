@@ -148,7 +148,12 @@ class FloodApiService:
                     if result_payload["review_required"]:
                         result_payload["operational_note"] = "LLM reviewer disagreed; pipeline output retained for operation pending human review."
 
-                if llm_judge_result and llm_judge_result.get("prediction_correct") is False and self.llm_judge.apply_corrections:
+                if (
+                    llm_judge_result
+                    and self.llm_judge.apply_corrections
+                    and llm_judge_result.get("override_allowed") is True
+                    and llm_judge_result.get("prediction_correct") is False
+                ):
                     corrected_depth = float(
                         llm_judge_result.get(
                             "final_depth_cm",
@@ -162,6 +167,10 @@ class FloodApiService:
                         llm_judge_result.get("recommended_severity", result.severity_label),
                     )
                     result_payload["llm_judge_applied"] = True
+                    result_payload["llm_judge_override_reason"] = "Gemma numeric confidence-outlier gate passed"
+                elif llm_judge_result and llm_judge_result.get("provider") in {"blip_info_only", "local_gemma_fallback"}:
+                    result_payload["llm_judge_applied"] = False
+                    result_payload["llm_judge_override_reason"] = "BLIP fallback is informational only; pipeline depth retained"
 
             else:
                 result_payload["llm_judge_error"] = "LLM judge disabled in config"

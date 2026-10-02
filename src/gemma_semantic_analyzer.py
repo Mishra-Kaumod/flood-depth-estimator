@@ -44,9 +44,31 @@ class GemmaSemanticAnalyzer:
     ) -> None:
         self.model_name = model_name
         self.ollama_url = ollama_url.rstrip("/")
-        # Increase default timeout to allow larger Gemma models to respond
         self.timeout_seconds = timeout_seconds
         self.enabled = enabled
+        self.model_name = self._resolve_model_name(model_name)
+
+    def _resolve_model_name(self, preferred_name: str) -> str:
+        if not self.enabled:
+            return preferred_name
+        try:
+            req = urllib.request.Request(f"{self.ollama_url}/api/tags", method="GET")
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            installed = []
+            for item in payload.get("models", []) or []:
+                name = item.get("name") or item.get("model")
+                if name:
+                    installed.append(str(name))
+            if preferred_name in installed:
+                return preferred_name
+            for candidate in ("gemma3:4b", "gemma3:8b", "gemma3:latest"):
+                if candidate in installed:
+                    logger.info("Ollama Gemma auto-selected model '%s' (preferred '%s' unavailable)", candidate, preferred_name)
+                    return candidate
+            return preferred_name
+        except Exception:
+            return preferred_name
 
     def is_available(self) -> bool:
         """Check if local Ollama server is running and accessible."""
@@ -221,34 +243,36 @@ class GemmaSemanticAnalyzer:
            "Image convention: image0 is the full scene. If present, images 1..N are tight crops of detected reference objects for closer inspection. Use crops to estimate object submersion and waterline.\n\n"
            "Computer Vision detections (use as context, but verify visually against images):\n"
            f"{hint_block}\n\n"
-          "CRITICAL INSTRUCTIONS (must follow):\n"
-           "1. Use the full-scene image and any object crops to form your judgment.\n"
-           "2. Report whether water reaches reference objects and estimate their approximate_submersion_fraction (0.0-1.0) when visible.\n"
-          "3. Provide a best-effort numeric depth estimate in centimeters for each referenced object crop (key: per_object_depth_cm) and an overall gemma_depth_cm for the scene.\n"
-          "   - If unsure, return null for values rather than invent numbers.\n"
-          "4. Provide a gemma_depth_confidence (0.0-1.0) expressing your confidence in numeric estimates.\n"
-          "5. Do NOT invent objects that are not visible in the images.\n"
-          "6. If no reference object is visible, set reference_object_type to null.\n"
-          "7. Return ONLY a valid minified JSON object with these exact keys (you may also include optional 'per_object_submersion' and 'per_object_depth_cm' lists of numbers corresponding to image crops).\n\n"
-          "IMPORTANT: Always include the keys 'gemma_depth_cm' and 'gemma_depth_confidence' (use null if not available).\n\n"
-          "Example output (MUST follow schema exactly):\n"
-          "{\n"
-          '  "water_present": true,\n'
-          '  "waterline_visible": true,\n'
-          '  "scene_type": "flooded_road",\n'
-          '  "reference_object_type": "car",\n'
-          '  "reference_object_visible": true,\n'
-          '  "water_reaches_reference": true,\n'
-          '  "approximate_submersion_fraction": 0.75,\n'
-          '  "per_object_submersion": [0.8, 0.3],\n'
-          '  "per_object_depth_cm": [60.0, 15.0],\n'
-          '  "gemma_depth_cm": 60.0,\n'
-          '  "gemma_depth_confidence": 0.92,\n'
-          '  "reference_quality": "good",\n'
-          '  "occlusion_level": "low",\n'
-          '  "semantic_confidence": 0.90\n'
-          "}\n\n"
-          "Return only JSON and nothing else. Use temperature 0.0 reasoning and prioritize numeric precision."
+           "CRITICAL INSTRUCTIONS (must follow):\n"
+           "1. Use the full-scene image and object crops to judge visible waterline and submersion.\n"
+           "2. Estimate the approximate_submersion_fraction for each visible reference object (0.0-1.0).\n"
+           "3. Always include the keys 'per_object_depth_cm' and 'gemma_depth_cm' in the JSON output.\n"
+           "   - If uncertain, use null instead of a wild guess.\n"
+           "   - Use per-object depth estimates in centimeters only for objects you actually see.\n"
+           "   - Set gemma_depth_cm to the scene-level flood depth most likely visible in the image.\n"
+           "4. Provide gemma_depth_confidence (0.0-1.0) for the numeric estimate.\n"
+           "5. Do not invent objects or hidden waterline geometry.\n"
+           "6. If no reference object is visible, leave reference_object_type null and use null values where appropriate.\n"
+           "7. Return ONLY a valid minified JSON object; no markdown fences or prose.\n\n"
+           "Depth-policy: prefer conservative estimates grounded in visible waterline and object submersion. A wheel or ankle immersed in muddy floodwater can be 15-40cm, a lower leg or knee can be 30-80cm, and full leg/waist deep water can be 60-120cm. Do NOT force a deep value unless the image clearly supports it.\n\n"
+           "Example output (MUST follow schema exactly):\n"
+           "{\n"
+           '  "water_present": true,\n'
+           '  "waterline_visible": true,\n'
+           '  "scene_type": "flooded_road",\n'
+           '  "reference_object_type": "car",\n'
+           '  "reference_object_visible": true,\n'
+           '  "water_reaches_reference": true,\n'
+           '  "approximate_submersion_fraction": 0.75,\n'
+           '  "per_object_submersion": [0.8, 0.3],\n'
+           '  "per_object_depth_cm": [60.0, 15.0],\n'
+           '  "gemma_depth_cm": 60.0,\n'
+           '  "gemma_depth_confidence": 0.92,\n'
+           '  "reference_quality": "good",\n'
+           '  "occlusion_level": "low",\n'
+           '  "semantic_confidence": 0.90\n'
+           "}\n\n"
+           "Return only JSON and nothing else. Prefer truthful object-grounded depth over arbitrary cm guesses."
         )
         return prompt
 
@@ -262,9 +286,11 @@ class GemmaSemanticAnalyzer:
             "prompt": prompt,
             "images": images_b64,
             "stream": False,
+            "format": "json",
             "options": {
                 "temperature": 0.0,
                 "top_p": 1.0,
+                "num_ctx": 8192,
             },
         }
 

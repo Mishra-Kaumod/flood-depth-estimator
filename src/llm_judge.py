@@ -49,6 +49,8 @@ class LLMJudge:
                         device=device,
                         lazy_load=True,
                         hf_token=config.get("hf_token"),
+                        ollama_url=str(config.get("ollama_url") or "http://localhost:11434"),
+                        prefer_ollama=bool(config.get("prefer_ollama", True)),
                     )
                 except Exception as exc:
                     raise RuntimeError(f"Could not initialize LocalGemmaJudge: {exc}")

@@ -1355,6 +1355,10 @@ class SegformerYoloDepthV2Pipeline:
         except Exception:
             cfg = {}
         if not bool(cfg.get("enabled", False)):
+            features["strong_deep_flood_status"] = "disabled"
+            features["strong_deep_flood_before_cm"] = round(float(depth_cm), 2)
+            features["strong_deep_flood_after_cm"] = round(float(depth_cm), 2)
+            features["strong_deep_flood_reason"] = "disabled"
             return depth_cm, confidence, action
 
         coverage = float(features.get("water_coverage_pct", 0.0))
@@ -1372,6 +1376,13 @@ class SegformerYoloDepthV2Pipeline:
             and region_depth >= float(cfg.get("min_region_depth_cm", 65.0))
         )
         if not strong_evidence:
+            features["strong_deep_flood_status"] = "not_applicable"
+            features["strong_deep_flood_before_cm"] = round(float(depth_cm), 2)
+            features["strong_deep_flood_after_cm"] = round(float(depth_cm), 2)
+            features["strong_deep_flood_reason"] = (
+                f"not_applicable: coverage={coverage:.1f}% near={near:.1f}% refs={references} submersion={submersion:.2f} "
+                f"ref_depth={reference_depth:.1f} region_depth={region_depth:.1f}"
+            )
             return depth_cm, confidence, action
 
         evidence_depth = (0.65 * reference_depth) + (0.35 * region_depth)
@@ -1520,6 +1531,13 @@ class SegformerYoloDepthV2Pipeline:
                         )
                         return corrected_depth, max(confidence, 0.85), self._action_for_final_depth(corrected_depth, features, action)
 
+        features["gemma_semantic_correction_applied"] = False
+        features["pre_gemma_semantic_depth_cm"] = round(float(depth_cm), 2)
+        features["gemma_semantic_depth_cm"] = round(float(depth_cm), 2)
+        features["gemma_semantic_reason"] = (
+            f"no_override: flooded_scene={is_flooded_scene} confirmed_submersion={has_confirmed_submersion} "
+            f"broad_deep_water={has_broad_deep_water} dense_p90={dense_p90:.3f} submersion={effective_submersion:.2f}"
+        )
         return depth_cm, confidence, action
 
     def _apply_mask_conditioned_high_flood_correction(
@@ -1536,11 +1554,17 @@ class SegformerYoloDepthV2Pipeline:
 
         if not bool(cfg.get("high_flood_correction_enabled", False)):
             features["mask_conditioned_high_flood_status"] = "disabled"
+            features["mask_conditioned_high_flood_before_cm"] = round(float(depth_cm), 2)
+            features["mask_conditioned_high_flood_after_cm"] = round(float(depth_cm), 2)
+            features["mask_conditioned_high_flood_reason"] = "disabled"
             return depth_cm, confidence, action
 
         mask_depth_raw = features.get("mask_conditioned_fusion_depth_cm")
         if mask_depth_raw is None:
             features["mask_conditioned_high_flood_status"] = "missing_signal"
+            features["mask_conditioned_high_flood_before_cm"] = round(float(depth_cm), 2)
+            features["mask_conditioned_high_flood_after_cm"] = round(float(depth_cm), 2)
+            features["mask_conditioned_high_flood_reason"] = "missing_signal"
             return depth_cm, confidence, action
 
         try:
@@ -1596,6 +1620,12 @@ class SegformerYoloDepthV2Pipeline:
 
         if not should_apply:
             features["mask_conditioned_high_flood_status"] = "not_applicable"
+            features["mask_conditioned_high_flood_before_cm"] = round(float(depth_cm), 2)
+            features["mask_conditioned_high_flood_after_cm"] = round(float(depth_cm), 2)
+            features["mask_conditioned_high_flood_reason"] = (
+                f"not_applicable: coverage={coverage:.1f} near={near:.1f} mid={mid:.1f} mask_depth={mask_depth:.1f} "
+                f"gap={mask_depth-depth_cm:.1f} no_water={no_water_probability:.2f} wet_road={wet_road_probability:.2f}"
+            )
             return depth_cm, confidence, action
 
         corrected_depth = round(float(np.clip(mask_depth, 0.0, 180.0)), 2)
@@ -2358,33 +2388,45 @@ class SegformerYoloDepthV2Pipeline:
         if gemma_water_present and mask_depth_val is not None and mask_depth_val < 35.0 and float(features.get("max_reference_submersion", 0.0)) < 0.4:
             mask_conditioned_trusted = True
         add_signal("mask_conditioned_fusion", mask_conditioned_depth, mask_conditioned_trusted, "experimental mask-conditioned trained model (promoted by Gemma)", 0.20)
-        # Add gemma numeric signal to model_signals. If Gemma provides a numeric depth and a high confidence,
-        # allow it to be trusted in agreement; otherwise add as a log-only supportive signal.
+        # Add Gemma numeric signal to model_signals only when it is credible and not an outlier.
+        # We keep Gemma as a supportive, not unconditional, depth signal in the fusion stack.
         gemma_numeric_depth = None
         gemma_depth_conf = None
         try:
             if isinstance(gemma_feats, dict):
                 gemma_numeric_depth = gemma_feats.get("gemma_depth_cm")
-                # prefer explicit gemma_depth_confidence, fall back to semantic_confidence
                 gemma_depth_conf = gemma_feats.get("gemma_depth_confidence") or gemma_feats.get("semantic_confidence")
         except Exception:
             gemma_numeric_depth = None
             gemma_depth_conf = None
 
         gemma_trusted = False
+        gemma_trusted_for_pipeline = False
         try:
             if gemma_depth_conf is not None:
-                gemma_trusted = float(gemma_depth_conf) >= 0.80
+                gemma_conf_float = float(gemma_depth_conf)
+                gemma_trusted = gemma_conf_float >= 0.80
         except Exception:
             gemma_trusted = False
 
         if gemma_numeric_depth is not None:
             try:
                 gval = float(gemma_numeric_depth)
-                # User override: always trust Gemma numeric and increase weight
-                gemma_trusted_for_pipeline = True
-                weight = 0.60
-                add_signal("gemma_numeric", gval, gemma_trusted_for_pipeline, "Gemma numeric depth estimate (user-trusted override)", weight)
+                conf_float = float(gemma_depth_conf) if gemma_depth_conf is not None else 0.5
+                other_trusted_depths = [float(signal["depth_cm"]) for signal in signals if signal["trusted"] and signal["name"] not in {"gemma_numeric", "gemma_semantics"}]
+                is_outlier = bool(other_trusted_depths) and abs(gval - float(np.median(other_trusted_depths))) > 40.0
+                gemma_trusted_for_pipeline = (conf_float >= 0.70) and not is_outlier
+                weight = 0.60 * conf_float if conf_float > 0.0 else 0.15
+                add_signal("gemma_numeric", gval, gemma_trusted_for_pipeline, f"Gemma numeric depth estimate (conf={conf_float:.2f})", weight)
+                if not gemma_trusted_for_pipeline:
+                    add_signal("gemma_numeric", gval, False, f"Gemma numeric depth dropped by confidence/outlier gate (conf={conf_float:.2f})", 0.05)
+                features["gemma_numeric_gate"] = {
+                    "depth_cm": round(gval, 2),
+                    "confidence": round(conf_float, 2),
+                    "trusted": bool(gemma_trusted_for_pipeline),
+                    "is_outlier": bool(is_outlier),
+                    "other_trusted_median_cm": round(float(np.median(other_trusted_depths)) if other_trusted_depths else 0.0, 2),
+                }
             except Exception:
                 pass
         else:
@@ -2394,6 +2436,7 @@ class SegformerYoloDepthV2Pipeline:
                     add_signal("gemma_semantics", mask_depth_val, False, "Gemma semantic shallow suggestion (mask fallback)", 0.15)
                 except Exception:
                     pass
+            features["gemma_numeric_gate"] = {"depth_cm": None, "confidence": None, "trusted": False, "is_outlier": False}
 
         reference_depth = features.get("reference_depth_cm")
         reference_trusted = reference_count > 0 and not low_water_gate and (max_submersion >= 0.15 or coverage >= 0.20 or immediate_risk)
@@ -2670,6 +2713,11 @@ class SegformerYoloDepthV2Pipeline:
                 detected_objects=references,
                 water_coverage_pct=water_coverage_pct,
             )
+            if gemma_res.get("status") == "success":
+                logger.info("Gemma semantic numeric depth: %s cm, confidence=%s, model=%s",
+                            gemma_res.get("features", {}).get("gemma_depth_cm"),
+                            gemma_res.get("features", {}).get("gemma_depth_confidence"),
+                            gemma_res.get("model"))
             gemma_status = gemma_res.get("status", "skipped")
             gemma_model = gemma_res.get("model", getattr(self.gemma_semantic_analyzer, "model_name", "gemma3:4b"))
             gemma_feats = gemma_res.get("features")
@@ -2973,6 +3021,19 @@ class SegformerYoloDepthV2Pipeline:
                     "backend": "gemma-semantics-v1",
                     "status": "applied",
                     "summary": f"gemma semantic analysis corrected depth to {depth_cm:.2f} cm",
+                }
+            )
+        elif features.get("gemma_semantic_features") and isinstance(features.get("gemma_semantic_features"), dict):
+            gemma_summary = features["gemma_semantic_features"]
+            trace.append(
+                {
+                    "stage": "Gemma Semantic Decision",
+                    "backend": "gemma-semantics-v1",
+                    "status": "no_op",
+                    "summary": (
+                        "gemma semantic analysis present but no trusted numeric override; "
+                        f"scene={gemma_summary.get('scene_type')} depth={gemma_summary.get('gemma_depth_cm')} conf={gemma_summary.get('gemma_depth_confidence')}"
+                    ),
                 }
             )
         depth_cm, confidence, action = self._calibration_severity_model(features)

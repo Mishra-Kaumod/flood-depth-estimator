@@ -264,8 +264,11 @@ inference:
   llm_judge:
     enabled: true
     provider: "local_gemma"  # "local_gemma" | "google"
-    model: "google/paligemma-3b-pt-224"
-    gemma_model: "google/paligemma-3b-pt-224"
+    model: "gemma3:4b"
+    gemma_model: "gemma3:4b"
+    ollama_url: "http://localhost:11434"
+    prefer_ollama: true
+    allow_blip_fallback: false
 #    hf_token: ""
     device: "auto"  # "auto" uses PyTorch MPS on Apple Silicon, CUDA, or CPU
     endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
@@ -275,9 +278,11 @@ inference:
     apply_corrections: true
   gemma_semantics:
     enabled: true
-    model: "gemma3:4b"
+    model: "gemma3:8b"
     ollama_url: "http://localhost:11434"
-    timeout_seconds: 35.0
+    timeout_seconds: 90.0
+    max_image_dim: 768
+    max_object_crops: 3
   health_check_interval: 30  # seconds
   ready_timeout: 60  # seconds on startup
 
