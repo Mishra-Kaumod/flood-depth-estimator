@@ -268,10 +268,20 @@ class LocalGemmaJudge:
         except (TypeError, ValueError):
             return False
 
-        if conf_val < 0.70:
+        # Keep the judge conservative, but do not suppress obvious submersion scenes.
+        # A knee-level flood or clear tire/leg submersion should retain a Gemma numeric depth
+        # even when the pipeline is moderately different, as long as the scene is visibly flooded.
+        if conf_val < 0.62:
             return False
 
         pipeline_depth = float(prediction.get("depth_cm") or prediction.get("estimated_depth_cm") or 0.0)
+        water_present = bool(prediction.get("water_present", True))
+        scene = str(prediction.get("scene_type") or "").lower()
+        submersion_hint = bool(prediction.get("max_reference_submersion") is not None and float(prediction.get("max_reference_submersion", 0.0)) >= 0.30)
+
+        if water_present and (scene in {"flooded_road", "flooded", "flooded_indoor", "standing_water"} or submersion_hint):
+            return abs(depth_val - pipeline_depth) <= 60.0
+
         if pipeline_depth > 0 and abs(depth_val - pipeline_depth) > 40.0:
             return False
 

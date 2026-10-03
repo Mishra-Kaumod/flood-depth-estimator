@@ -338,6 +338,45 @@ class GemmaSemanticAnalyzer:
         lines.append("Example output:\n{\n  \"per_object_depth_cm\": [60.0, 15.0],\n  \"gemma_depth_cm\": 60.0,\n  \"gemma_depth_confidence\": 0.85\n}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _coerce_bool(value: Any, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "yes", "y", "1", "water_present", "flooded", "visible"}:
+                return True
+            if lowered in {"false", "no", "n", "0", "dry", "not_visible", "clear"}:
+                return False
+        return bool(value)
+
+    @staticmethod
+    def _heuristic_depth_from_submersion(submersion: Optional[float], scene_type: str) -> Optional[float]:
+        if submersion is None:
+            return None
+        try:
+            submersion = float(submersion)
+        except (TypeError, ValueError):
+            return None
+        if submersion < 0.0:
+            return None
+
+        scene = (scene_type or "unknown").lower()
+        ankle_like = any(token in scene for token in ("ankle", "foot", "knee", "leg", "puddle", "wet", "shallow"))
+        if submersion <= 0.15:
+            return 15.0 if ankle_like else 20.0
+        if submersion <= 0.35:
+            return 30.0 if ankle_like else 35.0
+        if submersion <= 0.60:
+            return 45.0 if ankle_like else 55.0
+        if submersion <= 0.80:
+            return 60.0
+        return 75.0
+
     def _parse_and_validate_json(self, raw_text: str) -> Optional[Dict[str, Any]]:
         """Robustly extract and validate JSON response from Gemma output.
 
@@ -350,34 +389,100 @@ class GemmaSemanticAnalyzer:
             return None
 
         clean_text = raw_text.strip()
-        # Extract JSON substring if wrapped in markdown codeblocks or text
         json_match = re.search(r"\{.*\}", clean_text, re.DOTALL)
         if json_match:
             clean_text = json_match.group(0)
+
+        def normalize_semantic(validated: Dict[str, Any]) -> Dict[str, Any]:
+            water_present = self._coerce_bool(validated.get("water_present"), default=False)
+            scene_type = str(validated.get("scene_type", "unknown") or "unknown").lower()
+            submersion = validated.get("approximate_submersion_fraction")
+            try:
+                submersion = float(submersion) if submersion is not None else None
+            except (TypeError, ValueError):
+                submersion = None
+            ref_visible = self._coerce_bool(validated.get("reference_object_visible"), default=False)
+            water_reaches_ref = self._coerce_bool(validated.get("water_reaches_reference"), default=False)
+            waterline_visible = self._coerce_bool(validated.get("waterline_visible"), default=False)
+
+            flood_hints = (
+                "flood" in scene_type
+                or "water" in scene_type
+                or "puddle" in scene_type
+                or "submerged" in scene_type
+                or "submersion" in scene_type
+                or "road" in scene_type
+            )
+            ref_or_submersion_evidence = (
+                water_reaches_ref
+                or waterline_visible
+                or ref_visible
+                or flood_hints
+                or (submersion is not None and submersion >= 0.20)
+            )
+            if not water_present and ref_or_submersion_evidence:
+                water_present = True
+            validated["water_present"] = water_present
+
+            if not scene_type or scene_type == "unknown":
+                validated["scene_type"] = "flooded_road" if water_present else "unknown"
+
+            if validated.get("approximate_submersion_fraction") is None:
+                per_obj = validated.get("per_object_submersion")
+                if isinstance(per_obj, list) and per_obj:
+                    try:
+                        nums = [float(x) for x in per_obj if x is not None]
+                        if nums:
+                            validated["approximate_submersion_fraction"] = max(nums)
+                    except Exception:
+                        pass
+
+            if validated.get("gemma_depth_cm") is None:
+                pod = validated.get("per_object_depth_cm")
+                if isinstance(pod, list) and pod:
+                    try:
+                        nums = [float(x) for x in pod if x is not None]
+                        if nums:
+                            validated["gemma_depth_cm"] = max(nums)
+                    except Exception:
+                        pass
+                if validated.get("gemma_depth_cm") is None and validated.get("approximate_submersion_fraction") is not None:
+                    validated["gemma_depth_cm"] = self._heuristic_depth_from_submersion(
+                        validated.get("approximate_submersion_fraction"),
+                        str(validated.get("scene_type", "unknown") or "unknown"),
+                    )
+
+            if validated.get("gemma_depth_confidence") is None:
+                confidence = 0.5
+                if water_present:
+                    confidence += 0.2
+                if water_reaches_ref or waterline_visible:
+                    confidence += 0.2
+                if ref_visible:
+                    confidence += 0.1
+                validated["gemma_depth_confidence"] = round(min(max(confidence, 0.0), 0.99), 2)
+
+            validated["semantic_confidence"] = validated.get("gemma_depth_confidence", validated.get("semantic_confidence", 0.5))
+            return validated
 
         try:
             data = json.loads(clean_text)
             if not isinstance(data, dict):
                 return None
 
-            # Enforce expected schema and sanitize types
             validated = {
-                "water_present": bool(data.get("water_present", False)),
-                "waterline_visible": bool(data.get("waterline_visible", False)),
-                "scene_type": str(data.get("scene_type", "unknown")).lower(),
+                "water_present": self._coerce_bool(data.get("water_present"), default=False),
+                "waterline_visible": self._coerce_bool(data.get("waterline_visible"), default=False),
+                "scene_type": str(data.get("scene_type", "unknown") or "unknown").lower(),
                 "reference_object_type": str(data["reference_object_type"]) if data.get("reference_object_type") else None,
-                "reference_object_visible": bool(data.get("reference_object_visible", False)),
-                "water_reaches_reference": bool(data.get("water_reaches_reference", False)),
+                "reference_object_visible": self._coerce_bool(data.get("reference_object_visible"), default=False),
+                "water_reaches_reference": self._coerce_bool(data.get("water_reaches_reference"), default=False),
                 "approximate_submersion_fraction": (
-                    float(data["approximate_submersion_fraction"])
-                    if data.get("approximate_submersion_fraction") is not None
-                    else None
+                    float(data["approximate_submersion_fraction"]) if data.get("approximate_submersion_fraction") is not None else None
                 ),
                 "per_object_submersion": data.get("per_object_submersion"),
                 "per_object_depth_cm": data.get("per_object_depth_cm"),
-                "gemma_depth_cm": (
-                    float(data.get("gemma_depth_cm")) if data.get("gemma_depth_cm") is not None else None
-                ),
+                "gemma_depth_cm": float(data.get("gemma_depth_cm")) if data.get("gemma_depth_cm") is not None else None,
                 "gemma_depth_confidence": (
                     round(float(data.get("gemma_depth_confidence")), 2) if data.get("gemma_depth_confidence") is not None else None
                 ),
@@ -386,35 +491,30 @@ class GemmaSemanticAnalyzer:
                 "semantic_confidence": round(float(data.get("semantic_confidence", 0.5)), 2),
             }
 
-            # If per_object_submersion provided, ensure it's a list of floats and derive an overall approximate_submersion_fraction
             per_obj = validated.get("per_object_submersion")
             if isinstance(per_obj, list) and per_obj:
                 try:
                     nums = [float(x) for x in per_obj if x is not None]
                     if nums:
-                        # Use max observed submersion across crops as approximate_submersion_fraction
                         validated["approximate_submersion_fraction"] = max(nums)
                 except Exception:
                     pass
 
-            # If gemma provided per-object depth values but not an overall gemma_depth_cm, derive gemma_depth_cm from per-object depths
             pod = validated.get("per_object_depth_cm")
             if validated.get("gemma_depth_cm") is None and isinstance(pod, list) and pod:
                 try:
                     nums = [float(x) for x in pod if x is not None]
                     if nums:
-                        # Use max depth among crops as conservative overall depth estimate
                         validated["gemma_depth_cm"] = max(nums)
                 except Exception:
                     pass
 
-            return validated
+            updated = normalize_semantic(validated)
+            return updated
 
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
             logger.debug(f"JSON validation failed for Gemma response: {exc}")
-            # Fallback numeric extraction: look for explicit numeric cues in freeform text
             try:
-                # Find gemma_depth_cm: number
                 gd_match = re.search(r"gemma_depth_cm\"?\s*[:=]\s*([0-9]+\.?[0-9]*)", clean_text, re.IGNORECASE)
                 pod_matches = re.findall(r"per_object_depth_cm\"?\s*[:=]\s*\[([^\]]+)\]", clean_text, re.IGNORECASE)
                 per_obj_depths = None
@@ -425,7 +525,6 @@ class GemmaSemanticAnalyzer:
                     except Exception:
                         per_obj_depths = None
 
-                # Find per_object_submersion lists
                 pos_matches = re.findall(r"per_object_submersion\"?\s*[:=]\s*\[([^\]]+)\]", clean_text, re.IGNORECASE)
                 per_obj_sub = None
                 if pos_matches:
@@ -436,12 +535,9 @@ class GemmaSemanticAnalyzer:
                         per_obj_sub = None
 
                 gemma_depth = float(gd_match.group(1)) if gd_match else None
-
-                # Attempt to extract a confidence value
                 gc_match = re.search(r"gemma_depth_confidence\"?\s*[:=]\s*([0-9]+\.?[0-9]*)", clean_text, re.IGNORECASE)
                 gemma_conf = float(gc_match.group(1)) if gc_match else None
 
-                # Build best-effort validated dict
                 validated = {
                     "water_present": False,
                     "waterline_visible": False,
@@ -449,7 +545,7 @@ class GemmaSemanticAnalyzer:
                     "reference_object_type": None,
                     "reference_object_visible": False,
                     "water_reaches_reference": False,
-                    "approximate_submersion_fraction": None,
+                    "approximate_submersion_fraction": max(per_obj_sub) if isinstance(per_obj_sub, list) and per_obj_sub else None,
                     "per_object_submersion": per_obj_sub,
                     "per_object_depth_cm": per_obj_depths,
                     "gemma_depth_cm": gemma_depth,
@@ -459,20 +555,18 @@ class GemmaSemanticAnalyzer:
                     "semantic_confidence": round(float(gemma_conf), 2) if gemma_conf is not None else 0.5,
                 }
 
-                # If per-object submersion provided, derive approximate_submersion_fraction
-                if isinstance(per_obj_sub, list) and per_obj_sub:
-                    validated["approximate_submersion_fraction"] = max(per_obj_sub)
-
-                # If gemma_depth missing but per-object depths exist, derive gemma_depth
                 if validated.get("gemma_depth_cm") is None and isinstance(per_obj_depths, list) and per_obj_depths:
                     validated["gemma_depth_cm"] = max(per_obj_depths)
+                if validated.get("gemma_depth_cm") is None and validated.get("approximate_submersion_fraction") is not None:
+                    validated["gemma_depth_cm"] = self._heuristic_depth_from_submersion(
+                        validated.get("approximate_submersion_fraction"), "unknown"
+                    )
 
-                # If nothing numeric extracted, give up
                 if validated.get("gemma_depth_cm") is None and not validated.get("per_object_submersion"):
                     return None
 
                 validated["_parsed_with_fallback"] = True
-                return validated
+                return normalize_semantic(validated)
             except Exception as exc2:
                 logger.debug(f"Fallback numeric parser failed: {exc2}")
                 return None
