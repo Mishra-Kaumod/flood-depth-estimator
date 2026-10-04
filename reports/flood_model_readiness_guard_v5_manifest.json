@@ -1,0 +1,37 @@
+{
+  "branch": "flood-model-readiness-guard-v5",
+  "base_commit": "874a6b1",
+  "purpose": "Frozen V14 production pipeline with Phase 1 observability and contract-readiness changes only.",
+  "prediction_behavior": {
+    "changed_from_frozen_pipeline": false,
+    "parity_scope": "8 approved clean train/validation representative traces",
+    "max_final_depth_difference_cm": 0.0,
+    "phase1_parity_report": "reports/full_pipeline_audit_20261002/phase1_parity_summary.json"
+  },
+  "active_config": {
+    "path": "config/config.yaml",
+    "sha256": "6a5de50beb813fea30eba23cb460f455199276954d8c91d84ffec0cfca2ba7dd"
+  },
+  "readiness_source_files": {
+    "src/pipeline.py": "c043e04787060b3c44e1e097bb32084f2303c4aa805b3b6abe85408370a51d79",
+    "src/segformer_yolo_depthv2_pipeline.py": "07618788513f58870857041fc5809795482ba19b0eba574acb13e426e2506d87",
+    "scripts/audit_full_pipeline_trace.py": "8ac083d0b738855fe4a05018f63027157f284acd55f23bc0a872ffb5bd8f2e7f"
+  },
+  "configured_active_checkpoints": {
+    "models/best_flood_model_water_aware.pth": "0418f5dc60bdb4daaf21a9cec1eb00d4e53c64e713e4cf11b4cbc0190453a5fa",
+    "models/candidate/best_flood_model_water_aware_hardneg.pth": "78bd165a30b8fee67d17d7ec13b840d6cbdd9d2504445443bf61d52248b5fb40",
+    "models/FloodDepth-MaskConditionedFusion.pth": "e6814a1c6cc704574eefbd4875d94a03c900e73ee3e1618521d9ca5a8fdba862",
+    "models/candidate/no_water_guard_teammate_augmented.pth": "0dbfb11a4baf2901df4009904fec269c60a2945d4cd0246e2b868b75eedd587d",
+    "models/candidate/wet_road_no_water_guard_test0916.pth": "85e4b8afa848fe3f2b53c1dfd93276489bb6cec8332899fe04a0f5618e16efe3",
+    "models/candidate/road_scene_classifier_4class_shallow_v2.pth": "3763622bfa6c01ff9e7e9330dce8bd28d8ac2c9490230c18805aa23faa8955b9",
+    "models/candidate/depth_regime_classifier_v6_targeted_conservative.pt": "f1295ce4a44506c557405fed1586be4d0ff9368245eb0989aa892cdfa6b3b8fd",
+    "models/candidate/residual_fusion_depth_model_ankle_v14_no_leak.pt": "f4a8dd74aa1b27f04051b33b28ce76bb7dd08cc097b512b3c90b20317a7f0bb8"
+  },
+  "checkpoint_tracking_note": "All listed checkpoints except wet_road_no_water_guard_test0916.pth are already Git-tracked. The wet-road checkpoint is ignored by .gitignore and must be explicitly approved for force-add if the branch must be self-contained.",
+  "explicitly_excluded": [
+    "tabular and pixel router candidates",
+    "EfficientNet-only shadow outputs",
+    "rejected residual candidates and safety/collapse experiments",
+    "temporary traces, logs, caches, duplicate datasets, and development training artifacts"
+  ]
+}

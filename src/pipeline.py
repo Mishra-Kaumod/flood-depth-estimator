@@ -161,6 +161,7 @@ class UnifiedEventProcessor:
             method = str(staged.get("method", "segformer_yolov8_depthv2_fusion"))
             action = str(staged.get("action_trigger", "Monitor"))
             metadata["pipeline_trace"] = staged.get("pipeline_trace", [])
+            metadata["pipeline_stage_outputs"] = staged.get("pipeline_stage_outputs", [])
             metadata["structured_features"] = staged.get("structured_features", {})
             metadata["visual_cues"] = staged.get("visual_cues", [])
         else:

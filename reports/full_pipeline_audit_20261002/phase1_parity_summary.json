@@ -1,0 +1,79 @@
+{
+  "rows": [
+    {
+      "filename": "abhinav_20260923_01_55cm.jpg",
+      "before_depth_cm": 45.07,
+      "after_depth_cm": 45.07,
+      "difference_cm": 0.0,
+      "stage_outputs_present": true,
+      "reference_diagnostics_count": 1,
+      "residual_contract_valid": false
+    },
+    {
+      "filename": "abhinav_20260923_07_50CM.jpeg",
+      "before_depth_cm": 18.14,
+      "after_depth_cm": 18.14,
+      "difference_cm": 0.0,
+      "stage_outputs_present": true,
+      "reference_diagnostics_count": 9,
+      "residual_contract_valid": false
+    },
+    {
+      "filename": "abhinav_20260923_16_4.5cm.jpeg",
+      "before_depth_cm": 31.93,
+      "after_depth_cm": 31.93,
+      "difference_cm": 0.0,
+      "stage_outputs_present": true,
+      "reference_diagnostics_count": 8,
+      "residual_contract_valid": false
+    },
+    {
+      "filename": "image_263.jpg",
+      "before_depth_cm": 0.0,
+      "after_depth_cm": 0.0,
+      "difference_cm": 0.0,
+      "stage_outputs_present": true,
+      "reference_diagnostics_count": 1,
+      "residual_contract_valid": false
+    },
+    {
+      "filename": "image_4.jpg",
+      "before_depth_cm": 0.0,
+      "after_depth_cm": 0.0,
+      "difference_cm": 0.0,
+      "stage_outputs_present": true,
+      "reference_diagnostics_count": 2,
+      "residual_contract_valid": false
+    },
+    {
+      "filename": "25.04cm.png",
+      "before_depth_cm": 30.17,
+      "after_depth_cm": 30.17,
+      "difference_cm": 0.0,
+      "stage_outputs_present": true,
+      "reference_diagnostics_count": 7,
+      "residual_contract_valid": false
+    },
+    {
+      "filename": "47.0cm.png",
+      "before_depth_cm": 5.0,
+      "after_depth_cm": 5.0,
+      "difference_cm": 0.0,
+      "stage_outputs_present": true,
+      "reference_diagnostics_count": 1,
+      "residual_contract_valid": null
+    },
+    {
+      "filename": "72.5cm.png",
+      "before_depth_cm": 75.11,
+      "after_depth_cm": 75.11,
+      "difference_cm": 0.0,
+      "stage_outputs_present": true,
+      "reference_diagnostics_count": 1,
+      "residual_contract_valid": false
+    }
+  ],
+  "all_prediction_neutral": true,
+  "config_sha256": "6a5de50beb813fea30eba23cb460f455199276954d8c91d84ffec0cfca2ba7dd",
+  "v14_sha256": "f4a8dd74aa1b27f04051b33b28ce76bb7dd08cc097b512b3c90b20317a7f0bb8"
+}

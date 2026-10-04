@@ -763,6 +763,7 @@ class SegformerYoloDepthV2Pipeline:
 
         try:
             raw = self._residual_fusion_feature_vector(depth_cm, features)
+            features["residual_feature_contract_diagnostics"] = self._residual_feature_contract_diagnostics(features)
             normalized = (raw - self._residual_fusion_feature_mean) / self._residual_fusion_feature_std
             x = torch.tensor(normalized.reshape(1, -1), dtype=torch.float32, device=self._residual_fusion_device)
             base = torch.tensor([[float(candidate_depth)]], dtype=torch.float32, device=self._residual_fusion_device)
@@ -1627,6 +1628,83 @@ class SegformerYoloDepthV2Pipeline:
             return 0.0
         return float(np.clip((bbox_mask.shape[0] - int(water_rows[0])) / bbox_mask.shape[0], 0.0, 1.0))
 
+    @staticmethod
+    def _reference_object_diagnostics(references: List[ReferenceObject]) -> List[Dict[str, Any]]:
+        """Diagnostic-only per-object proxies; they never enter current fusion."""
+        nominal_heights_cm = {
+            "person": 170.0, "car": 145.0, "truck": 200.0, "bus": 280.0,
+            "motorcycle": 90.0, "motorbike": 90.0, "bicycle": 100.0, "vehicle": 145.0,
+        }
+        rows: List[Dict[str, Any]] = []
+        for obj in references:
+            nominal_height_cm = nominal_heights_cm.get(obj.label)
+            waterline_proxy_cm = (
+                round(float(nominal_height_cm * obj.waterline_height_ratio), 2)
+                if nominal_height_cm is not None else None
+            )
+            area_score = min(float(obj.area_ratio) / 0.03, 1.0)
+            reliability_score = round(float(np.clip(
+                0.55 * obj.confidence + 0.25 * area_score + 0.20 * obj.water_submersion_ratio,
+                0.0, 1.0,
+            )), 4)
+            rows.append({
+                "label": obj.label,
+                "detector_confidence": float(obj.confidence),
+                "bbox": [int(value) for value in obj.bbox],
+                "area_ratio": float(obj.area_ratio),
+                "water_submersion_ratio": float(obj.water_submersion_ratio),
+                "waterline_height_ratio": float(obj.waterline_height_ratio),
+                "nominal_object_height_cm": nominal_height_cm,
+                "waterline_depth_proxy_cm": waterline_proxy_cm,
+                "diagnostic_reliability_score": reliability_score,
+                "used_by_current_reference_fusion": False,
+            })
+        return rows
+
+    def _residual_feature_contract_diagnostics(self, features: Dict[str, Any]) -> Dict[str, Any]:
+        """Observe feature validity without changing V14's established coercion behavior."""
+        missing: List[str] = []
+        invalid: List[str] = []
+        boolean_type_mismatch: List[str] = []
+        defaulted_optional_booleans: List[str] = []
+        derived = {
+            "pipeline_depth_cm", "dense_depth_cm", "reference_available",
+            "depth_signal_spread_cm", "efficientnet_uncapped_delta_cm", "reference_uncapped_delta_cm",
+        }
+        optional_false_booleans = {
+            "low_water_gate_applied", "shallow_water_gate_exception",
+            "muddy_water_fallback_applied", "full_road_water_no_reference",
+            "no_reference_depth_uncertain",
+        }
+        for name in self._residual_fusion_feature_names:
+            if name in derived:
+                continue
+            value = features.get(name)
+            if value is None:
+                if name in optional_false_booleans:
+                    defaulted_optional_booleans.append(name)
+                    continue
+                missing.append(name)
+                continue
+            if name in RESIDUAL_FUSION_BOOL_FEATURES:
+                if not isinstance(value, (bool, np.bool_, int, float, np.integer, np.floating)):
+                    boolean_type_mismatch.append(name)
+                continue
+            try:
+                if not np.isfinite(float(value)):
+                    invalid.append(name)
+            except (TypeError, ValueError):
+                invalid.append(name)
+        return {
+            "feature_contract_version": "v14_checkpoint_runtime_observation_v1",
+            "missing_features": missing,
+            "nonfinite_or_nonnumeric_features": invalid,
+            "boolean_type_mismatch_features": boolean_type_mismatch,
+            "defaulted_optional_false_boolean_features": defaulted_optional_booleans,
+            "strictly_valid": not missing and not invalid and not boolean_type_mismatch,
+            "enforced": False,
+        }
+
     def _yolov8_reference_stage(
         self,
         image_rgb: np.ndarray,
@@ -2274,16 +2352,42 @@ class SegformerYoloDepthV2Pipeline:
             raise ValueError("predict expects an RGB image array with shape (H, W, 3)")
 
         trace: List[Dict[str, str]] = []
+        stage_outputs: List[Dict[str, Any]] = []
+
+        def record_stage_output(
+            stage: str,
+            depth: Optional[float],
+            confidence: Optional[float],
+            action: Optional[str],
+            **details: Any,
+        ) -> None:
+            stage_outputs.append(
+                {
+                    "stage": stage,
+                    "depth_cm": None if depth is None else round(float(depth), 2),
+                    "confidence": None if confidence is None else round(float(confidence), 4),
+                    "action": action,
+                    "details": details,
+                }
+            )
 
         water_mask, water_coverage_pct = self._segformer_water_mask(image_rgb)
         muddy_water_fallback_applied = False
         trace.append(
             {
-                "stage": "SegFormer",
+                "stage": "Water Segmentation",
                 "backend": "classical-water-detector",
                 "status": "ok",
                 "summary": f"water_coverage={water_coverage_pct:.2f}%",
             }
+        )
+        record_stage_output(
+            "water_segmentation",
+            None,
+            None,
+            None,
+            backend="classical-water-detector",
+            water_coverage_pct=water_coverage_pct,
         )
 
         no_water_probability = self._no_water_guard_signal(image_rgb)
@@ -2307,6 +2411,14 @@ class SegformerYoloDepthV2Pipeline:
                     "summary": f"no_water_probability={wet_road_no_water_probability:.3f}",
                 }
             )
+        record_stage_output(
+            "semantic_classifiers",
+            None,
+            None,
+            None,
+            no_water_probability=no_water_probability,
+            wet_road_no_water_probability=wet_road_no_water_probability,
+        )
 
         if road_scene_probabilities is not None:
             scene_name = max(road_scene_probabilities, key=road_scene_probabilities.get)
@@ -2314,8 +2426,17 @@ class SegformerYoloDepthV2Pipeline:
                 {
                     "stage": "Road Scene Classifier",
                     "backend": self._road_scene_backend,
-                    "status": "advisory",
+                    "status": "scored",
                     "summary": f"scene={scene_name} probability={road_scene_probabilities[scene_name]:.3f}",
+                }
+            )
+        if depth_regime_probabilities is not None:
+            trace.append(
+                {
+                    "stage": "Depth-Regime Classifier",
+                    "backend": self._depth_regime_backend,
+                    "status": "scored",
+                    "summary": f"regime={max(depth_regime_probabilities, key=depth_regime_probabilities.get)}",
                 }
             )
         efficientnet_depth_cm = self._efficientnet_depth_signal(image_rgb)
@@ -2328,6 +2449,13 @@ class SegformerYoloDepthV2Pipeline:
                     "summary": f"candidate_depth_cm={efficientnet_depth_cm:.2f}",
                 }
             )
+        record_stage_output(
+            "efficientnet_depth",
+            efficientnet_depth_cm,
+            None,
+            None,
+            backend=self._efficientnet_backend,
+        )
 
         if (
             efficientnet_depth_cm is not None
@@ -2351,23 +2479,52 @@ class SegformerYoloDepthV2Pipeline:
                     }
                 )
         references, ref_backend = self._yolov8_reference_stage(image_rgb, water_mask)
+        reference_trace = [
+            {
+                "label": obj.label,
+                "confidence": float(obj.confidence),
+                "bbox": [int(value) for value in obj.bbox],
+                "area_ratio": float(obj.area_ratio),
+                "water_submersion_ratio": float(obj.water_submersion_ratio),
+                "waterline_height_ratio": float(obj.waterline_height_ratio),
+            }
+            for obj in references
+        ]
+        reference_diagnostics = self._reference_object_diagnostics(references)
         trace.append(
             {
-                "stage": "YOLOv8",
+                "stage": "Reference Detection",
                 "backend": ref_backend,
                 "status": "ok",
                 "summary": f"reference_objects={len(references)}",
             }
         )
+        record_stage_output(
+            "reference_detection",
+            None,
+            None,
+            None,
+            backend=ref_backend,
+            reference_count=len(references),
+            objects=reference_diagnostics,
+        )
 
         dense_depth_map = self._depth_anything_v2_dense_map(image_rgb, water_mask)
         trace.append(
             {
-                "stage": "Depth Anything V2",
+                "stage": "Relative-Depth Proxy (Depth Anything V2)",
                 "backend": self._depth_backend,
                 "status": "ok",
-                "summary": f"dense_p90={float(np.percentile(dense_depth_map, 90)):.3f}",
+                "summary": f"relative_dense_p90={float(np.percentile(dense_depth_map, 90)):.3f}",
             }
+        )
+        record_stage_output(
+            "relative_depth_proxy",
+            None,
+            None,
+            None,
+            backend=self._depth_backend,
+            relative_depth_p90=float(np.percentile(dense_depth_map, 90)),
         )
 
         teacher_features = self._depth_teacher_features(image_rgb, water_mask)
@@ -2395,6 +2552,22 @@ class SegformerYoloDepthV2Pipeline:
             dense_depth_map=dense_depth_map,
             reference_estimate=reference_estimate,
         )
+        # Development/audit metadata only: these fields are not consulted by
+        # any estimator, guard, resolver, or final-decision branch.
+        features["input_image_height_px"] = int(image_rgb.shape[0])
+        features["input_image_width_px"] = int(image_rgb.shape[1])
+        features["water_segmentation_backend"] = "classical-water-detector"
+        features["reference_detection_backend"] = ref_backend
+        features["reference_objects"] = reference_trace
+        features["reference_object_diagnostics"] = reference_diagnostics
+        features["reference_estimator_method"] = str(reference_estimate.get("method", ""))
+        features["reference_estimator_confidence"] = self._feature_float(reference_estimate.get("confidence"))
+        features["dense_depth_backend"] = self._depth_backend
+        features["dense_depth_quantity"] = "per_image_normalized_relative_proxy"
+        features["dense_depth_relative_p90"] = round(float(np.percentile(dense_depth_map, 90)), 6)
+        features["dense_depth_cm_interpretation"] = "legacy_engineered_proxy_scale_p90_x_120_not_metric_cm"
+        features["dense_depth_map_min"] = round(float(np.min(dense_depth_map)), 6)
+        features["dense_depth_map_max"] = round(float(np.max(dense_depth_map)), 6)
         if efficientnet_depth_cm is not None:
             features["efficientnet_candidate_depth_cm"] = efficientnet_depth_cm
             features["fusion_candidate_delta_cm"] = round(abs(float(features.get("region_depth_cm", 0.0)) - efficientnet_depth_cm), 2)
@@ -2463,13 +2636,25 @@ class SegformerYoloDepthV2Pipeline:
                 ),
             }
         )
+        record_stage_output(
+            "physical_feature_fusion",
+            None,
+            None,
+            None,
+            reference_depth_cm=features.get("reference_depth_cm"),
+            region_depth_cm=features.get("region_depth_cm"),
+            legacy_dense_proxy_cm=round(float(features.get("dense_depth_p90", 0.0)) * 120.0, 2),
+        )
 
         depth_cm, confidence, action = self._calibration_severity_model(features)
         features["calibration_depth_cm"] = round(depth_cm, 2)
+        record_stage_output("calibration_base", depth_cm, confidence, action)
         if efficientnet_depth_cm is not None:
             features["final_candidate_delta_cm"] = round(abs(depth_cm - efficientnet_depth_cm), 2)
         depth_cm, confidence, action = self._apply_efficientnet_correction(depth_cm, confidence, action, features)
+        record_stage_output("efficientnet_correction", depth_cm, confidence, action, applied=bool(features.get("efficientnet_correction_applied", False)))
         depth_cm, confidence, action = self._record_model_agreement(depth_cm, confidence, action, features)
+        record_stage_output("model_agreement", depth_cm, confidence, action, status=features.get("model_agreement_status"))
         depth_cm, confidence, action = self._apply_no_water_guard(
             depth_cm,
             confidence,
@@ -2477,6 +2662,7 @@ class SegformerYoloDepthV2Pipeline:
             features,
             apply_cap=False,
         )
+        record_stage_output("pre_residual_guard_evaluation", depth_cm, confidence, action, output_cap_capped_depth_cm=features.get("output_cap_capped_depth_cm"))
         # Preserve the scene/no-water cap computed before residual inference.
         # The final guard pass may update output_cap_capped_depth_cm afterward.
         features["pre_residual_output_cap_capped_depth_cm"] = round(
@@ -2484,16 +2670,22 @@ class SegformerYoloDepthV2Pipeline:
             2,
         )
         depth_cm, confidence, action = self._apply_residual_fusion_model(depth_cm, confidence, action, features)
+        record_stage_output("v14_residual_applied", depth_cm, confidence, action, raw_depth_cm=features.get("residual_fusion_depth_cm"), delta_cm=features.get("residual_fusion_delta_cm"), status=features.get("residual_fusion_status"))
         depth_cm, confidence, action = self._apply_dynamic_broad_mask_resolver(
             depth_cm,
             confidence,
             action,
             features,
         )
+        record_stage_output("dynamic_resolver", depth_cm, confidence, action, applied=bool(features.get("dynamic_broad_mask_resolver_applied", False)), status=features.get("dynamic_broad_mask_resolver_status"))
         depth_cm, confidence, action = self._apply_mask_conditioned_high_flood_correction(depth_cm, confidence, action, features)
+        record_stage_output("mask_conditioned_high_flood", depth_cm, confidence, action, status=features.get("mask_conditioned_high_flood_status"))
         depth_cm, confidence, action = self._apply_strong_deep_flood_correction(depth_cm, confidence, action, features)
+        record_stage_output("strong_deep_flood_correction", depth_cm, confidence, action, applied=bool(features.get("strong_deep_flood_correction_applied", False)))
         depth_cm, confidence, action = self._apply_dry_land_guard(depth_cm, confidence, action, image_rgb, features)
+        record_stage_output("dry_land_guard", depth_cm, confidence, action, applied=bool(features.get("dry_land_guard_applied", False)))
         depth_cm, confidence, action = self._apply_no_water_guard(depth_cm, confidence, action, features)
+        record_stage_output("final_no_water_guard", depth_cm, confidence, action, applied=bool(features.get("no_water_guard_applied", False)))
         try:
             scene_cfg = load_settings_dict().get("inference", {}).get("road_scene_classifier", {})
         except Exception:
@@ -2510,6 +2702,7 @@ class SegformerYoloDepthV2Pipeline:
             depth_cm = 0.0
             confidence = max(float(confidence), dry_probability)
             action = "MONITOR"
+        record_stage_output("dry_road_override", depth_cm, confidence, action, applied=bool(features.get("dry_road_override_applied", False)))
         if features.get("dry_land_guard_applied"):
             trace.append(
                 {
@@ -2544,7 +2737,7 @@ class SegformerYoloDepthV2Pipeline:
                     "backend": self._residual_fusion_backend,
                     "status": str(features.get("residual_fusion_status")),
                     "summary": (
-                        f"depth_cm={depth_cm:.2f} "
+                        f"applied_depth_cm={float(features.get('residual_fusion_applied_depth_cm', depth_cm)):.2f} "
                         f"delta={float(features.get('residual_fusion_delta_cm', 0.0)):.2f}"
                     ),
                 }
@@ -2552,7 +2745,7 @@ class SegformerYoloDepthV2Pipeline:
         severity = _depth_to_severity(depth_cm, features)
         trace.append(
             {
-                "stage": "Calibration/Severity Model",
+                "stage": "Final Severity Mapping",
                 "backend": "calibration-v1",
                 "status": "ok",
                 "summary": f"depth_cm={depth_cm:.2f} severity={severity['level']}",
@@ -2585,6 +2778,7 @@ class SegformerYoloDepthV2Pipeline:
             "action_trigger": action,
             "structured_features": features,
             "pipeline_trace": trace,
+            "pipeline_stage_outputs": stage_outputs,
             "depth_teachers": teacher_features,
         }
 

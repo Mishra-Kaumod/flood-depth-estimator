@@ -1,0 +1,64 @@
+{
+  "freeze_date": "2026-10-02",
+  "status": "ARCHIVED_NO_PROMOTION",
+  "production": {
+    "model": "models/candidate/residual_fusion_depth_model_ankle_v14_no_leak.pt",
+    "model_sha256": "F4A8DD74AA1B27F04051B33B28CE76BB7DD08CC097B512B3C90B20317A7F0BB8",
+    "config": "config/config.yaml",
+    "config_sha256": "6A5DE50BEB813FEA30EBA23CB460F455199276954D8C91D84FFEC0CFCA2BA7DD",
+    "state": "FROZEN_PRODUCTION_V14"
+  },
+  "evaluation_sets": {
+    "current_internal_test": {
+      "manifest_sha256": "7c16772b9a89bf743636031698682f4be539f097cd993b068e2011857604b075",
+      "state": "CONSUMED_EVALUATION_ONLY_NO_FURTHER_TUNING"
+    },
+    "external_challenge_12": {
+      "manifest_sha256": "fc60930f00998932c92ad631cca9d7dc34cb415bd6d31a48abb352908a01ca32",
+      "state": "CONSUMED_EVALUATION_ONLY_NO_FURTHER_TUNING"
+    }
+  },
+  "archived_experiments": [
+    {
+      "name": "V15 residual candidate",
+      "artifact": "models/candidate/residual_fusion_depth_model_v15_candidate.pt",
+      "state": "REJECTED",
+      "reason": "Failed frozen internal acceptance; removing semantic and guard context caused broad regression."
+    },
+    {
+      "name": "Two-stage physical residual plus trust candidate",
+      "artifact": "reports/two_stage_development",
+      "state": "REJECTED",
+      "reason": "Controlled train/validation result did not support the hypothesis."
+    },
+    {
+      "name": "Broad 24-image depth augmentation",
+      "artifact": "models/candidate/dev_indian_traffic_depth/residual_v14_data_aug.pt",
+      "state": "REJECTED",
+      "reason": "No stable improvement over clean-control retraining."
+    },
+    {
+      "name": "Targeted3 depth augmentation",
+      "artifact": "models/candidate/dev_indian_traffic_depth/targeted3_seed*.pt",
+      "state": "REJECTED",
+      "reason": "No stable multi-seed improvement over clean control."
+    },
+    {
+      "name": "Classifier augmentation and Wet3 experiments",
+      "artifact": "reports/dev_classifier_indian_traffic",
+      "state": "NOT_PROMOTED",
+      "reason": "Wet-road benefit was not reproducible and wet recall regressed."
+    },
+    {
+      "name": "Collapse-only V14 safety candidate",
+      "artifact": "reports/v14_collapse_only_final_eval",
+      "state": "REJECTED",
+      "reason": "Validation safety improvement did not generalize to consumed internal test; it introduced dry/wet-road false positives."
+    }
+  ],
+  "rules": [
+    "Do not overwrite or modify production V14 from these archived experiments.",
+    "Do not tune, retrain, select thresholds, or choose architecture using the consumed internal test or external challenge manifests.",
+    "Preserve all artifacts in place; this file is an archive ledger, not a destructive archive operation."
+  ]
+}
