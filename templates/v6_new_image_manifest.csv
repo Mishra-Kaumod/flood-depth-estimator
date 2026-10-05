@@ -1,0 +1,1 @@
+image_id,filename,sha256,scene_type,depth_cm,label_confidence,measurement_source,source_session_id,group_id,physical_reference,depth_eligible,classification_only,quarantine_reason,visual_near_duplicate_status

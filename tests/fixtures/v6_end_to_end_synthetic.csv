@@ -1,0 +1,13 @@
+image_id,filename,sha256,scene_type,depth_cm,label_confidence,measurement_source,source_session_id,group_id,physical_reference,depth_eligible,classification_only,quarantine_reason,visual_near_duplicate_status
+synthetic-001,synthetic-001.jpg,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,FLOOD_20_50,35,HIGH,instrumented,session-a,declared-a,car,true,false,,not_run
+synthetic-002,synthetic-002.jpg,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,FLOOD_20_50,35,HIGH,instrumented,session-b,declared-b,car,true,false,,not_run
+synthetic-003,synthetic-003.jpg,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,DRY,,HIGH,expert_visual_estimate,session-c,declared-c,,false,true,,not_run
+synthetic-004,synthetic-004.jpg,cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc,WET_NO_FLOOD,,MEDIUM,expert_visual_estimate,session-d,declared-d,,false,true,,not_run
+synthetic-005,synthetic-005.jpg,dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd,FLOOD_0_10,6,HIGH,measured_reference,session-e,declared-e,curb,true,false,,not_run
+synthetic-006,synthetic-006.jpg,eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee,FLOOD_10_20,16,HIGH,measured_reference,session-f,declared-f,car,true,false,,not_run
+synthetic-007,synthetic-007.jpg,ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,FLOOD_20_50,42,MEDIUM,expert_visual_estimate,session-g,declared-g,car,true,false,,not_run
+synthetic-008,synthetic-008.jpg,1111111111111111111111111111111111111111111111111111111111111111,FLOOD_50_75,65,HIGH,instrumented,session-h,declared-h,bus,true,false,,not_run
+synthetic-009,synthetic-009.jpg,2222222222222222222222222222222222222222222222222222222222222222,FLOOD_75_PLUS,90,HIGH,instrumented,session-i,declared-i,building,true,false,,not_run
+synthetic-010,synthetic-010.jpg,3333333333333333333333333333333333333333333333333333333333333333,FLOOD_20_50,28,HIGH,video_annotation,session-j,declared-j,bike,true,false,,not_run
+synthetic-011,synthetic-011.jpg,4444444444444444444444444444444444444444444444444444444444444444,FLOOD_10_20,12,LOW,video_annotation,session-k,declared-k,person,true,false,,not_run
+synthetic-invalid,synthetic-invalid.jpg,5555555555555555555555555555555555555555555555555555555555555555,FLOOD_0_10,0,HIGH,instrumented,session-invalid,declared-invalid,car,true,false,,not_run

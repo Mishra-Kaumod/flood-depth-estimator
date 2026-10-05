@@ -1,0 +1,18 @@
+# Schema-only V6 future-training plan. This file is not a training command.
+dataset:
+  manifest_contract: templates/v6_new_image_manifest.csv
+  required_splits: [TRAIN, VALIDATION, CHALLENGE]
+  reject_challenge_for_training_or_tuning: true
+  group_lock: source_session_and_duplicate_family
+components:
+  shallow_regime_refinement:
+    status: blocked_pending_new_data
+    trainable: false
+    inputs: [v6_primary_depth_cm, semantic_context, object_reliability, relative_depth_context]
+  optional_refinement:
+    status: interface_only
+    trainable: false
+evaluation:
+  compare: [v5_final, v6_primary, v6_refined_future]
+  depth_buckets_cm: [0_10, 10_20, 20_50, 50_75, 75_plus]
+  catastrophic_metrics: [actual_gt20_prediction_lt5, actual_gt30_prediction_lt10]

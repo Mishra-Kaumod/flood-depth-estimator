@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Run a V5-versus-V6 shadow comparison for one explicitly approved image.
+
+This script accepts one path and its expected SHA-256. It does not discover, scan,
+or enumerate any dataset, internal test, or external challenge directory.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+
+from src.segformer_yolo_depthv2_pipeline import SegformerYoloDepthV2Pipeline
+from src.v6_shadow_pipeline import V6ShadowPipeline
+
+
+def digest(path: Path) -> str:
+    value = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="One approved-image V5/V6 shadow comparison")
+    parser.add_argument("--image", required=True, help="Explicit development image path")
+    parser.add_argument("--expected-sha256", required=True, help="Approval-bound image SHA-256")
+    parser.add_argument("--actual-depth-cm", type=float)
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args()
+    image_path = Path(args.image)
+    actual_hash = digest(image_path)
+    if actual_hash.lower() != args.expected_sha256.lower():
+        raise RuntimeError("Image SHA-256 does not match the explicitly approved input")
+    with Image.open(image_path) as image:
+        image_rgb = np.asarray(image.convert("RGB"))
+    v5 = SegformerYoloDepthV2Pipeline()
+    result = V6ShadowPipeline(v5).predict(image_rgb)
+    output = {
+        "image_sha256": actual_hash,
+        "comparison": result.comparison(args.actual_depth_cm).as_dict(),
+        "uncertainty_flags": result.uncertainty.flags,
+        "stage_outputs": [
+            {
+                "stage": stage.stage,
+                "numerical_depth_before_cm": stage.numerical_depth_before_cm,
+                "numerical_depth_after_cm": stage.numerical_depth_after_cm,
+                "numerical_owner": stage.numerical_owner,
+                "changed_numerical_depth": stage.changed_numerical_depth,
+                "details": dict(stage.details),
+            }
+            for stage in result.stages
+        ],
+    }
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()

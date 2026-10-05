@@ -1,0 +1,3 @@
+image_id,filename,sha256,scene_type,depth_cm,label_confidence,measurement_source,source_session_id,group_id,physical_reference,depth_eligible,classification_only,quarantine_reason,visual_near_duplicate_status
+synthetic-dry-001,synthetic_dry.jpg,,DRY,,HIGH,unknown,synthetic-session-a,synthetic-group-a,,false,true,,not_run
+synthetic-flood-001,synthetic_flood.jpg,,FLOOD_20_50,35,HIGH,instrumented,synthetic-session-b,synthetic-group-b,car,true,false,,not_run
