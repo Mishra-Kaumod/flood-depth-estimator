@@ -111,6 +111,34 @@ The corresponding immutable comparison outputs are stored under
 `reports/v6_shadow_smoke/`. They are engineering smoke artifacts, not a new
 evaluation set or tuning input.
 
+## DAV / CCTV Input Smoke Test
+
+The V6-only video input path uses OpenCV first and retains FFmpeg raw-frame
+decoding as a fallback when OpenCV cannot produce an actual frame. It adds the
+bounded `--max-frames` option for smoke tests; it does not change V5 video
+handling or V6 numerical ownership.
+
+The V6 video runner saves each selected decoded frame under
+`reports/v6_video_runs/<video_name>/frames/`, reloads that saved JPEG through
+the same PIL RGB image path used by the single-image shadow comparison, then
+calls `V6ShadowPipeline.predict()`. It writes per-frame `predictions.csv` and
+`run_summary.json` alongside the frame folder.
+
+One explicit local CCTV file was inspected and decoded without an accuracy
+evaluation: a Dahua `dhav` / Video DAV container carrying HEVC/H.265 video at
+`1280x1440`. FFprobe reported an average frame rate of `15 FPS` (nominal stream
+rate `25 FPS`); duration was unavailable in the container metadata. FFmpeg 9.0.2
+reported the `dhav` demuxer and successfully decoded the first 100 frames.
+OpenCV also decoded the same first 100 frames, so FFmpeg fallback did not need
+to activate for this file. Two sampled frames were passed through the V6 shadow
+runner with valid RGB input and finite V6 centimetre outputs, without a missing
+depth arithmetic crash.
+
+Real DAV support is therefore verified for this tested file. Other DVR variants
+may still require the FFmpeg fallback, which records unavailable binaries,
+probe/decode failure, malformed frames, and valid frames with unavailable depth
+as explicit diagnostics.
+
 ## Blocked Until New Data / Training
 
 - A calibrated shallow/no-flood refinement model.
