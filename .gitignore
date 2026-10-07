@@ -4,12 +4,42 @@ __pycache__/
 .pytest_cache/
 
 # Local/generated outputs
-reports/
+# Keep approved reports/manifests visible; ignore only reproducible runtime output.
+reports/v6_video_runs/
+reports/v6_dav_smoke_*.csv
+reports/**/frames/
+reports/**/*training*.log
+reports/**/*.err.log
+__agent__/
+logs/
+temp/
+*.log
+*.DAV
+*.dav
+*.DHAV
+*.dhav
+
+# Raw local datasets: preserve CSV/JSON manifests and labeling evidence.
+training_data/**/*.jpg
+training_data/**/*.jpeg
+training_data/**/*.png
+training_data/**/*.webp
+training_data/**/*.avif
+evaluation_data/**/*.jpg
+evaluation_data/**/*.jpeg
+evaluation_data/**/*.png
+evaluation_data/**/*.webp
+evaluation_data/**/*.avif
+flood_dataset/**/*.jpg
+flood_dataset/**/*.jpeg
+flood_dataset/**/*.png
 data/final_predictions.csv
 data/final_predictions.parquet
 
 # Recovery archive kept locally, not for git
 archive_cleanup/
+# Previously untracked historical reports; current reports/ stays visible.
+/archive/reports/legacy_timestamped/
 replace.txt
 
 # Local experiment datasets and checkpoints

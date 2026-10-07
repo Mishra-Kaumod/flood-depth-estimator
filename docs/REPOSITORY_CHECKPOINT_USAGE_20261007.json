@@ -1,0 +1,787 @@
+[
+  {
+    "path": "models/best_flood_model_water_aware.pth",
+    "status": "ACTIVE configured V5/V6 dependency",
+    "references": [
+      "MASTER_KT_HANDOVER.md",
+      "config/candidate_training.yaml",
+      "config/config.yaml",
+      "docs/PRODUCTION_READINESS_STATUS.md",
+      "models/README.md",
+      "reports/flood_model_readiness_guard_v5_manifest.json",
+      "scripts/evaluate_candidate_depth_model.py",
+      "scripts/train_candidate_depth_model.py",
+      "src/pipeline.py",
+      "src/segformer_yolo_depthv2_pipeline.py",
+      "src/train_water_aware.py",
+      "archive_cleanup/scripts_old/scripts/retrain_flood_classifier.py",
+      "archive_cleanup/scripts_old/scripts/shadow_canary_check.py"
+    ],
+    "bytes": 52927201,
+    "loaded_by_or_reference_evidence": "src/pipeline.py::_load_weights (configured alternate/fallback path); src/train_water_aware.py",
+    "action": "UNCHANGED",
+    "verified_sha256": "0418f5dc60bdb4daaf21a9cec1eb00d4e53c64e713e4cf11b4cbc0190453a5fa"
+  },
+  {
+    "path": "models/candidate/best_flood_model_test0916.pth",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 17776491,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/best_flood_model_water_aware_hardneg.pth",
+    "status": "ACTIVE configured V5/V6 dependency",
+    "references": [
+      "MASTER_KT_HANDOVER.md",
+      "config/config.yaml",
+      "docs/MODEL_TRAINING_GUIDE.md",
+      "reports/flood_model_readiness_guard_v5_manifest.json",
+      "reports/v15_clean_grouped_features.metadata.json",
+      "scripts/audit_v15_features_and_freeze.py",
+      "training_runs/v15_clean_grouped_proposal/v15_training_configuration.json",
+      "reports/full_pipeline_audit_20261002/abhinav_4_5_trace.json",
+      "reports/full_pipeline_audit_20261002/abhinav_50_trace.json",
+      "reports/full_pipeline_audit_20261002/abhinav_55_trace.json",
+      "reports/full_pipeline_audit_20261002/full_pipeline_audit_report.md",
+      "reports/full_pipeline_audit_20261002/image_263_trace.json",
+      "reports/full_pipeline_audit_20261002/one_validation_trace.json",
+      "reports/full_pipeline_audit_20261002/phase1_abhinav_55.json",
+      "reports/full_pipeline_audit_20261002/phase1_final_trace_example.json",
+      "reports/full_pipeline_audit_20261002/phase1_image_263.json",
+      "reports/full_pipeline_audit_20261002/phase1_image_4.json",
+      "reports/full_pipeline_audit_20261002/phase1_train_traces.json",
+      "reports/full_pipeline_audit_20261002/phase1_validation_traces.json",
+      "reports/full_pipeline_audit_20261002/train_representative_traces.json",
+      "reports/full_pipeline_audit_20261002/validation_representative_traces.json",
+      "reports/v14_collapse_only_final_eval/external_challenge/paired_predictions.csv",
+      "reports/v14_collapse_only_final_eval/external_challenge/paired_predictions.partial.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/changed_predictions.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/paired_predictions.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/paired_predictions.partial.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/failures.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/predictions.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/summary.json",
+      "reports/baselines/evaluator_smoke_20260928/failures.csv",
+      "reports/baselines/evaluator_smoke_20260928/predictions.csv",
+      "reports/baselines/evaluator_smoke_20260928/summary.json",
+      "reports/baselines/v14_current_live_test_20260928/failures.csv",
+      "reports/baselines/v14_current_live_test_20260928/predictions.csv",
+      "reports/baselines/v14_current_live_test_20260928/summary.json",
+      "reports/analysis/v14_foundation/base_v14_final_per_image_comparison.csv",
+      "reports/analysis/v15_final_integrity/v15_frozen_experiment_identifiers.json"
+    ],
+    "bytes": 17780753,
+    "loaded_by_or_reference_evidence": "SegformerYoloDepthV2Pipeline::_load_efficientnet_signal_if_available; V6 primary anchor",
+    "action": "UNCHANGED",
+    "verified_sha256": "78bd165a30b8fee67d17d7ec13b840d6cbdd9d2504445443bf61d52248b5fb40"
+  },
+  {
+    "path": "models/candidate/depth_regime_classifier_v1.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "scripts/train_depth_regime_classifier.py"
+    ],
+    "bytes": 672121,
+    "loaded_by_or_reference_evidence": "scripts/train_depth_regime_classifier.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/depth_regime_classifier_v2_packaged.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "src/segformer_yolo_depthv2_pipeline.py"
+    ],
+    "bytes": 22129171,
+    "loaded_by_or_reference_evidence": "src/segformer_yolo_depthv2_pipeline.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/depth_regime_classifier_v3_finetuned.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "scripts/train_depth_regime_classifier_finetune.py"
+    ],
+    "bytes": 22129799,
+    "loaded_by_or_reference_evidence": "scripts/train_depth_regime_classifier_finetune.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/depth_regime_classifier_v4_balanced.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 22129427,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/depth_regime_classifier_v5_targeted_hardneg.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 22133811,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/depth_regime_classifier_v6_targeted_conservative.pt",
+    "status": "ACTIVE configured V5/V6 dependency",
+    "references": [
+      "MASTER_KT_HANDOVER.md",
+      "config/config.yaml",
+      "reports/flood_model_readiness_guard_v5_manifest.json",
+      "reports/v15_clean_grouped_features.metadata.json",
+      "scripts/audit_v15_features_and_freeze.py",
+      "training_runs/v15_clean_grouped_proposal/v15_training_configuration.json",
+      "reports/full_pipeline_audit_20261002/abhinav_4_5_trace.json",
+      "reports/full_pipeline_audit_20261002/abhinav_50_trace.json",
+      "reports/full_pipeline_audit_20261002/abhinav_55_trace.json",
+      "reports/full_pipeline_audit_20261002/full_pipeline_audit_report.md",
+      "reports/full_pipeline_audit_20261002/image_263_trace.json",
+      "reports/full_pipeline_audit_20261002/one_validation_trace.json",
+      "reports/full_pipeline_audit_20261002/phase1_abhinav_55.json",
+      "reports/full_pipeline_audit_20261002/phase1_final_trace_example.json",
+      "reports/full_pipeline_audit_20261002/phase1_image_263.json",
+      "reports/full_pipeline_audit_20261002/phase1_image_4.json",
+      "reports/full_pipeline_audit_20261002/phase1_train_traces.json",
+      "reports/full_pipeline_audit_20261002/phase1_validation_traces.json",
+      "reports/full_pipeline_audit_20261002/train_representative_traces.json",
+      "reports/full_pipeline_audit_20261002/validation_representative_traces.json",
+      "reports/v14_collapse_only_final_eval/external_challenge/paired_predictions.csv",
+      "reports/v14_collapse_only_final_eval/external_challenge/paired_predictions.partial.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/changed_predictions.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/paired_predictions.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/paired_predictions.partial.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/failures.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/predictions.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/summary.json",
+      "reports/baselines/evaluator_smoke_20260928/failures.csv",
+      "reports/baselines/evaluator_smoke_20260928/predictions.csv",
+      "reports/baselines/evaluator_smoke_20260928/summary.json",
+      "reports/baselines/v14_current_live_test_20260928/failures.csv",
+      "reports/baselines/v14_current_live_test_20260928/predictions.csv",
+      "reports/baselines/v14_current_live_test_20260928/summary.json",
+      "reports/analysis/v14_foundation/base_v14_final_per_image_comparison.csv",
+      "reports/analysis/v15_final_integrity/v15_frozen_experiment_identifiers.json"
+    ],
+    "bytes": 22135799,
+    "loaded_by_or_reference_evidence": "SegformerYoloDepthV2Pipeline::_load_depth_regime_classifier_if_available",
+    "action": "UNCHANGED",
+    "verified_sha256": "f1295ce4a44506c557405fed1586be4d0ff9368245eb0989aa892cdfa6b3b8fd"
+  },
+  {
+    "path": "models/candidate/dev_indian_traffic_depth/control_seed123.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "scripts/compare_targeted3_depth_seeds.py",
+      "reports/dev_depth_targeted3/control_seed123/training_summary.json"
+    ],
+    "bytes": 18997,
+    "loaded_by_or_reference_evidence": "scripts/compare_targeted3_depth_seeds.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/dev_indian_traffic_depth/control_seed17.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "scripts/compare_targeted3_depth_seeds.py",
+      "reports/dev_depth_targeted3/control_seed17/training_summary.json"
+    ],
+    "bytes": 18985,
+    "loaded_by_or_reference_evidence": "scripts/compare_targeted3_depth_seeds.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/dev_indian_traffic_depth/residual_v14_clean_control.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "scripts/audit_depth_augmentation_effect.py",
+      "scripts/compare_depth_dev_control_vs_augmentation.py",
+      "scripts/compare_targeted3_depth_seeds.py",
+      "reports/dev_depth_indian_traffic_control/training_summary.json"
+    ],
+    "bytes": 19193,
+    "loaded_by_or_reference_evidence": "scripts/audit_depth_augmentation_effect.py; scripts/compare_depth_dev_control_vs_augmentation.py; scripts/compare_targeted3_depth_seeds.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/dev_indian_traffic_depth/residual_v14_data_aug.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "reports/architecture_investigation_freeze_20261002.json",
+      "scripts/compare_depth_dev_control_vs_augmentation.py",
+      "scripts/compare_v14_vs_candidate_validation.py",
+      "scripts/run_residual_fusion_depth_dev.py",
+      "reports/dev_depth_indian_traffic/feature_generation_progress.json",
+      "reports/dev_depth_indian_traffic/training_summary.json"
+    ],
+    "bytes": 19005,
+    "loaded_by_or_reference_evidence": "scripts/compare_depth_dev_control_vs_augmentation.py; scripts/compare_v14_vs_candidate_validation.py; scripts/run_residual_fusion_depth_dev.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/dev_indian_traffic_depth/targeted3_seed123.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "scripts/compare_targeted3_depth_seeds.py",
+      "reports/dev_depth_targeted3/targeted3_seed123/training_summary.json"
+    ],
+    "bytes": 19149,
+    "loaded_by_or_reference_evidence": "scripts/compare_targeted3_depth_seeds.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/dev_indian_traffic_depth/targeted3_seed17.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "scripts/compare_targeted3_depth_seeds.py",
+      "reports/dev_depth_targeted3/targeted3_seed17/training_summary.json"
+    ],
+    "bytes": 19137,
+    "loaded_by_or_reference_evidence": "scripts/compare_targeted3_depth_seeds.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/dev_indian_traffic_depth/targeted3_seed42.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "scripts/compare_targeted3_depth_seeds.py",
+      "reports/dev_depth_targeted3/targeted3_seed42/training_summary.json"
+    ],
+    "bytes": 19137,
+    "loaded_by_or_reference_evidence": "scripts/compare_targeted3_depth_seeds.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/flood_depth_expert_v1.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "scripts/evaluate_hierarchical_depth_router.py",
+      "scripts/train_flood_depth_expert.py"
+    ],
+    "bytes": 25149,
+    "loaded_by_or_reference_evidence": "scripts/evaluate_hierarchical_depth_router.py; scripts/train_flood_depth_expert.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/flood_depth_expert_v2_deep_weighted.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 25445,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/flood_depth_expert_v3_safety_biased.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 25445,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/flood_depth_expert_v4_no_leak_safety.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 25137,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/fusion_depth_model_atharva.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 18617,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/fusion_depth_model_combined_atharva.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 18725,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/no_water_guard_teammate_augmented.pth",
+    "status": "ACTIVE configured V5/V6 dependency",
+    "references": [
+      "MASTER_KT_HANDOVER.md",
+      "config/config.yaml",
+      "reports/flood_model_readiness_guard_v5_manifest.json",
+      "reports/v15_clean_grouped_features.metadata.json",
+      "scripts/audit_v15_features_and_freeze.py",
+      "training_runs/v15_clean_grouped_proposal/v15_training_configuration.json",
+      "reports/full_pipeline_audit_20261002/abhinav_4_5_trace.json",
+      "reports/full_pipeline_audit_20261002/abhinav_50_trace.json",
+      "reports/full_pipeline_audit_20261002/abhinav_55_trace.json",
+      "reports/full_pipeline_audit_20261002/full_pipeline_audit_report.md",
+      "reports/full_pipeline_audit_20261002/image_263_trace.json",
+      "reports/full_pipeline_audit_20261002/one_validation_trace.json",
+      "reports/full_pipeline_audit_20261002/phase1_abhinav_55.json",
+      "reports/full_pipeline_audit_20261002/phase1_final_trace_example.json",
+      "reports/full_pipeline_audit_20261002/phase1_image_263.json",
+      "reports/full_pipeline_audit_20261002/phase1_image_4.json",
+      "reports/full_pipeline_audit_20261002/phase1_train_traces.json",
+      "reports/full_pipeline_audit_20261002/phase1_validation_traces.json",
+      "reports/full_pipeline_audit_20261002/train_representative_traces.json",
+      "reports/full_pipeline_audit_20261002/validation_representative_traces.json",
+      "reports/v14_collapse_only_final_eval/external_challenge/paired_predictions.csv",
+      "reports/v14_collapse_only_final_eval/external_challenge/paired_predictions.partial.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/changed_predictions.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/paired_predictions.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/paired_predictions.partial.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/failures.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/predictions.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/summary.json",
+      "reports/baselines/evaluator_smoke_20260928/failures.csv",
+      "reports/baselines/evaluator_smoke_20260928/predictions.csv",
+      "reports/baselines/evaluator_smoke_20260928/summary.json",
+      "reports/baselines/v14_current_live_test_20260928/failures.csv",
+      "reports/baselines/v14_current_live_test_20260928/predictions.csv",
+      "reports/baselines/v14_current_live_test_20260928/summary.json",
+      "reports/analysis/v14_foundation/base_v14_final_per_image_comparison.csv",
+      "reports/analysis/v15_final_integrity/v15_frozen_experiment_identifiers.json"
+    ],
+    "bytes": 6207995,
+    "loaded_by_or_reference_evidence": "SegformerYoloDepthV2Pipeline::_load_no_water_guard_if_available",
+    "action": "UNCHANGED",
+    "verified_sha256": "0dbfb11a4baf2901df4009904fec269c60a2945d4cd0246e2b868b75eedd587d"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_ankle_v10.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 19389,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_ankle_v11.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 19901,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_ankle_v12_clean.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 19653,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_ankle_v13_clean_anchor.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "scripts/evaluate_hierarchical_depth_router.py"
+    ],
+    "bytes": 19993,
+    "loaded_by_or_reference_evidence": "scripts/evaluate_hierarchical_depth_router.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_ankle_v14_no_leak.pt",
+    "status": "ACTIVE configured V5/V6 dependency",
+    "references": [
+      "MASTER_KT_HANDOVER.md",
+      "config/config.yaml",
+      "reports/architecture_investigation_freeze_20261002.json",
+      "reports/flood_model_readiness_guard_v5_manifest.json",
+      "reports/v15_clean_grouped_features.metadata.json",
+      "scripts/analyze_residual_attribution.py",
+      "scripts/analyze_v14_failure_detectability.py",
+      "scripts/compare_v14_v15_candidates.py",
+      "scripts/compare_v14_vs_candidate_validation.py",
+      "scripts/diagnose_v14_dataset_and_behavior.py",
+      "scripts/diagnose_v15_failure_modes.py",
+      "scripts/evaluate_frozen_collapse_safety.py",
+      "scripts/run_two_stage_development_experiment.py",
+      "scripts/run_v14_risk_detector_experiment.py",
+      "reports/analysis/v14_residual_parity_summary.json",
+      "reports/full_pipeline_audit_20261002/abhinav_4_5_trace.json",
+      "reports/full_pipeline_audit_20261002/abhinav_50_trace.json",
+      "reports/full_pipeline_audit_20261002/abhinav_55_trace.json",
+      "reports/full_pipeline_audit_20261002/full_pipeline_audit_report.md",
+      "reports/full_pipeline_audit_20261002/image_263_trace.json",
+      "reports/full_pipeline_audit_20261002/one_validation_trace.json",
+      "reports/full_pipeline_audit_20261002/phase1_abhinav_55.json",
+      "reports/full_pipeline_audit_20261002/phase1_final_trace_example.json",
+      "reports/full_pipeline_audit_20261002/phase1_image_263.json",
+      "reports/full_pipeline_audit_20261002/phase1_image_4.json",
+      "reports/full_pipeline_audit_20261002/phase1_train_traces.json",
+      "reports/full_pipeline_audit_20261002/phase1_validation_traces.json",
+      "reports/full_pipeline_audit_20261002/train_representative_traces.json",
+      "reports/full_pipeline_audit_20261002/validation_representative_traces.json",
+      "reports/v14_collapse_only_final_eval/external_challenge/paired_predictions.csv",
+      "reports/v14_collapse_only_final_eval/external_challenge/paired_predictions.partial.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/changed_predictions.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/paired_predictions.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/paired_predictions.partial.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/failures.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/predictions.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/summary.json",
+      "reports/baselines/evaluator_smoke_20260928/failures.csv",
+      "reports/baselines/evaluator_smoke_20260928/predictions.csv",
+      "reports/baselines/evaluator_smoke_20260928/summary.json",
+      "reports/baselines/v14_current_live_test_20260928/failures.csv",
+      "reports/baselines/v14_current_live_test_20260928/predictions.csv",
+      "reports/baselines/v14_current_live_test_20260928/summary.json",
+      "reports/analysis/v14_foundation/base_v14_final_per_image_comparison.csv"
+    ],
+    "bytes": 19677,
+    "loaded_by_or_reference_evidence": "SegformerYoloDepthV2Pipeline::_load_residual_fusion_if_available",
+    "action": "UNCHANGED",
+    "verified_sha256": "f4a8dd74aa1b27f04051b33b28ce76bb7dd08cc097b512b3c90b20317a7f0bb8"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_ankle_v2.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [
+      "RESIDUAL_FUSION_TRAINING.md"
+    ],
+    "bytes": 20017,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_ankle_v3.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [
+      "RESIDUAL_FUSION_TRAINING.md"
+    ],
+    "bytes": 20017,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_ankle_v4.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "RESIDUAL_FUSION_TRAINING.md",
+      "reports/broad_mask_cap_audit/reproduce_audit.py"
+    ],
+    "bytes": 20017,
+    "loaded_by_or_reference_evidence": "reports/broad_mask_cap_audit/reproduce_audit.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_ankle_v5.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [
+      "RESIDUAL_FUSION_TRAINING.md"
+    ],
+    "bytes": 15793,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_ankle_v6.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 15985,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_ankle_v7_uncapped_weighted.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 16905,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_ankle_v8_uncapped_weighted.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "scripts/train_residual_regime_router.py"
+    ],
+    "bytes": 16905,
+    "loaded_by_or_reference_evidence": "scripts/train_residual_regime_router.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_ankle_v9a.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 18493,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_ankle_v9b.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "scripts/evaluate_residual_safety_fallback.py",
+      "scripts/train_residual_regime_router.py"
+    ],
+    "bytes": 18493,
+    "loaded_by_or_reference_evidence": "scripts/evaluate_residual_safety_fallback.py; scripts/train_residual_regime_router.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_ankle_v9c.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 18493,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_retrain_old_eff_20260816_231536.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "docs/MODEL_TRAINING_GUIDE.md",
+      "scripts/train_residual_regime_router.py"
+    ],
+    "bytes": 14469,
+    "loaded_by_or_reference_evidence": "scripts/train_residual_regime_router.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_scene_aware_v1.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 15033,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_depth_model_v15_candidate.pt",
+    "status": "REJECTED / HISTORICAL; preserve reproduction",
+    "references": [
+      "reports/architecture_investigation_freeze_20261002.json",
+      "scripts/compare_v14_v15_candidates.py",
+      "scripts/run_two_stage_development_experiment.py"
+    ],
+    "bytes": 15533,
+    "loaded_by_or_reference_evidence": "scripts/compare_v14_v15_candidates.py; scripts/run_two_stage_development_experiment.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_regime_router_v1.pt",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "scripts/train_residual_regime_router.py"
+    ],
+    "bytes": 18241,
+    "loaded_by_or_reference_evidence": "scripts/train_residual_regime_router.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_regime_router_v2_objects.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 19489,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/residual_fusion_regime_router_v3_waterline.pt",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 19961,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/road_scene_classifier_4class_shallow_v2.pth",
+    "status": "ACTIVE configured V5/V6 dependency",
+    "references": [
+      "MASTER_KT_HANDOVER.md",
+      "config/config.yaml",
+      "reports/flood_model_readiness_guard_v5_manifest.json",
+      "reports/v15_clean_grouped_features.metadata.json",
+      "scripts/audit_v15_features_and_freeze.py",
+      "src/segformer_yolo_depthv2_pipeline.py",
+      "training_runs/v15_clean_grouped_proposal/v15_training_configuration.json",
+      "reports/full_pipeline_audit_20261002/abhinav_4_5_trace.json",
+      "reports/full_pipeline_audit_20261002/abhinav_50_trace.json",
+      "reports/full_pipeline_audit_20261002/abhinav_55_trace.json",
+      "reports/full_pipeline_audit_20261002/full_pipeline_audit_report.md",
+      "reports/full_pipeline_audit_20261002/image_263_trace.json",
+      "reports/full_pipeline_audit_20261002/one_validation_trace.json",
+      "reports/full_pipeline_audit_20261002/phase1_abhinav_55.json",
+      "reports/full_pipeline_audit_20261002/phase1_final_trace_example.json",
+      "reports/full_pipeline_audit_20261002/phase1_image_263.json",
+      "reports/full_pipeline_audit_20261002/phase1_image_4.json",
+      "reports/full_pipeline_audit_20261002/phase1_train_traces.json",
+      "reports/full_pipeline_audit_20261002/phase1_validation_traces.json",
+      "reports/full_pipeline_audit_20261002/train_representative_traces.json",
+      "reports/full_pipeline_audit_20261002/validation_representative_traces.json",
+      "reports/v14_collapse_only_final_eval/external_challenge/paired_predictions.csv",
+      "reports/v14_collapse_only_final_eval/external_challenge/paired_predictions.partial.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/changed_predictions.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/paired_predictions.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/paired_predictions.partial.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/failures.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/predictions.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/summary.json",
+      "reports/baselines/evaluator_smoke_20260928/failures.csv",
+      "reports/baselines/evaluator_smoke_20260928/predictions.csv",
+      "reports/baselines/evaluator_smoke_20260928/summary.json",
+      "reports/baselines/v14_current_live_test_20260928/failures.csv",
+      "reports/baselines/v14_current_live_test_20260928/predictions.csv",
+      "reports/baselines/v14_current_live_test_20260928/summary.json",
+      "reports/analysis/v14_foundation/base_v14_final_per_image_comparison.csv",
+      "reports/analysis/v15_final_integrity/v15_frozen_experiment_identifiers.json"
+    ],
+    "bytes": 6221591,
+    "loaded_by_or_reference_evidence": "SegformerYoloDepthV2Pipeline::_load_road_scene_classifier_if_available",
+    "action": "UNCHANGED",
+    "verified_sha256": "3763622bfa6c01ff9e7e9330dce8bd28d8ac2c9490230c18805aa23faa8955b9"
+  },
+  {
+    "path": "models/candidate/scene_guard_3class_test0916.pth",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "scripts/train_scene_guard.py"
+    ],
+    "bytes": 6210783,
+    "loaded_by_or_reference_evidence": "scripts/train_scene_guard.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/wet_road_no_water_guard_augmented.pth",
+    "status": "UNKNOWN / NEED REVIEW: no proven active use; no move",
+    "references": [],
+    "bytes": 6207745,
+    "loaded_by_or_reference_evidence": "No literal code/config reference found; external/manual usage unknown",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "models/candidate/wet_road_no_water_guard_test0916.pth",
+    "status": "ACTIVE configured V5/V6 dependency",
+    "references": [
+      "MASTER_KT_HANDOVER.md",
+      "config/config.yaml",
+      "reports/flood_model_readiness_guard_v5_manifest.json",
+      "reports/v15_clean_grouped_features.metadata.json",
+      "scripts/audit_v15_features_and_freeze.py",
+      "training_runs/v15_clean_grouped_proposal/v15_training_configuration.json",
+      "reports/full_pipeline_audit_20261002/abhinav_4_5_trace.json",
+      "reports/full_pipeline_audit_20261002/abhinav_50_trace.json",
+      "reports/full_pipeline_audit_20261002/abhinav_55_trace.json",
+      "reports/full_pipeline_audit_20261002/full_pipeline_audit_report.md",
+      "reports/full_pipeline_audit_20261002/image_263_trace.json",
+      "reports/full_pipeline_audit_20261002/one_validation_trace.json",
+      "reports/full_pipeline_audit_20261002/phase1_abhinav_55.json",
+      "reports/full_pipeline_audit_20261002/phase1_final_trace_example.json",
+      "reports/full_pipeline_audit_20261002/phase1_image_263.json",
+      "reports/full_pipeline_audit_20261002/phase1_image_4.json",
+      "reports/full_pipeline_audit_20261002/phase1_train_traces.json",
+      "reports/full_pipeline_audit_20261002/phase1_validation_traces.json",
+      "reports/full_pipeline_audit_20261002/train_representative_traces.json",
+      "reports/full_pipeline_audit_20261002/validation_representative_traces.json",
+      "reports/v14_collapse_only_final_eval/external_challenge/paired_predictions.csv",
+      "reports/v14_collapse_only_final_eval/external_challenge/paired_predictions.partial.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/changed_predictions.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/paired_predictions.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/paired_predictions.partial.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/failures.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/predictions.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/summary.json",
+      "reports/baselines/evaluator_smoke_20260928/failures.csv",
+      "reports/baselines/evaluator_smoke_20260928/predictions.csv",
+      "reports/baselines/evaluator_smoke_20260928/summary.json",
+      "reports/baselines/v14_current_live_test_20260928/failures.csv",
+      "reports/baselines/v14_current_live_test_20260928/predictions.csv",
+      "reports/baselines/v14_current_live_test_20260928/summary.json",
+      "reports/analysis/v14_foundation/base_v14_final_per_image_comparison.csv",
+      "reports/analysis/v15_final_integrity/v15_frozen_experiment_identifiers.json"
+    ],
+    "bytes": 6207745,
+    "loaded_by_or_reference_evidence": "SegformerYoloDepthV2Pipeline::_load_no_water_guard_if_available (secondary guard)",
+    "action": "UNCHANGED",
+    "verified_sha256": "85e4b8afa848fe3f2b53c1dfd93276489bb6cec8332899fe04a0f5618e16efe3"
+  },
+  {
+    "path": "models/FloodDepth-MaskConditionedFusion.pth",
+    "status": "ACTIVE configured V5/V6 dependency",
+    "references": [
+      "MASTER_KT_HANDOVER.md",
+      "config/config.yaml",
+      "reports/flood_model_readiness_guard_v5_manifest.json",
+      "reports/v15_clean_grouped_features.metadata.json",
+      "src/segformer_yolo_depthv2_pipeline.py",
+      "reports/full_pipeline_audit_20261002/abhinav_4_5_trace.json",
+      "reports/full_pipeline_audit_20261002/abhinav_50_trace.json",
+      "reports/full_pipeline_audit_20261002/abhinav_55_trace.json",
+      "reports/full_pipeline_audit_20261002/full_pipeline_audit_report.md",
+      "reports/full_pipeline_audit_20261002/image_263_trace.json",
+      "reports/full_pipeline_audit_20261002/one_validation_trace.json",
+      "reports/full_pipeline_audit_20261002/phase1_abhinav_55.json",
+      "reports/full_pipeline_audit_20261002/phase1_final_trace_example.json",
+      "reports/full_pipeline_audit_20261002/phase1_image_263.json",
+      "reports/full_pipeline_audit_20261002/phase1_image_4.json",
+      "reports/full_pipeline_audit_20261002/phase1_train_traces.json",
+      "reports/full_pipeline_audit_20261002/phase1_validation_traces.json",
+      "reports/full_pipeline_audit_20261002/train_representative_traces.json",
+      "reports/full_pipeline_audit_20261002/validation_representative_traces.json",
+      "reports/v14_collapse_only_final_eval/external_challenge/paired_predictions.csv",
+      "reports/v14_collapse_only_final_eval/external_challenge/paired_predictions.partial.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/changed_predictions.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/paired_predictions.csv",
+      "reports/v14_collapse_only_final_eval/internal_test/paired_predictions.partial.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/failures.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/predictions.csv",
+      "reports/external_five_v14_diagnostic_20260929/inference/summary.json",
+      "reports/baselines/evaluator_smoke_20260928/failures.csv",
+      "reports/baselines/evaluator_smoke_20260928/predictions.csv",
+      "reports/baselines/evaluator_smoke_20260928/summary.json",
+      "reports/baselines/v14_current_live_test_20260928/failures.csv",
+      "reports/baselines/v14_current_live_test_20260928/predictions.csv",
+      "reports/baselines/v14_current_live_test_20260928/summary.json",
+      "reports/analysis/v14_foundation/base_v14_final_per_image_comparison.csv"
+    ],
+    "bytes": 92495709,
+    "loaded_by_or_reference_evidence": "SegformerYoloDepthV2Pipeline::_load_mask_conditioned_fusion_if_available",
+    "action": "UNCHANGED",
+    "verified_sha256": "e6814a1c6cc704574eefbd4875d94a03c900e73ee3e1618521d9ca5a8fdba862"
+  },
+  {
+    "path": "models/no_water_guard_mobilenet_v3_small.pth",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "scripts/train_no_water_guard.py",
+      "src/segformer_yolo_depthv2_pipeline.py"
+    ],
+    "bytes": 6207546,
+    "loaded_by_or_reference_evidence": "scripts/train_no_water_guard.py; src/segformer_yolo_depthv2_pipeline.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "severity_model.pth",
+    "status": "REFERENCE / KEEP: historical/default training/evaluation or legacy reference; not selected in active config",
+    "references": [
+      "SETUP.md",
+      "web_app.py",
+      "archive/legacy_main.py",
+      "docs/PRODUCTION_READINESS_STATUS.md",
+      "archive/legacy_cli/modules/flood_analyzer.py",
+      "archive/legacy_cli/modules/predict_image.py",
+      "archive/legacy_cli/modules/process_video.py",
+      "archive/legacy_cli/modules/production_pipeline.py"
+    ],
+    "bytes": 44794288,
+    "loaded_by_or_reference_evidence": "web_app.py; archive/legacy_main.py; archive/legacy_cli/modules/flood_analyzer.py; archive/legacy_cli/modules/predict_image.py; archive/legacy_cli/modules/process_video.py; archive/legacy_cli/modules/production_pipeline.py",
+    "action": "UNCHANGED"
+  },
+  {
+    "path": "yolov8n.pt",
+    "status": "ACTIVE object detector",
+    "references": [
+      "MASTER_KT_HANDOVER.md",
+      "docs/PRODUCTION_READINESS_STATUS.md",
+      "src/segformer_yolo_depthv2_pipeline.py",
+      "archive/legacy_cli/modules/object_detection.py"
+    ],
+    "bytes": 6534387,
+    "loaded_by_or_reference_evidence": "SegformerYoloDepthV2Pipeline::_load_yolo_if_available / ObjectDetector",
+    "action": "UNCHANGED"
+  }
+]
