@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from io import BytesIO
+
 from flask import Flask, jsonify, render_template_string, request
 from pydantic import ValidationError
 
@@ -9,6 +11,16 @@ from pydantic import ValidationError
 def create_app(model_path: str = "severity_model.pth") -> Flask:
     app = Flask(__name__)
     api_service = None
+    v6_pipeline = None
+
+    def get_v6_pipeline():
+        nonlocal v6_pipeline
+        if v6_pipeline is None:
+            from src.segformer_yolo_depthv2_pipeline import SegformerYoloDepthV2Pipeline
+            from src.v6_shadow_pipeline import V6ShadowPipeline
+
+            v6_pipeline = V6ShadowPipeline(SegformerYoloDepthV2Pipeline())
+        return v6_pipeline
 
     def get_api_service():
         nonlocal api_service
@@ -24,7 +36,7 @@ def create_app(model_path: str = "severity_model.pth") -> Flask:
         <html>
           <head>
             <meta charset="utf-8">
-            <title>Flood Depth Estimator</title>
+            <title>Flood Depth Estimator – V6</title>
             <style>
               body { font-family: Arial, sans-serif; margin: 2rem; line-height: 1.5; }
               .card { max-width: 720px; padding: 1.5rem; border: 1px solid #d0d7de; border-radius: 12px; }
@@ -34,14 +46,32 @@ def create_app(model_path: str = "severity_model.pth") -> Flask:
           </head>
           <body>
             <div class="card">
-              <h1>Flood Depth Estimator</h1>
-              <p>Select an image to run the cleaned flood analysis pipeline and inspect the result directly in the browser.</p>
-              <form action="/predict" method="post" enctype="multipart/form-data">
+              <h1>Flood Depth Estimator – V6</h1>
+              <p>Select an image to estimate flood depth with V6. Results are shown in cm.</p>
+              <form id="upload-form" action="/predict" method="post" enctype="multipart/form-data">
                 <label for="image">Select an image</label><br>
                 <input id="image" type="file" name="image" accept="image/*" required>
                 <br>
                 <button type="submit">Analyze Image</button>
               </form>
+              <p id="depth-result" aria-live="polite"></p>
+              <script>
+                document.getElementById("upload-form").addEventListener("submit", async (event) => {
+                  event.preventDefault();
+                  const output = document.getElementById("depth-result");
+                  output.textContent = "Analyzing…";
+                  try {
+                    const response = await fetch("/predict", {method: "POST", body: new FormData(event.target)});
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.error || "Analysis failed");
+                    output.textContent = result.final_shadow_depth_cm === null
+                      ? "Flood depth unavailable"
+                      : "Flood depth: " + result.final_shadow_depth_cm + " cm";
+                  } catch (error) {
+                    output.textContent = error.message;
+                  }
+                });
+              </script>
             </div>
           </body>
         </html>
@@ -155,47 +185,17 @@ def create_app(model_path: str = "severity_model.pth") -> Flask:
         if not image_bytes:
             return jsonify({"error": "Empty image"}), 400
 
-        import cv2
         import numpy as np
+        from PIL import Image, UnidentifiedImageError
 
-        np_arr = np.frombuffer(image_bytes, dtype=np.uint8)
-        image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        if image is None:
+        try:
+            with Image.open(BytesIO(image_bytes)) as image:
+                image_rgb = np.asarray(image.convert("RGB"))
+        except (UnidentifiedImageError, OSError, ValueError):
             return jsonify({"error": "Could not decode image"}), 400
 
-        import base64
-        image_b64 = base64.b64encode(image_bytes).decode("ascii")
-
-        response = get_api_service().process_camera_upload(
-            image_bytes=image_bytes,
-            filename=image_file.filename,
-            camera_id=request.form.get("camera_id", "web_camera"),
-            latitude=float(request.form.get("latitude", 0.0)),
-            longitude=float(request.form.get("longitude", 0.0)),
-            location_name=request.form.get("location_name"),
-            metadata={"context": request.form.get("context", "web_upload")},
-        )
-
-        result = response.get("result", {})
-        payload = {
-            "image_path": result.get("image_name"),
-            "water_detected": result.get("estimated_depth_meters", 0) > 0,
-            "final_flood_level": result.get("severity_label"),
-            "depth_cm": round(result.get("estimated_depth_meters", 0.0) * 100.0, 2),
-            "severity_name": result.get("severity_label"),
-            "water_percentage": None,
-            "water_confidence": round(result.get("confidence_score", 0.0), 4),
-            "depth_method": result.get("method"),
-            "depth_details": result.get("metadata", {}),
-            "method_votes": {},
-            "production_depth_cm": round(result.get("estimated_depth_meters", 0.0) * 100.0, 2),
-            "production_method": result.get("method"),
-            "production_action": result.get("action_trigger"),
-            "production_trace": result.get("metadata", {}).get("pipeline_trace", []),
-            "production_reference_estimate": None,
-            "status": response.get("status"),
-        }
-        return jsonify(payload)
+        result = get_v6_pipeline().predict(image_rgb)
+        return jsonify({"final_shadow_depth_cm": result.final_shadow_depth_cm})
 
     @app.get("/status")
     def status():
