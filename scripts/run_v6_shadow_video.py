@@ -6,31 +6,19 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
 from pathlib import Path
 from typing import Any, Optional
 
 import cv2
-import numpy as np
-from PIL import Image
 
-from src.v6_video_input import V6VideoInput, VideoFrame
-
-
-def finite_depth(value: Any) -> Optional[float]:
-    if isinstance(value, bool) or value is None:
-        return None
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    return numeric if math.isfinite(numeric) else None
+from src.v6_video_input import V6VideoInput
+from src.v6_inference import create_v6_pipeline, finite_depth, load_v6_rgb, v6_depth_payload
 
 
 def record_from_v6_result(frame_number: int, timestamp_seconds: Optional[float], backend: str, result: Any) -> dict[str, Any]:
     """Read the V6 contract directly; never infer depth from V5 meter fields."""
     primary = finite_depth(result.primary_depth_cm)
-    final = finite_depth(result.final_shadow_depth_cm)
+    final = v6_depth_payload(result)["final_shadow_depth_cm"]
     return {
         "frame_index": frame_number,
         "timestamp_sec": timestamp_seconds,
@@ -49,10 +37,8 @@ CSV_FIELDS = (
 )
 
 
-def load_saved_rgb(path: Path) -> np.ndarray:
-    """Match the single-image V6 comparison path: PIL RGB after saving."""
-    with Image.open(path) as image:
-        return np.asarray(image.convert("RGB"))
+# Compatibility alias; RGB decoding is owned by the shared V6 contract.
+load_saved_rgb = load_v6_rgb
 
 
 def process_saved_frames(
@@ -120,12 +106,8 @@ def main() -> None:
 
     run_directory = Path(args.output_dir) if args.output_dir else Path("reports") / "v6_video_runs" / Path(args.video).stem
     run_directory.mkdir(parents=True, exist_ok=True)
-    # Imports stay here so tests can exercise the saved-frame flow without loading models.
-    from src.segformer_yolo_depthv2_pipeline import SegformerYoloDepthV2Pipeline
-    from src.v6_shadow_pipeline import V6ShadowPipeline
-
     reader = V6VideoInput()
-    rows, summary = process_saved_frames(reader, V6ShadowPipeline(SegformerYoloDepthV2Pipeline()), args.video, run_directory, args.max_frames, args.skip_frames)
+    rows, summary = process_saved_frames(reader, create_v6_pipeline(), args.video, run_directory, args.max_frames, args.skip_frames)
     csv_path = run_directory / "predictions.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS); writer.writeheader(); writer.writerows(rows)

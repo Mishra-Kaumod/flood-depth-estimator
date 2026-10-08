@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from io import BytesIO
-
 from flask import Flask, jsonify, render_template_string, request
 from pydantic import ValidationError
+
+from src.v6_inference import create_v6_pipeline, load_v6_rgb, v6_depth_payload
 
 
 def create_app(model_path: str = "severity_model.pth") -> Flask:
@@ -16,10 +16,7 @@ def create_app(model_path: str = "severity_model.pth") -> Flask:
     def get_v6_pipeline():
         nonlocal v6_pipeline
         if v6_pipeline is None:
-            from src.segformer_yolo_depthv2_pipeline import SegformerYoloDepthV2Pipeline
-            from src.v6_shadow_pipeline import V6ShadowPipeline
-
-            v6_pipeline = V6ShadowPipeline(SegformerYoloDepthV2Pipeline())
+            v6_pipeline = create_v6_pipeline()
         return v6_pipeline
 
     def get_api_service():
@@ -185,17 +182,15 @@ def create_app(model_path: str = "severity_model.pth") -> Flask:
         if not image_bytes:
             return jsonify({"error": "Empty image"}), 400
 
-        import numpy as np
-        from PIL import Image, UnidentifiedImageError
+        from PIL import UnidentifiedImageError
 
         try:
-            with Image.open(BytesIO(image_bytes)) as image:
-                image_rgb = np.asarray(image.convert("RGB"))
+            image_rgb = load_v6_rgb(image_bytes)
         except (UnidentifiedImageError, OSError, ValueError):
             return jsonify({"error": "Could not decode image"}), 400
 
         result = get_v6_pipeline().predict(image_rgb)
-        return jsonify({"final_shadow_depth_cm": result.final_shadow_depth_cm})
+        return jsonify(v6_depth_payload(result))
 
     @app.get("/status")
     def status():

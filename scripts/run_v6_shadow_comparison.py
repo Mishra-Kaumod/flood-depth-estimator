@@ -12,11 +12,7 @@ import hashlib
 import json
 from pathlib import Path
 
-import numpy as np
-from PIL import Image
-
-from src.segformer_yolo_depthv2_pipeline import SegformerYoloDepthV2Pipeline
-from src.v6_shadow_pipeline import V6ShadowPipeline
+from src.v6_inference import create_v6_pipeline, load_v6_rgb
 
 
 def digest(path: Path) -> str:
@@ -38,10 +34,8 @@ def main() -> None:
     actual_hash = digest(image_path)
     if actual_hash.lower() != args.expected_sha256.lower():
         raise RuntimeError("Image SHA-256 does not match the explicitly approved input")
-    with Image.open(image_path) as image:
-        image_rgb = np.asarray(image.convert("RGB"))
-    v5 = SegformerYoloDepthV2Pipeline()
-    result = V6ShadowPipeline(v5).predict(image_rgb)
+    image_rgb = load_v6_rgb(image_path)
+    result = create_v6_pipeline().predict(image_rgb)
     output = {
         "image_sha256": actual_hash,
         "comparison": result.comparison(args.actual_depth_cm).as_dict(),
