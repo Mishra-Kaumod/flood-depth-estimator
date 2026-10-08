@@ -161,7 +161,7 @@ class V6VideoInput:
         frame_size = width * height * 3
         command = [
             availability.ffmpeg_path, "-hide_banner", "-loglevel", "error", "-i", path,
-            "-map", "0:v:0", "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "bgr24", "-",
+            "-map", "0:v:0", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgr24", "-",
         ]
         try:
             process = self._popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -170,6 +170,7 @@ class V6VideoInput:
             return
         self.backend, self.fps = "ffmpeg", fps
         index = 0
+        interrupted = False
         try:
             while True:
                 raw = self._read_exact(process.stdout, frame_size)
@@ -182,10 +183,27 @@ class V6VideoInput:
                 timestamp = index / fps if fps else None
                 yield VideoFrame(index, timestamp, frame, "ffmpeg")
                 index += 1
+        except BaseException:
+            interrupted = True
+            raise
         finally:
+            # A bounded consumer can close while FFmpeg is blocked on stdout.
+            # Stop it before reading stderr; intentional cancellation is not a
+            # decode failure and must not hang waiting for the remaining video.
+            if interrupted and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
             stderr = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
             return_code = process.wait()
-            if return_code != 0:
+            if process.stdout:
+                process.stdout.close()
+            if process.stderr:
+                process.stderr.close()
+            if return_code != 0 and not interrupted:
                 detail = stderr.strip() or f"exit code {return_code}"
                 self.diagnostics.append(VideoDiagnostic("ffmpeg_decode_failed", detail))
         if index == 0:

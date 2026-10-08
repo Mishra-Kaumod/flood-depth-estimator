@@ -58,11 +58,17 @@ class V6VideoInputTests(unittest.TestCase):
 
     def test_zero_frame_opencv_falls_back_to_ffmpeg(self):
         raw = bytes(range(6))
-        reader = V6VideoInput(cv2_module=CV2Stub([]), which_fn=lambda name: f"/{name}", run_fn=run_ok, popen_factory=lambda *_, **__: Process(raw))
+        commands = []
+        def start(command, **kwargs):
+            commands.append(command)
+            return Process(raw)
+        reader = V6VideoInput(cv2_module=CV2Stub([]), which_fn=lambda name: f"/{name}", run_fn=run_ok, popen_factory=start)
         frames = list(reader.iter_frames("camera.dav"))
         self.assertEqual(len(frames), 1); self.assertEqual(frames[0].backend, "ffmpeg")
         self.assertIn("opencv_no_decodable_frame", [item.code for item in reader.diagnostics])
         self.assertIn("dav_demuxer_status", [item.code for item in reader.diagnostics])
+        self.assertNotIn("-vsync", commands[0])
+        self.assertEqual(commands[0][commands[0].index("-fps_mode") + 1], "passthrough")
 
     def test_ffmpeg_unavailable_is_clean(self):
         reader = V6VideoInput(cv2_module=CV2Stub([], opened=False), which_fn=lambda _: None)
@@ -82,3 +88,40 @@ class V6VideoInputTests(unittest.TestCase):
         unavailable = record_from_v6_result(2, 0.08, "opencv", NoDepthResult())
         self.assertIsNone(unavailable["final_shadow_depth_cm"])
         self.assertEqual(unavailable["status"], "unavailable_valid_frame_no_depth")
+
+
+def test_bounded_ffmpeg_close_stops_child_before_reading_stderr():
+    _check_bounded_close(False)
+
+
+def test_bounded_ffmpeg_close_kills_child_if_termination_times_out():
+    _check_bounded_close(True)
+
+
+def _check_bounded_close(timeout):
+    class Child:
+        def __init__(self):
+            self.stdout = io.BytesIO(bytes(range(12)))
+            self.terminated = self.killed = False
+            child = self
+            class Stderr(io.BytesIO):
+                def read(self, *args):
+                    assert child.terminated, "stderr read would block before stopping the child"
+                    return super().read(*args)
+            self.stderr = Stderr()
+        def poll(self): return None
+        def terminate(self): self.terminated = True
+        def kill(self): self.killed = True
+        def wait(self, timeout=None):
+            if timeout is not None and not self.killed and timeout_mode:
+                raise subprocess.TimeoutExpired("ffmpeg", timeout)
+            return -1
+    timeout_mode = timeout
+    child = Child()
+    reader = V6VideoInput(cv2_module=CV2Stub([]), which_fn=lambda name: f"/{name}", run_fn=run_ok, popen_factory=lambda *args, **kwargs: child)
+    iterator = reader.iter_frames("camera.dav")
+    assert next(iterator).backend == "ffmpeg"
+    iterator.close()
+    assert child.terminated and child.killed == timeout
+    assert child.stdout.closed and child.stderr.closed
+    assert "ffmpeg_decode_failed" not in [item.code for item in reader.diagnostics]
