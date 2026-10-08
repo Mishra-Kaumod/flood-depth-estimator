@@ -1,8 +1,7 @@
-"""Separate V6 shadow architecture built on V5 signal extraction only.
+"""V6 single-owner architecture consuming shared primary-model signals.
 
-V6 deliberately has one numerical owner in this initial form: the EfficientNet
-candidate. V5 may be executed to reuse loaders/extractors, but its final depth,
-residual, guards, resolver, and reference fusion never own V6 centimetres.
+The default source loads only EfficientNet. Historical comparison callers may
+supply legacy signals explicitly; no default path executes that pipeline.
 """
 
 from __future__ import annotations
@@ -68,12 +67,12 @@ class V6ShadowResult:
 
 
 class V6ShadowPipeline:
-    """V6 shadow adapter. It never mutates or configures the wrapped V5 pipeline."""
+    """V6 numerical owner. It never mutates or configures its signal source."""
 
     NUMERICAL_OWNER = "efficientnet_primary_anchor"
 
-    def __init__(self, v5_pipeline: Any) -> None:
-        self._v5_pipeline = v5_pipeline
+    def __init__(self, signal_source: Any) -> None:
+        self._signal_source = signal_source
         self.optional_refinement: OptionalRefinement = NoOptionalRefinement()
 
     @staticmethod
@@ -235,8 +234,8 @@ class V6ShadowPipeline:
         return reliability, uncertainty
 
     def predict(self, image_rgb: Any) -> V6ShadowResult:
-        """Produce a V6 shadow result while retaining V5 only as a comparator payload."""
-        payload = self._v5_pipeline.predict(image_rgb)
+        """Produce V6 centimetres from primary signals; diagnostics never change depth."""
+        payload = self._signal_source.predict(image_rgb)
         contract = self._contract_from_v5_payload(payload)
         primary = contract.primary_depth_cm
         reliability, uncertainty = self._reliability(contract, payload)

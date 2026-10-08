@@ -1,3 +1,17 @@
+# Flood Depth Estimation Project
+
+Current Final Architecture (V6) is the only active prediction architecture. Legacy Production/Reference Pipeline (V5) is retained only for historical/reference purposes and is not part of normal inference.
+
+See [MASTER KT](MASTER_KT_HANDOVER.md) and [shared V6 entrypoint architecture](docs/V6_ENTRYPOINT_ARCHITECTURE.md) for current commands and architecture.
+
+```sh
+python main.py image "<image_path>" --storage local
+```
+
+The command uses shared V6 inference and returns final_shadow_depth_cm directly in cm. The material below is a historical reference; its old commands, output formats and architecture do not describe the active V6 defaults.
+
+## Historical project reference
+
 # Flood Detection & Depth Estimation System
 
 A comprehensive Python system for detecting flood presence, classifying severity, and estimating water depth from images and videos.

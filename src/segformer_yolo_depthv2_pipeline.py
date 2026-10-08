@@ -25,6 +25,7 @@ from torchvision import models, transforms
 
 from src.reference_depth_estimator import ReferenceDepthEstimator
 from src.settings import load_settings_dict
+from src.efficientnet_depth_signal import EfficientNetDepthSignal
 from src.water_region_detector import WaterRegionDetector
 
 try:
@@ -189,7 +190,7 @@ def _depth_to_severity(depth_cm: float, features: Dict[str, float]) -> Dict[str,
     return {"level": "CRITICAL", "label": "Severe / dangerous flooding", "color": "#7f1d1d", "stage": 5}
 
 
-class SegformerYoloDepthV2Pipeline:
+class SegformerYoloDepthV2Pipeline(EfficientNetDepthSignal):
     """
     Structured multi-stage pipeline with deterministic stage order.
     """
@@ -322,63 +323,6 @@ class SegformerYoloDepthV2Pipeline:
             logger.warning("Depth Anything V2 unavailable, using proxy depth map: %s", exc)
             self._depth_estimator = None
             self._depth_backend = "dense-depth-proxy"
-
-    def _build_efficientnet_depth_model(self) -> nn.Module:
-        model = models.efficientnet_b0(weights=None)
-        in_features = model.classifier[1].in_features
-        model.classifier = nn.Sequential(
-            nn.Dropout(0.2),
-            nn.Linear(in_features, 256),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1),
-            nn.Sigmoid(),
-        )
-        return model
-
-    def _load_efficientnet_signal_if_available(self) -> None:
-        try:
-            cfg = load_settings_dict().get("inference", {}).get("efficientnet_signal", {})
-        except Exception as exc:
-            logger.info("EfficientNet signal config unavailable: %s", exc)
-            return
-
-        if not bool(cfg.get("enabled", False)):
-            return
-
-        model_path = Path(str(cfg.get("model_path", "models/candidate/best_flood_model_water_aware.pth")))
-        configured_max_depth_cm = float(cfg.get("max_depth_cm", 100.0))
-        if not model_path.exists():
-            logger.warning("EfficientNet signal checkpoint missing at %s", model_path)
-            return
-
-        try:
-            device = torch.device("cuda" if torch.cuda.is_available() and str(cfg.get("device", "cpu")) == "cuda" else "cpu")
-            model = self._build_efficientnet_depth_model().to(device)
-            checkpoint = torch.load(model_path, map_location=device, weights_only=True)
-            state_dict = checkpoint.get("model_state_dict", checkpoint)
-            self._efficientnet_max_depth_cm = float(checkpoint.get("max_depth_cm", configured_max_depth_cm)) if isinstance(checkpoint, dict) else configured_max_depth_cm
-            model.load_state_dict(state_dict, strict=True)
-            model.eval()
-            self._efficientnet_model = model
-            self._efficientnet_device = device
-            self._efficientnet_backend = str(model_path)
-            self._efficientnet_transform = transforms.Compose(
-                [
-                    transforms.Resize((224, 224)),
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-                ]
-            )
-            logger.info("Loaded EfficientNet depth signal from %s", model_path)
-        except Exception as exc:
-            logger.warning("EfficientNet depth signal unavailable: %s", exc)
-            self._efficientnet_model = None
-            self._efficientnet_transform = None
-            self._efficientnet_backend = "unavailable"
-
 
     def _load_mask_conditioned_fusion_if_available(self) -> None:
         try:
@@ -881,14 +825,6 @@ class SegformerYoloDepthV2Pipeline:
         confidence = max(float(confidence), min(0.90, float(confidence) + 0.05))
         action = self._action_for_final_depth(applied_depth, features, action)
         return applied_depth, round(float(np.clip(confidence, 0.0, 0.98)), 4), action
-    def _efficientnet_depth_signal(self, image_rgb: np.ndarray) -> Optional[float]:
-        if self._efficientnet_model is None or self._efficientnet_transform is None:
-            return None
-        image = Image.fromarray(image_rgb.astype(np.uint8), mode="RGB")
-        tensor = self._efficientnet_transform(image).unsqueeze(0).to(self._efficientnet_device)
-        with torch.no_grad():
-            return round(float(self._efficientnet_model(tensor).squeeze().item()) * self._efficientnet_max_depth_cm, 2)
-
     def _mask_conditioned_fusion_depth_signal(self, image_rgb: np.ndarray, features: Dict[str, Any]) -> Optional[float]:
         if self._mask_conditioned_fusion_model is None or self._mask_conditioned_fusion_transform is None:
             return None

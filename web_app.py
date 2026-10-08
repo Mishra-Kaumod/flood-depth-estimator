@@ -76,7 +76,7 @@ def create_app(model_path: str = "severity_model.pth") -> Flask:
 
     @app.get("/health")
     def health():
-        return jsonify({"status": "ok", "service": "flood-analysis", "model": model_path})
+        return jsonify({"status": "ok", "service": "flood-analysis", "architecture": "V6"})
 
     @app.post("/api/v1/estimate")
     @app.post("/api/v1/estimate/")
@@ -121,11 +121,11 @@ def create_app(model_path: str = "severity_model.pth") -> Flask:
                 location_name=location_name,
                 metadata=metadata,
             )
-            return jsonify(response), 202
-        except (KeyError, TypeError, ValueError, ValidationError) as exc:
+            return jsonify(response), 200
+        except (KeyError, TypeError, ValueError, ValidationError, OSError) as exc:
             return jsonify({"status": "failed", "error": str(exc)}), 400
         except Exception as exc:
-            return jsonify({"status": "error", "message": str(exc)}), 500
+            return jsonify({"status": "error", "error": f"V6 prediction failed: {exc}"}), 500
 
     @app.get("/api/v1/temporal/<camera_id>")
     @app.get("/api/v1/temporal/<camera_id>/")
@@ -189,8 +189,11 @@ def create_app(model_path: str = "severity_model.pth") -> Flask:
         except (UnidentifiedImageError, OSError, ValueError):
             return jsonify({"error": "Could not decode image"}), 400
 
-        result = get_v6_pipeline().predict(image_rgb)
-        return jsonify(v6_depth_payload(result))
+        try:
+            result = get_v6_pipeline().predict(image_rgb)
+            return jsonify(v6_depth_payload(result))
+        except Exception as exc:
+            return jsonify({"error": f"V6 prediction failed: {exc}"}), 500
 
     @app.get("/status")
     def status():

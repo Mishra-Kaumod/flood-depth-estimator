@@ -1,9 +1,4 @@
-"""
-AWS-first CLI entrypoint for the flood depth estimator.
-
-This file runs the new AWS/event-driven pipeline by default.
-The legacy CLI implementation is preserved in legacy_main.py.
-"""
+"""V6 CLI with local/S3 input orchestration and a shared inference boundary."""
 
 import argparse
 import json
@@ -16,7 +11,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from src.api_service import FloodApiService
+from src.v6_inference import create_v6_pipeline, load_v6_rgb, v6_depth_payload
 from src.settings import load_settings_dict
 
 
@@ -278,26 +273,23 @@ def process_image_cli(
     longitude: float,
     location_name: str | None,
     bucket_name: str | None,
-) -> None:
-    """Analyze a single image through the unified AWS-style pipeline."""
+) -> dict[str, Any]:
+    """Analyze one local/S3 image through the shared V6 implementation."""
     if storage_mode == "aws":
-        s3_handler = get_s3_handler(bucket_name=bucket_name)
-        image_bytes = read_s3_bytes(s3_handler, image_path)
+        image_bytes = read_s3_bytes(get_s3_handler(bucket_name=bucket_name), image_path)
     else:
         image_bytes = read_local_bytes(image_path)
-
-    service = FloodApiService()
-    response = service.process_camera_upload(
-        image_bytes=image_bytes,
-        filename=Path(image_path).name,
-        camera_id=camera_id,
-        latitude=latitude,
-        longitude=longitude,
-        location_name=location_name,
-        metadata={"source": "cli"},
-    )
-
-    summarize_event_result(response, image_name=Path(image_path).name)
+    image_rgb = load_v6_rgb(image_bytes)
+    result = create_v6_pipeline().predict(image_rgb)
+    payload = v6_depth_payload(result)
+    print("Flood Depth Estimator – V6")
+    depth = payload["final_shadow_depth_cm"]
+    if depth is None:
+        print("Estimated Flood Depth: unavailable")
+    else:
+        print(f"Estimated Flood Depth: {depth:.2f} cm")
+    print(json.dumps(payload, allow_nan=False))
+    return payload
 
 
 def process_video_cli(
@@ -311,88 +303,38 @@ def process_video_cli(
     location_name: str | None,
     bucket_name: str | None,
 ) -> None:
-    """Process video frames through the unified AWS-style pipeline."""
+    """Reuse V6's save-JPEG/reload-RGB video flow for local/S3 inputs."""
+    from scripts.run_v6_shadow_video import CSV_FIELDS, process_saved_frames
+    from src.v6_video_input import V6VideoInput
+
     local_video_path = video_path
     s3_handler = None
-    temp_file = None
-
-    if storage_mode == "aws":
-        s3_handler = get_s3_handler(bucket_name=bucket_name)
-        temp_file = os.path.join(tempfile.gettempdir(), f"aws_video_{Path(video_path).stem}.mp4")
-        local_video_path = s3_handler.read_video_from_s3(video_path, temp_file)
-
-    cap = cv2.VideoCapture(str(local_video_path))
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video {local_video_path}")
-
-    fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    print(f"Processing video: {local_video_path} ({frame_count} frames, {fps:.2f} FPS)")
-
-    service = FloodApiService()
-    records: list[dict[str, Any]] = []
-    frame_index = 0
-    processed = 0
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        if frame_index % skip_frames != 0:
-            frame_index += 1
-            continue
-
-        processed += 1
-        success, encoded = cv2.imencode(".jpg", frame)
-        if not success:
-            frame_index += 1
-            continue
-
-        image_bytes = encoded.tobytes()
-        filename = f"{Path(video_path).stem}_frame_{frame_index:06d}.jpg"
-        response = service.process_camera_upload(
-            image_bytes=image_bytes,
-            filename=filename,
-            camera_id=camera_id,
-            latitude=latitude,
-            longitude=longitude,
-            location_name=location_name,
-            metadata={"source": "cli_video", "frame_number": frame_index},
+    temporary_path = None
+    if skip_frames < 1:
+        raise ValueError("skip_frames must be at least 1")
+    try:
+        if storage_mode == "aws":
+            s3_handler = get_s3_handler(bucket_name=bucket_name)
+            with tempfile.NamedTemporaryFile(suffix=Path(video_path).suffix, delete=False) as handle:
+                temporary_path = handle.name
+            local_video_path = s3_handler.read_video_from_s3(video_path, temporary_path)
+        output_path = Path(output_csv)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        rows, summary = process_saved_frames(
+            V6VideoInput(), create_v6_pipeline(), local_video_path,
+            output_path.parent / (output_path.stem + "_v6_frames"),
+            max_frames=None, skip_frames=skip_frames,
         )
-
-        result = response["result"]
-        records.append(
-            {
-                "frame_number": frame_index,
-                "image_name": filename,
-                "depth_cm": round(result["estimated_depth_meters"] * 100.0, 2),
-                "confidence": round(result["confidence_score"] * 100.0, 2),
-                "severity": result["severity_label"],
-                "action": result["action_trigger"],
-                "status": response["status"],
-            }
-        )
-
-        if processed % 10 == 0:
-            print(f"Processed {processed} frames...")
-
-        frame_index += 1
-
-    cap.release()
-
-    df = pd.DataFrame(records)
-    df.to_csv(output_csv, index=False)
-    print(f"Saved video analytics to {output_csv}")
-
-    if storage_mode == "aws" and s3_handler is not None:
-        s3_handler.write_csv_to_s3(df, output_csv)
-
-    if temp_file and os.path.exists(temp_file):
-        try:
-            os.remove(temp_file)
-        except OSError:
-            pass
+        df = pd.DataFrame(rows, columns=CSV_FIELDS)
+        df.to_csv(output_path, index=False)
+        print("Flood Depth Estimator – V6")
+        print(f"Saved V6 video predictions to {output_path}")
+        print(json.dumps(summary, allow_nan=False))
+        if s3_handler is not None:
+            s3_handler.write_csv_to_s3(df, output_csv)
+    finally:
+        if temporary_path and os.path.exists(temporary_path):
+            os.remove(temporary_path)
 
 
 def process_object_detection(
@@ -427,7 +369,7 @@ def process_object_detection(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="AWS-first flood depth estimator CLI"
+        description="Flood Depth Estimator – V6"
     )
     parser.add_argument("mode", nargs="?", choices=["image", "video", "object", "web"], help="Operation mode")
     parser.add_argument("path", nargs="?", help="Path to image or video file")

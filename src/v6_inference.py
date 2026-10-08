@@ -21,10 +21,10 @@ def load_v6_rgb(source: str | Path | bytes) -> np.ndarray:
 
 def create_v6_pipeline():
     """Single model-construction path, with the existing model defaults intact."""
-    from .segformer_yolo_depthv2_pipeline import SegformerYoloDepthV2Pipeline
+    from .efficientnet_depth_signal import EfficientNetDepthSignal
     from .v6_shadow_pipeline import V6ShadowPipeline
 
-    return V6ShadowPipeline(SegformerYoloDepthV2Pipeline())
+    return V6ShadowPipeline(EfficientNetDepthSignal())
 
 
 def finite_depth(value: Any) -> float | None:
@@ -38,6 +38,10 @@ def finite_depth(value: Any) -> float | None:
     return numeric if math.isfinite(numeric) else None
 
 
-def v6_depth_payload(result: Any) -> dict[str, float | None]:
+def v6_depth_payload(result: Any) -> dict[str, Any]:
     """Expose V6's final centimeters; never select, correct, or fuse depth."""
-    return {"final_shadow_depth_cm": finite_depth(result.final_shadow_depth_cm)}
+    return {
+        "primary_depth_cm": finite_depth(result.primary_depth_cm),
+        "final_shadow_depth_cm": finite_depth(result.final_shadow_depth_cm),
+        "numerical_owner": result.numerical_owner,
+    }

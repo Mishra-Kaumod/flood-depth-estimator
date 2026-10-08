@@ -39,7 +39,7 @@ def test_same_encoded_image_matches_all_active_v6_entrypoints(tmp_path, mode):
         def iter_frames(self, path):
             yield VideoFrame(0, 0.0, frame, "opencv")
 
-    with patch("src.segformer_yolo_depthv2_pipeline.SegformerYoloDepthV2Pipeline", side_effect=Signals):
+    with patch("src.efficientnet_depth_signal.EfficientNetDepthSignal", side_effect=Signals):
         expected = create_v6_pipeline().predict(expected_rgb)
         response = create_app().test_client().post("/predict", data={
             "image": (BytesIO(image_path.read_bytes()), "input.jpg")})

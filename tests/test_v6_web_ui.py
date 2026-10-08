@@ -27,11 +27,11 @@ def test_upload_matches_v6_cli_contract(depth):
 
     pipeline = V6ShadowPipeline(V5Signals())
     expected = pipeline.predict(cli_rgb).final_shadow_depth_cm
-    with patch("src.segformer_yolo_depthv2_pipeline.SegformerYoloDepthV2Pipeline", return_value=V5Signals()):
+    with patch("src.efficientnet_depth_signal.EfficientNetDepthSignal", return_value=V5Signals()):
         response = create_app().test_client().post("/predict", data={
             "image": (BytesIO(data), "input.png")})
     assert response.status_code == 200
-    assert response.get_json() == {"final_shadow_depth_cm": expected}
+    assert response.get_json() == {"primary_depth_cm": expected, "final_shadow_depth_cm": expected, "numerical_owner": "efficientnet_primary_anchor"}
 
 
 def test_home_displays_v6_depth_directly():

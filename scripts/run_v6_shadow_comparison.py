@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Run a V5-versus-V6 shadow comparison for one explicitly approved image.
+"""Report V6 diagnostic stages for one explicitly approved image.
+
+Normal inference uses main.py image. Historical V5 comparator fields are null
+with the default primary-only factory; this utility does not execute V5.
 
 This script accepts one path and its expected SHA-256. It does not discover, scan,
 or enumerate any dataset, internal test, or external challenge directory.
@@ -24,7 +27,7 @@ def digest(path: Path) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="One approved-image V5/V6 shadow comparison")
+    parser = argparse.ArgumentParser(description="One approved-image V6 diagnostic report")
     parser.add_argument("--image", required=True, help="Explicit development image path")
     parser.add_argument("--expected-sha256", required=True, help="Approval-bound image SHA-256")
     parser.add_argument("--actual-depth-cm", type=float)
