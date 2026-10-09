@@ -2,7 +2,7 @@
 """Report V6 diagnostic stages for one explicitly approved image.
 
 Normal inference uses main.py image. Historical V5 comparator fields are null
-with the default primary-only factory; this utility does not execute V5.
+with the shared evidence-first factory; this utility does not execute V5.
 
 This script accepts one path and its expected SHA-256. It does not discover, scan,
 or enumerate any dataset, internal test, or external challenge directory.
@@ -15,7 +15,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from src.v6_inference import create_v6_pipeline, load_v6_rgb
+from src.v6_inference import create_v6_pipeline, load_v6_rgb, v6_depth_payload
 
 
 def digest(path: Path) -> str:
@@ -39,7 +39,12 @@ def main() -> None:
         raise RuntimeError("Image SHA-256 does not match the explicitly approved input")
     image_rgb = load_v6_rgb(image_path)
     result = create_v6_pipeline().predict(image_rgb)
+    from src.v6_application_review import diagnostic_evidence
+    from dataclasses import asdict
     output = {
+        **v6_depth_payload(result),
+        "diagnostic_evidence": diagnostic_evidence(result),
+        "correction_trace": [asdict(item) for item in result.correction_trace],
         "image_sha256": actual_hash,
         "comparison": result.comparison(args.actual_depth_cm).as_dict(),
         "uncertainty_flags": result.uncertainty.flags,

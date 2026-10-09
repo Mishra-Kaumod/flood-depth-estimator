@@ -31,13 +31,16 @@ def test_upload_matches_v6_cli_contract(depth):
         response = create_app().test_client().post("/predict", data={
             "image": (BytesIO(data), "input.png")})
     assert response.status_code == 200
-    assert response.get_json() == {"primary_depth_cm": expected, "final_shadow_depth_cm": expected, "numerical_owner": "efficientnet_primary_anchor"}
+    assert {key: response.get_json()[key] for key in ("primary_depth_cm", "final_shadow_depth_cm", "numerical_owner")} == {"primary_depth_cm": expected, "final_shadow_depth_cm": expected, "numerical_owner": "efficientnet_primary_anchor"}
 
 
 def test_home_displays_v6_depth_directly():
     body = create_app().test_client().get("/").get_data(as_text=True)
     assert body.count("Flood Depth Estimator – V6") == 2
-    assert 'result.final_shadow_depth_cm + " cm"' in body
+    assert 'depth(result.final_shadow_depth_cm)' in body
+    assert 'depth(result.application_final_depth_cm)' in body
+    assert 'Gemini Review' in body
+    assert 'V6 Estimated Depth' in body
     assert "estimated_depth_meters" not in body
 
 

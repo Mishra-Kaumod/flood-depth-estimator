@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Development-only V6 shadow video runner; it does not change the V5 CLI."""
+"""V6 saved-frame runner with optional shared application review (off by default)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 import cv2
 
+from src.v6_application_review import review_v6_result
 from src.v6_video_input import V6VideoInput
 from src.v6_inference import create_v6_pipeline, finite_depth, load_v6_rgb, v6_depth_payload
 
@@ -34,6 +35,9 @@ def record_from_v6_result(frame_number: int, timestamp_seconds: Optional[float],
 CSV_FIELDS = (
     "frame_index", "timestamp_sec", "saved_frame_path", "backend_used",
     "primary_depth_cm", "final_shadow_depth_cm", "status", "error_reason",
+    "application_final_depth_cm", "decision_source", "gemini_enabled",
+    "gemini_correction_applied", "gemini_status", "gemini_error_reason", "gemini_review",
+    "final_v6_depth_cm", "controlled_correction_trace", "diagnostic_evidence", "gemini_error_code",
 )
 
 
@@ -66,6 +70,16 @@ def process_saved_frames(
                 raise RuntimeError("cv2.imwrite returned false")
             result = v6_pipeline.predict(load_saved_rgb(saved_path))
             row = record_from_v6_result(frame.frame_index, frame.timestamp_seconds, frame.backend, result)
+            reviewed = review_v6_result(result, saved_path.read_bytes, saved_path.name, v6_pipeline, video=True)
+            review = reviewed["gemini_review"]
+            row.update(application_final_depth_cm=reviewed["application_final_depth_cm"],
+                       final_v6_depth_cm=reviewed["final_v6_depth_cm"],
+                       controlled_correction_trace=json.dumps(reviewed["correction_trace"], allow_nan=False),
+                       diagnostic_evidence=json.dumps(reviewed["diagnostic_evidence"], allow_nan=False),
+                       gemini_error_code=review["error_code"],
+                       decision_source=reviewed["decision_source"], gemini_enabled=review["enabled"],
+                       gemini_correction_applied=review["correction_applied"], gemini_status=review["status"],
+                       gemini_error_reason=review["error_reason"], gemini_review=json.dumps(review, allow_nan=False))
             row["saved_frame_path"] = str(saved_path)
             rows.append(row)
         except Exception as exc:  # A bad saved frame or image inference must not abort the video.

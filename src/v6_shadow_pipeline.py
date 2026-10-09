@@ -1,7 +1,7 @@
 """V6 single-owner architecture consuming shared primary-model signals.
 
-The default source loads only EfficientNet. Historical comparison callers may
-supply legacy signals explicitly; no default path executes that pipeline.
+The primary source loads EfficientNet; a separate shared diagnostic collector
+supplies optional evidence. No default path executes legacy depth decisions.
 """
 
 from __future__ import annotations
@@ -22,20 +22,23 @@ from .v6_shadow_contract import (
     StageSnapshot,
     UncertaintyAssessment,
     V6SignalContract,
+    CorrectionTrace,
+    EvidenceBundle,
 )
 
 
-class OptionalRefinement(Protocol):
-    """Reserved future interface. No current V6 implementation may alter depth here."""
+def controlled_correction(primary: Optional[float], contract: V6SignalContract) -> Tuple[CorrectionTrace, ...]:
+    """SOLE internal correction authority. No secondary candidate is promoted.
 
-    def apply(self, primary_depth_cm: Optional[float], contract: V6SignalContract) -> Optional[float]: ...
-
-
-class NoOptionalRefinement:
-    """Explicit no-op extension point until a separately trained component is approved."""
-
-    def apply(self, primary_depth_cm: Optional[float], contract: V6SignalContract) -> Optional[float]:
-        return primary_depth_cm
+    Every proposal abstains until an independently validated acceptance policy
+    is explicitly implemented and reviewed. No configurable bypass exists.
+    """
+    proposals = tuple(CorrectionTrace(primary, primary, float(signal.value), name, 0.0, False,
+                                     "shadow_only_no_validated_acceptance_rule", (name,), primary)
+                      for name, signal in contract.advisory.items()
+                      if name in ("region_depth_candidate", "mask_conditioned_candidate") and signal.available)
+    return proposals or (CorrectionTrace(primary, primary, None, "controlled_correction_policy", 0.0, False,
+                                         "abstain_no_validated_metric_candidate", (), primary),)
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,12 @@ class V6ShadowResult:
     uncertainty: UncertaintyAssessment
     stages: Tuple[StageSnapshot, ...]
     v5_final_depth_cm: Optional[float]
+    correction_trace: Tuple[CorrectionTrace, ...] = ()
+    evidence: Optional[EvidenceBundle] = None
+
+    @property
+    def final_v6_depth_cm(self) -> Optional[float]:
+        return self.final_shadow_depth_cm
 
     def comparison(self, actual_depth_cm: Optional[float] = None) -> V5V6ShadowComparison:
         difference = None
@@ -71,9 +80,9 @@ class V6ShadowPipeline:
 
     NUMERICAL_OWNER = "efficientnet_primary_anchor"
 
-    def __init__(self, signal_source: Any) -> None:
+    def __init__(self, signal_source: Any, evidence_collector: Any = None) -> None:
         self._signal_source = signal_source
-        self.optional_refinement: OptionalRefinement = NoOptionalRefinement()
+        self._evidence_collector = evidence_collector
 
     @staticmethod
     def _numeric_signal(
@@ -158,10 +167,10 @@ class V6ShadowPipeline:
             diagnostic_proxy_dispersion=proxy_dispersion, proxy_disagreement_available=len(proxies) >= 2,
         )
 
-    def _contract_from_v5_payload(self, payload: Mapping[str, Any]) -> V6SignalContract:
+    def _contract_from_payload(self, payload: Mapping[str, Any]) -> V6SignalContract:
         features = payload.get("structured_features") or {}
         if not isinstance(features, Mapping):
-            raise SignalValidationError("V5 structured_features must be a mapping")
+            raise SignalValidationError("V6 structured_features must be a mapping")
         malformed: list[str] = []
         metric = {
             "efficientnet_primary_depth_cm": self._numeric_signal("efficientnet_primary_depth_cm", "cm", SignalAuthority.PRIMARY_METRIC, "efficientnet_depth_estimator", features.get("efficientnet_candidate_depth_cm"), malformed),
@@ -184,7 +193,7 @@ class V6ShadowPipeline:
             "dense_relative_p90": self._numeric_signal("dense_relative_p90", "relative", SignalAuthority.CONTEXT_ONLY, "depth_anything", features.get("dense_depth_relative_p90"), malformed),
             "dense_relative_map_min": self._numeric_signal("dense_relative_map_min", "relative", SignalAuthority.CONTEXT_ONLY, "depth_anything", features.get("dense_depth_map_min"), malformed),
             "dense_relative_map_max": self._numeric_signal("dense_relative_map_max", "relative", SignalAuthority.CONTEXT_ONLY, "depth_anything", features.get("dense_depth_map_max"), malformed),
-            "dense_relative_region_stat": Signal.missing("dense_relative_region_stat", "relative", SignalAuthority.CONTEXT_ONLY, "depth_anything", "not_available_from_v5_contract"),
+            "dense_relative_region_stat": self._numeric_signal("dense_relative_region_stat", "relative", SignalAuthority.CONTEXT_ONLY, "depth_anything", features.get("dense_relative_water_median"), malformed),
         }
         advisory = {
             "contour_reference_depth_estimate": self._numeric_signal("contour_reference_depth_estimate", "cm_estimate", SignalAuthority.DIAGNOSTIC_ONLY, "contour_reference_estimator", features.get("reference_depth_cm"), malformed),
@@ -192,7 +201,10 @@ class V6ShadowPipeline:
             "mask_conditioned_candidate": self._numeric_signal("mask_conditioned_candidate", "cm_estimate", SignalAuthority.ADVISORY_ONLY, "mask_conditioned_model", features.get("mask_conditioned_fusion_depth_cm"), malformed),
             "reference_available": self._bool_signal("reference_available", SignalAuthority.DIAGNOSTIC_ONLY, "reference_detection", features.get("reference_available"), malformed),
         }
-        return V6SignalContract(metric, semantic, objects, aggregate, relative, advisory, tuple(sorted(set(malformed))))
+        metadata = {key: features[key] for key in ("collector_status", "mask_quality", "water_mask_sha256", "semantic_native_predictions",
+                    "water_mask_shape", "waterline_image_row_ratio", "object_consistency", "scene_slices") if key in features}
+        return V6SignalContract(metric, semantic, objects, aggregate, relative, advisory,
+                                tuple(sorted(set(malformed))), metadata)
 
     @staticmethod
     def _reliability(contract: V6SignalContract, payload: Mapping[str, Any]) -> Tuple[ReliabilityAssessment, UncertaintyAssessment]:
@@ -220,9 +232,19 @@ class V6ShadowPipeline:
             flags.append("missing_physical_evidence")
         if fallback:
             flags.append("backend_fallback_active")
+        votes = features.get("semantic_native_predictions", {})
+        scene_vote = votes.get("road_scene")
+        guard_votes = [votes[name] for name in ("no_water", "wet_road_no_water") if name in votes]
+        disagreement = len(set(guard_votes)) > 1 or (
+            scene_vote in ("shallow_flood", "meaningful_flood") and "no_water" in guard_votes) or (
+            scene_vote == "dry_road" and "water" in guard_votes)
+        if disagreement:
+            flags.append("native_semantic_disagreement")
         reliability = ReliabilityAssessment(
             semantic_context=contract.semantic_context, object_diagnostics=contract.object_aggregate,
-            semantic_disagreement_status="unassessed_no_calibrated_policy",
+            semantic_disagreement_status=("native_predictions_disagree" if disagreement else "semantic_probabilities_available_no_metric_authority"
+                if any(signal.available for name, signal in contract.semantic_context.items() if "probability" in name)
+                else "unavailable"),
             object_reference_disagreement_status="available" if contract.object_aggregate.proxy_disagreement_available else "insufficient_valid_objects",
             efficientnet_context_disagreement=context_deltas, missing_physical_evidence=tuple(missing),
             backend_fallback_active=fallback, malformed_signal_names=contract.malformed_signal_names,
@@ -236,23 +258,47 @@ class V6ShadowPipeline:
     def predict(self, image_rgb: Any) -> V6ShadowResult:
         """Produce V6 centimetres from primary signals; diagnostics never change depth."""
         payload = self._signal_source.predict(image_rgb)
-        contract = self._contract_from_v5_payload(payload)
+        payload = {**payload, "structured_features": dict(payload.get("structured_features") or {})}
+        # Read primary before diagnostics. Explicit allowlist prevents a collector
+        # from smuggling primary/final fields or legacy decisions into V6.
+        evidence = None
+        if self._evidence_collector is not None:
+            try:
+                import numpy as np
+                evidence = self._evidence_collector.collect(np.array(image_rgb, copy=True))
+                allowed = {"water_coverage_pct", "near_water_coverage_pct", "mid_water_coverage_pct", "far_water_coverage_pct",
+                           "road_scene_dry_road_probability", "road_scene_wet_road_probability", "road_scene_shallow_flood_probability",
+                           "road_scene_meaningful_flood_probability", "no_water_probability", "wet_road_no_water_probability",
+                           "reference_object_diagnostics", "reference_available", "dense_depth_relative_p90", "dense_depth_map_min",
+                           "dense_depth_map_max", "dense_relative_water_median", "dense_depth_backend", "reference_detection_backend",
+                           "mask_quality", "water_mask_sha256", "water_mask_shape", "waterline_image_row_ratio",
+                           "object_consistency", "scene_slices", "semantic_native_predictions", "region_depth_cm", "mask_conditioned_fusion_depth_cm"}
+                features = dict(payload.get("structured_features") or {})
+                features.update({k: v for k, v in evidence.features.items() if k in allowed})
+                features["collector_status"] = dict(evidence.status)
+                payload = {**payload, "structured_features": features}
+            except Exception as exc:
+                evidence = EvidenceBundle(status={"collector": {"status": "unavailable", "reason": type(exc).__name__}})
+                payload = {**payload, "structured_features": {**payload.get("structured_features", {}), "collector_status": dict(evidence.status)}}
+        contract = self._contract_from_payload(payload)
         primary = contract.primary_depth_cm
+        corrections = controlled_correction(primary, contract)
+        final = corrections[-1].final_v6_depth_cm
         reliability, uncertainty = self._reliability(contract, payload)
         stages = (
             StageSnapshot("input", None, None, None, False),
-            StageSnapshot("segmentation_context", None, None, None, False, {"water_coverage": contract.semantic_context["water_coverage_pct"].value}),
-            StageSnapshot("semantic_outputs", None, None, None, False, {"authority": "CONTEXT_ONLY"}),
             StageSnapshot("efficientnet_primary_depth", None, primary, self.NUMERICAL_OWNER, primary is not None),
+            StageSnapshot("segmentation_context", primary, primary, self.NUMERICAL_OWNER, False, {"water_coverage": contract.semantic_context["water_coverage_pct"].value}),
             StageSnapshot("object_diagnostics", primary, primary, self.NUMERICAL_OWNER, False, {"valid_object_count": contract.object_aggregate.valid_object_count}),
             StageSnapshot("relative_depth_diagnostics", primary, primary, self.NUMERICAL_OWNER, False, {"authority": "CONTEXT_ONLY"}),
+            StageSnapshot("semantic_outputs", primary, primary, self.NUMERICAL_OWNER, False, {"authority": "CONTEXT_ONLY"}),
             StageSnapshot("reliability_assessment", primary, primary, self.NUMERICAL_OWNER, False, {"reporting_only": True}),
-            StageSnapshot("optional_refinement_input", primary, primary, self.NUMERICAL_OWNER, False, {"implementation": "NoOptionalRefinement"}),
-            StageSnapshot("optional_refinement_output", primary, primary, self.NUMERICAL_OWNER, False, {"applied": False}),
-            StageSnapshot("uncertainty", primary, primary, self.NUMERICAL_OWNER, False, {"reporting_only": True}),
-            StageSnapshot("final_shadow_output", primary, primary, self.NUMERICAL_OWNER, False),
+            StageSnapshot("controlled_correction_policy", primary, final, self.NUMERICAL_OWNER, final != primary,
+                          {"mode": "shadow_abstain", "proposal_count": len(corrections)}),
+            StageSnapshot("uncertainty", final, final, self.NUMERICAL_OWNER, False, {"reporting_only": True}),
+            StageSnapshot("final_shadow_output", final, final, self.NUMERICAL_OWNER, False),
         )
         v5_depth = payload.get("depth_cm")
         if v5_depth is not None:
             v5_depth = float(v5_depth)
-        return V6ShadowResult(contract, primary, primary, self.NUMERICAL_OWNER, reliability, uncertainty, stages, v5_depth)
+        return V6ShadowResult(contract, primary, final, self.NUMERICAL_OWNER, reliability, uncertainty, stages, v5_depth, corrections, evidence)

@@ -49,7 +49,8 @@ def test_default_image_api_worker_and_ui_parity(tmp_path, capsys, depth):
         client = create_app().test_client()
         ui = client.post("/predict", data={"image": (BytesIO(path.read_bytes()), "image.png")})
         assert ui.status_code == 200
-        assert ui.get_json() == expected
+        assert {key: ui.get_json()[key] for key in expected} == expected
+        assert ui.get_json()["application_final_depth_cm"] == expected["final_shadow_depth_cm"]
         payload = {"image_b64": base64.b64encode(path.read_bytes()).decode(), "latitude": 12, "longitude": 77}
         api = client.post("/api/v1/estimate", json=payload)
         assert api.status_code == 200

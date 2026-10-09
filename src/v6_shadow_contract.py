@@ -113,6 +113,49 @@ class StageSnapshot:
 
 
 @dataclass(frozen=True)
+class CorrectionTrace:
+    """One immutable proposal/decision; diagnostics cannot grant acceptance."""
+    original_primary_depth_cm: Optional[float]
+    pre_correction_depth_cm: Optional[float]
+    proposed_depth_cm: Optional[float]
+    correction_source: str
+    correction_amount_cm: float
+    accepted: bool
+    acceptance_or_rejection_reason: str
+    evidence_ids: Tuple[str, ...]
+    final_v6_depth_cm: Optional[float]
+
+    def __post_init__(self) -> None:
+        if not self.correction_source or not self.acceptance_or_rejection_reason:
+            raise SignalValidationError("Correction requires source and reason")
+        if self.accepted:
+            values = (self.original_primary_depth_cm, self.pre_correction_depth_cm,
+                      self.proposed_depth_cm, self.final_v6_depth_cm, self.correction_amount_cm)
+            if any(value is None or isinstance(value, bool) or not isfinite(float(value)) for value in values):
+                raise SignalValidationError("Accepted correction requires finite complete depths")
+            if not self.evidence_ids or self.final_v6_depth_cm != self.proposed_depth_cm:
+                raise SignalValidationError("Accepted correction requires evidence and matching proposal")
+            if any(float(value) < 0 for value in values[:4]):
+                raise SignalValidationError("Accepted depths must be nonnegative")
+            if abs(self.final_v6_depth_cm - self.pre_correction_depth_cm - self.correction_amount_cm) > 1e-9:
+                raise SignalValidationError("Correction arithmetic mismatch")
+        elif self.correction_amount_cm != 0 or self.final_v6_depth_cm != self.pre_correction_depth_cm:
+            raise SignalValidationError("Rejected correction must preserve depth")
+
+
+@dataclass(frozen=True)
+class EvidenceBundle:
+    """Collector output has no primary/final metric-depth slot."""
+    features: Mapping[str, Any] = field(default_factory=dict)
+    status: Mapping[str, Any] = field(default_factory=dict)
+    water_mask: Any = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "features", MappingProxyType(dict(self.features)))
+        object.__setattr__(self, "status", MappingProxyType(dict(self.status)))
+
+
+@dataclass(frozen=True)
 class V6SignalContract:
     metric_depth: Mapping[str, Signal]
     semantic_context: Mapping[str, Signal]
@@ -121,12 +164,14 @@ class V6SignalContract:
     relative_depth: Mapping[str, Signal]
     advisory: Mapping[str, Signal]
     malformed_signal_names: Tuple[str, ...] = ()
+    diagnostic_metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metric_depth", MappingProxyType(dict(self.metric_depth)))
         object.__setattr__(self, "semantic_context", MappingProxyType(dict(self.semantic_context)))
         object.__setattr__(self, "relative_depth", MappingProxyType(dict(self.relative_depth)))
         object.__setattr__(self, "advisory", MappingProxyType(dict(self.advisory)))
+        object.__setattr__(self, "diagnostic_metadata", MappingProxyType(dict(self.diagnostic_metadata)))
 
     @property
     def primary_depth_cm(self) -> Optional[float]:

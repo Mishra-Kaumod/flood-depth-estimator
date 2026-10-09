@@ -36,7 +36,8 @@ class UnifiedEventProcessor:
     def process_event(self, event: FloodEvent) -> V6EventResult:
         rgb = load_v6_rgb(event.image_bytes())
         result = self.pipeline.predict(rgb)
-        prediction = v6_depth_payload(result)
+        from src.v6_application_review import review_v6_result
+        prediction = review_v6_result(result, event.image_bytes(), event.metadata.get("filename", "camera_upload.jpg"), self.pipeline, config=self.config)
         return V6EventResult({
             **prediction,
             "architecture": "V6",

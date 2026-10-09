@@ -22,6 +22,13 @@ DEFAULT_ENDPOINT = (
 )
 
 
+class GeminiReviewError(ValueError):
+    """Safe machine-readable failure; never contains a response body or key."""
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
 class LLMJudge:
     def __init__(self, config: Dict[str, Any]) -> None:
         self.enabled = bool(config.get("enabled", False))
@@ -34,9 +41,7 @@ class LLMJudge:
 
         self.api_key = config.get("google_api_key") or os.getenv("GOOGLE_API_KEY")
         if self.enabled and not self.api_key:
-            raise ValueError(
-                "LLM judge enabled but GOOGLE_API_KEY is missing in the environment"
-            )
+            raise GeminiReviewError("missing_key")
 
         if self.enabled and self.provider != "google":
             raise ValueError("Only Google provider is supported by this LLM judge module")
@@ -106,6 +111,62 @@ class LLMJudge:
             },
         }
 
+    def judge_v6(self, prediction: Dict[str, Any], image_bytes: bytes,
+                 filename: str | None = None) -> Dict[str, Any]:
+        """Strict V6 application review; never use the legacy zero-fill parser."""
+        if not self.enabled:
+            return {"enabled": False}
+        prompt = (
+            "You are an independent flood-depth visual reviewer. Inspect the attached image FIRST "
+            "and form a visual estimate from visible scale references before comparing V6. "
+            "The v6_metric_prediction is an unchanged metric prediction in centimeters. "
+            "diagnostic_context is supporting evidence only; relative depth is not metric depth. "
+            "Missing diagnostics are unavailable, not zero. Water coverage alone is not depth. "
+            "The primary is immutable; final_v6_depth_cm is the controlled V6 decision. "
+            "Correction traces are historical decisions, not permission to change primary depth. "
+            "Mask overlap is not measured physical submersion. Semantic labels are context only. "
+            "Experimental candidates are unvalidated; do not treat them as trusted measurements. "
+            "Use visible scale references when available. If evidence is insufficient, set "
+            "review_required true, explain uncertainty, and leave correction depths null. "
+            "Do not fabricate model confidence, severity, fusion or missing detector evidence. "
+            "Return ONLY JSON with prediction_correct (boolean), visual_depth_estimate_cm "
+            "(number or null), visual_depth_range_cm (string or null), visual_confidence "
+            "(low/medium/high or null), recommended_depth_cm (number or null), "
+            "final_depth_cm (number or null), review_required (boolean), reason (string). "
+            "Set prediction_correct false only when recommending a correction or human review. "
+            "All metric depths must be nonnegative centimeters. Context: "
+            + json.dumps(prediction, separators=(",", ":"), allow_nan=False)
+        )
+        payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {
+            "mime_type": self._guess_mime_type(filename),
+            "data": base64.b64encode(image_bytes).decode("ascii")}}]}],
+            "generationConfig": {"temperature": self.temperature,
+                                 "maxOutputTokens": self.max_output_tokens,
+                                 "responseMimeType": "application/json"}}
+        try:
+            response = json.loads(self._call_google_api(payload))
+        except json.JSONDecodeError:
+            raise GeminiReviewError("malformed_json") from None
+        if not isinstance(response, dict) or "error" in response:
+            error = response.get("error", {}) if isinstance(response, dict) else {}
+            status = response.get("http_status", error.get("code") if isinstance(error, dict) else None) if isinstance(response, dict) else None
+            if isinstance(response, dict) and response.get("error_code") == "authentication":
+                raise GeminiReviewError("authentication")
+            raise GeminiReviewError("authentication" if status in (401, 403) else
+                                   "quota" if status == 429 else "http_transport")
+        if response.get("promptFeedback", {}).get("blockReason") or any(
+            candidate.get("finishReason") in ("SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "RECITATION", "IMAGE_SAFETY")
+            for candidate in response.get("candidates", []) if isinstance(candidate, dict)):
+            raise GeminiReviewError("blocked_response")
+        text = self._extract_text_from_output(response.get("candidates"))
+        try:
+            parsed = json.loads(text) if text else response
+        except json.JSONDecodeError:
+            raise GeminiReviewError("malformed_json") from None
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("prediction_correct"), bool):
+            raise GeminiReviewError("schema_failure")
+        return parsed
+
     def _guess_mime_type(self, filename: str | None) -> str:
         if filename:
             mime_type, _ = mimetypes.guess_type(filename)
@@ -173,10 +234,21 @@ class LLMJudge:
             with urllib.request.urlopen(request, timeout=30) as response:
                 return response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="ignore")
-            return json.dumps({"error": str(exc), "body": body})
+            # Inspect only allowlisted authentication markers; never retain body.
+            auth = False
+            try:
+                error = json.loads(exc.read(65536)).get("error", {})
+                auth = error.get("status") in ("UNAUTHENTICATED", "PERMISSION_DENIED") or any(
+                    item.get("reason") in ("API_KEY_INVALID", "API_KEY_EXPIRED", "API_KEY_SERVICE_BLOCKED")
+                    for item in error.get("details", []) if isinstance(item, dict))
+            except (ValueError, AttributeError):
+                pass
+            return json.dumps({"error": "Gemini HTTP failure", "http_status": exc.code,
+                               "error_code": "authentication" if auth else "http_transport"})
         except urllib.error.URLError as exc:
-            return json.dumps({"error": str(exc)})
+            if isinstance(exc.reason, TimeoutError):
+                raise GeminiReviewError("timeout") from None
+            raise GeminiReviewError("http_transport") from None
 
     def _parse_json_response(self, response_text: str) -> dict[str, Any] | None:
         parsed_payload = None

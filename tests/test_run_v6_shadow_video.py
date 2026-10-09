@@ -43,4 +43,6 @@ class V6VideoRunnerTests(unittest.TestCase):
             self.assertEqual(rows[0]["status"], "processed")
             self.assertEqual(rows[1]["status"], "unavailable_valid_frame_no_depth")
             self.assertIsNone(rows[1]["final_shadow_depth_cm"])
-            self.assertEqual(tuple(rows[0]), CSV_FIELDS)
+            self.assertEqual(set(rows[0]), set(CSV_FIELDS))
+            self.assertFalse(rows[0]["gemini_enabled"])
+            self.assertEqual(rows[0]["application_final_depth_cm"], rows[0]["final_shadow_depth_cm"])

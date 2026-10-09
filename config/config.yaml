@@ -261,6 +261,18 @@ inference:
   # Output configuration
   output_format: "json"
   confidence_threshold: 0.5
+  # Video review is a separate opt-in; global Gemini flags still apply.
+  video:
+    gemini_review_enabled: false
+  # Evidence only; no secondary signal has numerical promotion authority.
+  v6_evidence:
+    enabled: true
+    water: true
+    yolo: true
+    yolo_model_path: "yolov8n.pt"
+    relative_depth: true
+    depth_anything_model: "depth-anything/Depth-Anything-V2-Small-hf"
+    semantics: true
   llm_judge:
     enabled: True
     provider: "google"
