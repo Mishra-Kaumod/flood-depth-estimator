@@ -12,6 +12,9 @@ import numpy as np
 import pandas as pd
 
 from src.v6_inference import create_v6_pipeline, load_v6_rgb, v6_depth_payload
+from src.v6_image_reporting import (
+    build_image_report, print_image_report, write_image_debug_report, write_image_report,
+)
 from src.settings import load_settings_dict
 
 
@@ -273,22 +276,47 @@ def process_image_cli(
     longitude: float,
     location_name: str | None,
     bucket_name: str | None,
+    verbose: bool = False,
+    debug: bool = False,
 ) -> dict[str, Any]:
     """Analyze one local/S3 image through the shared V6 implementation."""
-    if storage_mode == "aws":
-        image_bytes = read_s3_bytes(get_s3_handler(bucket_name=bucket_name), image_path)
+    s3_handler = get_s3_handler(bucket_name=bucket_name) if storage_mode == "aws" else None
+    if s3_handler is not None:
+        image_bytes = read_s3_bytes(s3_handler, image_path)
     else:
         image_bytes = read_local_bytes(image_path)
     image_rgb = load_v6_rgb(image_bytes)
-    result = create_v6_pipeline().predict(image_rgb)
-    payload = v6_depth_payload(result)
-    print("Flood Depth Estimator – V6")
-    depth = payload["final_shadow_depth_cm"]
-    if depth is None:
-        print("Estimated Flood Depth: unavailable")
+    pipeline = create_v6_pipeline()
+    progress_logging = None
+    progress_was_enabled = False
+    try:
+        from transformers.utils import logging as progress_logging
+        progress_was_enabled = progress_logging.is_progress_bar_enabled()
+        progress_logging.disable_progress_bar()
+    except (ImportError, AttributeError):
+        progress_logging = None
+    try:
+        result = pipeline.predict(image_rgb)
+    finally:
+        if progress_logging is not None and progress_was_enabled:
+            progress_logging.enable_progress_bar()
+    try:
+        from src.v6_application_review import review_v6_result
+    except ImportError:
+        # Base V6 remains usable when the optional application-review layer is absent.
+        payload = v6_depth_payload(result)
+        payload.update(application_final_depth_cm=payload.get("final_shadow_depth_cm"),
+                       decision_source="v6_pipeline", diagnostic_evidence={}, correction_trace=[])
     else:
-        print(f"Estimated Flood Depth: {depth:.2f} cm")
-    print(json.dumps(payload, allow_nan=False))
+        payload = review_v6_result(result, image_bytes, Path(image_path).name, pipeline)
+    report = build_image_report(image_path, payload, result, pipeline)
+    csv_path = write_image_report(report)
+    debug_json_path = write_image_debug_report(report, payload, csv_path)
+    if s3_handler is not None:
+        if s3_handler.write_csv_to_s3(csv_path.read_text(encoding="utf-8"), csv_path.as_posix()) is False:
+            raise RuntimeError("V6 image CSV upload failed")
+    print_image_report(report, csv_path, payload, verbose=verbose, debug=debug,
+                       debug_json_path=debug_json_path)
     return payload
 
 
@@ -381,6 +409,8 @@ def main() -> None:
     parser.add_argument("--location-name", help="Camera location name")
     parser.add_argument("--output", help="Output path for CSV or annotated image")
     parser.add_argument("--skip-frames", type=int, default=None, help="Frame skip rate for video; overrides video.skip_frames in config")
+    parser.add_argument("--verbose", action="store_true", help="Show a concise V6 diagnostic summary for image mode")
+    parser.add_argument("--debug", action="store_true", help="Show complete image result JSON and debug report path")
     parser.add_argument("--app", action="store_true", help="Run the Flask web app")
     parser.add_argument("--host", default="0.0.0.0", help="Host for the Flask app")
     parser.add_argument("--port", type=int, default=5000, help="Port for the Flask app")
@@ -398,7 +428,8 @@ def main() -> None:
         return
 
     storage_mode = args.storage
-    print(f"Using storage mode: {storage_mode}")
+    if args.mode != "image":
+        print(f"Using storage mode: {storage_mode}")
 
     if args.mode == "image":
         if not args.path:
@@ -411,6 +442,8 @@ def main() -> None:
             longitude=args.longitude,
             location_name=args.location_name,
             bucket_name=args.bucket,
+            verbose=args.verbose,
+            debug=args.debug,
         )
         return
 

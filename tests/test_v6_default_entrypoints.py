@@ -16,6 +16,11 @@ from src.worker import process_camera_event
 from web_app import create_app
 
 
+@pytest.fixture(autouse=True)
+def isolate_image_reports(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.v6_image_reporting.IMAGE_REPORT_DIRECTORY", tmp_path / "reports")
+
+
 @pytest.mark.parametrize("depth", [12.3456789, 0.0, None, float("nan"), float("inf")])
 def test_default_image_api_worker_and_ui_parity(tmp_path, capsys, depth):
     path = tmp_path / "image.png"
@@ -34,11 +39,13 @@ def test_default_image_api_worker_and_ui_parity(tmp_path, capsys, depth):
         with patch("sys.argv", ["main.py", "image", str(path), "--storage", "local"]):
             cli.main()
         output = capsys.readouterr().out
-        assert "Flood Depth Estimator – V6" in output
-        assert json.loads(output.splitlines()[-1]) == expected
-        if expected["final_shadow_depth_cm"] is None:
-            assert "Estimated Flood Depth: unavailable" in output
-            assert "Estimated Flood Depth: 0.00 cm" not in output
+        assert output.startswith("Flood Depth Estimator")
+        expected_depth = expected["final_shadow_depth_cm"]
+        rendered = f"{expected_depth:.2f} cm" if expected_depth is not None else "unavailable"
+        assert f"Estimated depth: {rendered}" in output
+        assert "Depth source: EfficientNet" in output
+        assert "primary_depth_cm" not in output
+        assert "Final depth:" not in output
         client = create_app().test_client()
         ui = client.post("/predict", data={"image": (BytesIO(path.read_bytes()), "image.png")})
         assert ui.status_code == 200
