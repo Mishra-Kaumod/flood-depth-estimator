@@ -77,8 +77,14 @@ class V6EvidenceCollector:
         return mask
 
     def _objects(self, rgb, mask, features):
+        import os
         from pathlib import Path
         def load():
+            # Keep Ultralytics' settings file inside the writable report area.
+            # This avoids noisy permission errors from a locked Windows profile.
+            settings_dir = Path("reports/.ultralytics").resolve()
+            settings_dir.mkdir(parents=True, exist_ok=True)
+            os.environ.setdefault("YOLO_CONFIG_DIR", str(settings_dir))
             from ultralytics import YOLO
             path = Path(self.options.get("yolo_model_path", "yolov8n.pt"))
             if not path.is_file():
@@ -92,7 +98,7 @@ class V6EvidenceCollector:
         h, w = rgb.shape[:2]
         for box in output.boxes:
             label = str(model.names[int(box.cls.item())])
-            if label not in {"car", "person", "bus", "truck", "motorcycle", "bicycle"}:
+            if label not in {"car", "person", "bus", "truck", "motorbike", "motorcycle", "bicycle"}:
                 continue
             x1, y1, x2, y2 = (int(v) for v in box.xyxy[0].tolist())
             x1, x2 = max(0, x1), min(w, x2)
@@ -153,12 +159,34 @@ class V6EvidenceCollector:
         else:
             features[name + "_probability"] = values[0]
 
-    def collect(self, image_rgb):
+    def _depth_regime(self, rgb, features, cfg):
+        """Run the retained image classifier as context, with no depth authority."""
+        import torch
+        from torchvision import models, transforms
+        from src.segformer_yolo_depthv2_pipeline import DepthRegimeHead
+        def load():
+            checkpoint = torch.load(cfg["classifier_model_path"], map_location="cpu", weights_only=True)
+            classes = list(checkpoint["class_names"])
+            backbone = models.efficientnet_b0(weights=None)
+            backbone.load_state_dict(checkpoint["backbone_state_dict"], strict=True)
+            head = DepthRegimeHead(int(checkpoint["embedding_dim"]), len(classes))
+            head.load_state_dict(checkpoint["head_state_dict"], strict=True)
+            return backbone.eval(), head.eval(), classes
+        backbone, head, classes = self._model("depth_regime", load)
+        transform = transforms.Compose([transforms.Resize(256), transforms.CenterCrop(224),
+                                        transforms.ToTensor(), transforms.Normalize([.485,.456,.406], [.229,.224,.225])])
+        with torch.no_grad():
+            tensor = transform(Image.fromarray(rgb)).unsqueeze(0)
+            values = head(backbone.avgpool(backbone.features(tensor)).flatten(1)).softmax(dim=1)[0].tolist()
+        features["depth_regime_probabilities"] = dict(zip(classes, values))
+
+    def _collect_stage(self, image_rgb, stage, previous=None):
         from src.v6_shadow_contract import EvidenceBundle
         # Isolate collectors from the primary model's input and each other.
         rgb = np.array(image_rgb, copy=True)
-        features, status = {}, {}
-        mask = None
+        features = dict(previous.features) if previous is not None else {}
+        status = dict(previous.status) if previous is not None else {}
+        mask = previous.water_mask if previous is not None else None
         def run(name, enabled, action):
             if not enabled:
                 status[name] = {"status": "disabled"}
@@ -174,20 +202,26 @@ class V6EvidenceCollector:
                 status[name] = {"status": "unavailable", "reason": type(exc).__name__}
                 return None
         enabled = self.options.get("enabled", True)
-        mask = run("water", enabled and self.options.get("water", True), lambda: self._water(rgb.copy(), features))
-        run("yolo", enabled and self.options.get("yolo", True), lambda: self._objects(rgb.copy(), mask, features))
-        run("relative_depth", enabled and self.options.get("relative_depth", True), lambda: self._relative(rgb.copy(), mask, features))
         inference = self.config.get("inference", {})
         scene = inference.get("road_scene_classifier", {})
         guards = inference.get("no_water_guard", {})
         semantics = enabled and self.options.get("semantics", True)
-        run("road_scene", semantics and scene.get("enabled", False),
-            lambda: self._semantic(rgb.copy(), features, "road_scene", scene, ["dry_road","wet_road","shallow_flood","meaningful_flood"]))
-        run("no_water", semantics and guards.get("enabled", False),
-            lambda: self._semantic(rgb.copy(), features, "no_water", guards, ["no_water","water"]))
-        wet = {**guards, "model_path": guards.get("wet_road_guard_model_path", guards.get("secondary_model_path"))}
-        run("wet_road_no_water", semantics and guards.get("enabled", False) and bool(wet["model_path"]),
-            lambda: self._semantic(rgb.copy(), features, "wet_road_no_water", wet, ["no_water","water"]))
+        if stage in ("water", "all"):
+            mask = run("water", enabled and self.options.get("water", True), lambda: self._water(rgb.copy(), features))
+            run("no_water", semantics and guards.get("enabled", False),
+                lambda: self._semantic(rgb.copy(), features, "no_water", guards, ["no_water","water"]))
+            wet = {**guards, "model_path": guards.get("wet_road_guard_model_path", guards.get("secondary_model_path"))}
+            run("wet_road_no_water", semantics and guards.get("enabled", False) and bool(wet["model_path"]),
+                lambda: self._semantic(rgb.copy(), features, "wet_road_no_water", wet, ["no_water","water"]))
+        if stage in ("references", "all"):
+            run("yolo", enabled and self.options.get("yolo", True), lambda: self._objects(rgb.copy(), mask, features))
+        if stage in ("remaining", "all"):
+            run("relative_depth", enabled and self.options.get("relative_depth", True), lambda: self._relative(rgb.copy(), mask, features))
+            run("road_scene", semantics and scene.get("enabled", False),
+                lambda: self._semantic(rgb.copy(), features, "road_scene", scene, ["dry_road","wet_road","shallow_flood","meaningful_flood"]))
+            regime = inference.get("dynamic_broad_mask_resolver", {})
+            run("depth_regime", semantics and regime.get("load_classifier", False),
+                lambda: self._depth_regime(rgb.copy(), features, regime))
         votes = {}
         scene_keys = ["road_scene_"+name+"_probability" for name in ("dry_road","wet_road","shallow_flood","meaningful_flood")]
         if all(key in features for key in scene_keys):
@@ -196,6 +230,12 @@ class V6EvidenceCollector:
             if name+"_probability" in features:
                 value = features[name+"_probability"]
                 votes[name] = "no_water" if value >= 1-value else "water"
+        if "no_water_probability" in features:
+            features["water_probability"] = 1.0 - features["no_water_probability"]
+        if "road_scene_wet_road_probability" in features:
+            features["wet_road_probability"] = features["road_scene_wet_road_probability"]
+            features["road_scene_probabilities"] = {label: features.get("road_scene_"+label+"_probability")
+                for label in ("dry_road", "wet_road", "shallow_flood", "meaningful_flood")}
         features["semantic_native_predictions"] = votes
         status["experimental_candidates"] = {"status": "not_collected", "reason": "Legacy region/mask feature contract requires separate validation"}
         # No unsupported scene labels are inferred from coverage or primary depth.
@@ -206,6 +246,18 @@ class V6EvidenceCollector:
         if mask is not None:
             mask.setflags(write=False)
         return EvidenceBundle(features, status, mask)
+
+    def collect_water(self, image_rgb):
+        return self._collect_stage(image_rgb, "water")
+
+    def collect_references(self, image_rgb, previous):
+        return self._collect_stage(image_rgb, "references", previous)
+
+    def collect_remaining(self, image_rgb, previous):
+        return self._collect_stage(image_rgb, "remaining", previous)
+
+    def collect(self, image_rgb):
+        return self._collect_stage(image_rgb, "all")
 
 
 def finite_depth(value: Any) -> float | None:
@@ -221,9 +273,22 @@ def finite_depth(value: Any) -> float | None:
 
 def v6_depth_payload(result: Any) -> dict[str, Any]:
     """Expose V6's final centimeters; never select, correct, or fuse depth."""
+    skip_reason = getattr(result, "skip_reason", None)
     return {
         "primary_depth_cm": finite_depth(result.primary_depth_cm),
         "final_shadow_depth_cm": finite_depth(result.final_shadow_depth_cm),
         "numerical_owner": result.numerical_owner,
         "final_v6_depth_cm": finite_depth(getattr(result, "final_v6_depth_cm", result.final_shadow_depth_cm)),
+        "original_primary_depth_cm": finite_depth(result.primary_depth_cm),
+        "water_present": getattr(result, "water_present", None),
+        "water_gate": getattr(result, "water_gate", "unavailable"),
+        "reference_eligibility": getattr(result, "reference_eligibility", "unavailable"),
+        "depth_inference_skipped": bool(getattr(result, "depth_inference_skipped", False)),
+        "skip_reason": skip_reason,
+        "prediction_status": ("No flood water detected" if skip_reason == "no_flood_water_detected" else
+                              "No reference" if skip_reason == "no_valid_reference_object_detected" else
+                              "Prediction completed"),
+        "comment": ("No water detected" if skip_reason == "no_flood_water_detected" else
+                    "No reference object detected" if skip_reason == "no_valid_reference_object_detected" else
+                    "Prediction completed"),
     }

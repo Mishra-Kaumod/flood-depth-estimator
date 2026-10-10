@@ -116,6 +116,10 @@ class LLMJudge:
         """Strict V6 application review; never use the legacy zero-fill parser."""
         if not self.enabled:
             return {"enabled": False}
+        try:
+            context_json = json.dumps(prediction, separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError):
+            raise GeminiReviewError("request_payload") from None
         prompt = (
             "You are an independent flood-depth visual reviewer. Inspect the attached image FIRST "
             "and form a visual estimate from visible scale references before comparing V6. "
@@ -135,7 +139,7 @@ class LLMJudge:
             "final_depth_cm (number or null), review_required (boolean), reason (string). "
             "Set prediction_correct false only when recommending a correction or human review. "
             "All metric depths must be nonnegative centimeters. Context: "
-            + json.dumps(prediction, separators=(",", ":"), allow_nan=False)
+            + context_json
         )
         payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {
             "mime_type": self._guess_mime_type(filename),
@@ -150,11 +154,12 @@ class LLMJudge:
         if not isinstance(response, dict) or "error" in response:
             error = response.get("error", {}) if isinstance(response, dict) else {}
             status = response.get("http_status", error.get("code") if isinstance(error, dict) else None) if isinstance(response, dict) else None
-            if isinstance(response, dict) and response.get("error_code") == "authentication":
-                raise GeminiReviewError("authentication")
+            code = response.get("error_code") if isinstance(response, dict) else None
+            if code in ("authentication", "model_endpoint", "request_payload", "quota"):
+                raise GeminiReviewError(code)
             raise GeminiReviewError("authentication" if status in (401, 403) else
                                    "quota" if status == 429 else "http_transport")
-        if response.get("promptFeedback", {}).get("blockReason") or any(
+        if (response.get("promptFeedback") or {}).get("blockReason") or any(
             candidate.get("finishReason") in ("SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "RECITATION", "IMAGE_SAFETY")
             for candidate in response.get("candidates", []) if isinstance(candidate, dict)):
             raise GeminiReviewError("blocked_response")
@@ -244,7 +249,10 @@ class LLMJudge:
             except (ValueError, AttributeError):
                 pass
             return json.dumps({"error": "Gemini HTTP failure", "http_status": exc.code,
-                               "error_code": "authentication" if auth else "http_transport"})
+                               "error_code": "authentication" if auth else
+                               "model_endpoint" if exc.code == 404 else
+                               "request_payload" if exc.code == 400 else
+                               "quota" if exc.code == 429 else "http_transport"})
         except urllib.error.URLError as exc:
             if isinstance(exc.reason, TimeoutError):
                 raise GeminiReviewError("timeout") from None

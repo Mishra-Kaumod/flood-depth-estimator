@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from math import isfinite
+from numbers import Real
 from types import MappingProxyType
 from typing import Any, Mapping, Optional, Tuple
 
@@ -144,6 +145,24 @@ class CorrectionTrace:
 
 
 @dataclass(frozen=True)
+class MetricCorrectionCandidate:
+    """A metric proposal with explicit validation and operating-regime identity."""
+    source: str
+    proposed_depth_cm: float
+    validation_id: str
+    regime: str
+    evidence_ids: Tuple[str, ...]
+    required_collectors: Tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.source or not self.validation_id or not self.regime or not self.evidence_ids:
+            raise SignalValidationError("Metric candidate requires provenance, regime and evidence")
+        if (isinstance(self.proposed_depth_cm, bool) or not isinstance(self.proposed_depth_cm, Real)
+                or not isfinite(float(self.proposed_depth_cm)) or self.proposed_depth_cm < 0):
+            raise SignalValidationError("Metric candidate requires nonnegative finite centimeters")
+
+
+@dataclass(frozen=True)
 class EvidenceBundle:
     """Collector output has no primary/final metric-depth slot."""
     features: Mapping[str, Any] = field(default_factory=dict)
@@ -165,6 +184,7 @@ class V6SignalContract:
     advisory: Mapping[str, Signal]
     malformed_signal_names: Tuple[str, ...] = ()
     diagnostic_metadata: Mapping[str, Any] = field(default_factory=dict)
+    metric_candidates: Tuple[MetricCorrectionCandidate, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metric_depth", MappingProxyType(dict(self.metric_depth)))

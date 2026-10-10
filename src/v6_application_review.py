@@ -24,7 +24,7 @@ def diagnostic_evidence(result: Any) -> dict[str, Any]:
     """Export only available typed context; never run missing legacy components."""
     contract = getattr(result, "contract", None)
     if contract is None:
-        return {}
+        return {"unavailable_reason": "V6 signal contract unavailable"}
     evidence = {}
     for group in (contract.semantic_context, contract.relative_depth, contract.advisory):
         for name, signal in group.items():
@@ -40,6 +40,12 @@ def diagnostic_evidence(result: Any) -> dict[str, Any]:
         evidence["reference_object_count"] = len(contract.object_diagnostics)
     evidence.update(dict(getattr(contract, "diagnostic_metadata", {})))
     evidence["semantic_disagreement"] = result.reliability.semantic_disagreement_status
+    evidence["water_present"] = getattr(result, "water_present", None)
+    evidence["water_gate"] = getattr(result, "water_gate", "unavailable")
+    evidence["reference_eligibility"] = getattr(result, "reference_eligibility", "unavailable")
+    evidence["depth_inference_skipped"] = bool(getattr(result, "depth_inference_skipped", False))
+    evidence["skip_reason"] = getattr(result, "skip_reason", None)
+    evidence["model_agreement"] = dict(getattr(result, "model_agreement", {}))
     # Current default source does not supply visual cues or reference objects.
     # Missing evidence stays absent; it must not be reconstructed from V5.
     return json.loads(json.dumps(evidence, allow_nan=False))
@@ -70,9 +76,18 @@ def review_v6_result(result: Any, image_bytes: bytes | Callable[[], bytes], file
                                 **{field: None for field in GEMINI_FIELDS}, "error_reason": None, "error_code": None}}
     output["correction_trace"] = [{**asdict(item), "evidence_ids": list(item.evidence_ids)} for item in getattr(result, "correction_trace", ())]
     output["gemini_recommended_depth_cm"] = None
+    output["v6_review_required"] = bool(getattr(result, "model_agreement", {}).get("review_required", False))
     review = output["gemini_review"]
     try:
         output["diagnostic_evidence"] = diagnostic_evidence(result)
+        if raw["depth_inference_skipped"]:
+            if raw["skip_reason"] == "no_flood_water_detected":
+                output["application_final_depth_cm"] = 0.0
+                output["decision_source"] = "no_water_gate"
+            else:
+                output["decision_source"] = "no_reference_gate"
+            review["status"] = "skipped_eligibility"
+            return output
         settings = config if config is not None else load_settings_dict()
         inference = settings.get("inference", {})
         cfg = inference.get("llm_judge", {})
@@ -127,6 +142,7 @@ def review_v6_result(result: Any, image_bytes: bytes | Callable[[], bytes], file
     except Exception as exc:
         # Do not expose exception bodies/URLs/headers, which can contain secrets.
         code = exc.code if isinstance(exc, GeminiReviewError) else (
-            "timeout" if isinstance(exc, TimeoutError) else "http_transport" if isinstance(exc, OSError) else "schema_failure")
+            "timeout" if isinstance(exc, TimeoutError) else "http_transport" if isinstance(exc, OSError)
+            else "configuration" if isinstance(exc, ValueError) else "schema_failure")
         review.update(status="failed", error_code=code, error_reason=f"Gemini review unavailable ({code}); V6 retained")
     return output

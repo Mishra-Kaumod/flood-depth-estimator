@@ -38,6 +38,9 @@ CSV_FIELDS = (
     "application_final_depth_cm", "decision_source", "gemini_enabled",
     "gemini_correction_applied", "gemini_status", "gemini_error_reason", "gemini_review",
     "final_v6_depth_cm", "controlled_correction_trace", "diagnostic_evidence", "gemini_error_code",
+    "water_present", "water_gate", "reference_eligibility", "depth_inference_skipped", "skip_reason", "trace_id",
+    "prediction_status", "comment",
+    "v6_review_required",
 )
 
 
@@ -73,6 +76,9 @@ def process_saved_frames(
             reviewed = review_v6_result(result, saved_path.read_bytes, saved_path.name, v6_pipeline, video=True)
             review = reviewed["gemini_review"]
             row.update(application_final_depth_cm=reviewed["application_final_depth_cm"],
+                       **{key: reviewed.get(key) for key in ("water_present", "water_gate", "reference_eligibility", "depth_inference_skipped", "skip_reason", "prediction_status", "comment")},
+                       trace_id=getattr(result, "trace_id", None),
+                       v6_review_required=reviewed.get("v6_review_required"),
                        final_v6_depth_cm=reviewed["final_v6_depth_cm"],
                        controlled_correction_trace=json.dumps(reviewed["correction_trace"], allow_nan=False),
                        diagnostic_evidence=json.dumps(reviewed["diagnostic_evidence"], allow_nan=False),
@@ -80,6 +86,9 @@ def process_saved_frames(
                        decision_source=reviewed["decision_source"], gemini_enabled=review["enabled"],
                        gemini_correction_applied=review["correction_applied"], gemini_status=review["status"],
                        gemini_error_reason=review["error_reason"], gemini_review=json.dumps(review, allow_nan=False))
+            if reviewed.get("depth_inference_skipped"):
+                row["status"] = ("no_flood_water_detected" if reviewed.get("skip_reason") == "no_flood_water_detected"
+                                 else "no_reference")
             row["saved_frame_path"] = str(saved_path)
             rows.append(row)
         except Exception as exc:  # A bad saved frame or image inference must not abort the video.

@@ -63,14 +63,15 @@ def test_approved_image_and_saved_video_frame_real_parity():
             "runpy.run_path('main.py',run_name='__main__')"
         )
         proc = subprocess.run([sys.executable, "-c", bootstrap, "image", str(path), "--storage", "local"], capture_output=True, text=True, encoding="utf-8", check=True)
-        assert "Flood Depth Estimator – V6" in proc.stdout
-        payload = json.loads(proc.stdout.splitlines()[-1])
+        assert "Flood Depth Estimator" in proc.stdout
         report_path = Path("reports/image_predictions") / (Path(path).stem + "_v6_prediction.csv")
         with report_path.open(newline="", encoding="utf-8") as handle:
             row = next(csv.DictReader(handle))
+        debug_path = report_path.with_name(Path(path).stem + "_v6_debug.json")
+        payload = json.loads(debug_path.read_text(encoding="utf-8"))["result"]
         for field in ["primary_depth_cm", "final_shadow_depth_cm"]:
             assert float(row[field]) == payload[field]
-        assert f"Final depth: {payload['final_shadow_depth_cm']} cm" in proc.stdout
+        assert f"Estimated depth: {payload['application_final_depth_cm']:.2f} cm" in proc.stdout
         assert row["checkpoint_sha256"] == previous["checkpoint_sha256"]
         assert payload["gemini_review"]["enabled"] is False
         assert payload["application_final_depth_cm"] == payload["final_shadow_depth_cm"]
@@ -79,7 +80,9 @@ def test_approved_image_and_saved_video_frame_real_parity():
 
     main_result = main_cli(image)
     diagnostic_path = output / "image_cli.json"
-    subprocess.run([sys.executable, "-m", "scripts.run_v6_shadow_comparison", "--image", str(image), "--expected-sha256", digest(image), "--output", str(diagnostic_path)], check=True)
+    subprocess.run([sys.executable, "-m", "scripts.run_v6_shadow_comparison", "--image", str(image),
+                    "--expected-sha256", digest(image), "--output", str(diagnostic_path)],
+                   check=True, capture_output=True, text=True, encoding="utf-8")
     diagnostic = json.loads(diagnostic_path.read_text())["comparison"]
     diagnostic_result = {"primary_depth_cm": diagnostic["v6_primary_depth_cm"], "final_shadow_depth_cm": diagnostic["v6_final_shadow_depth_cm"]}
     with patch("web_app.create_v6_pipeline", return_value=pipeline):

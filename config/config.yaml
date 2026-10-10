@@ -273,6 +273,20 @@ inference:
     relative_depth: true
     depth_anything_model: "depth-anything/Depth-Anything-V2-Small-hf"
     semantics: true
+  # Application eligibility controls. Neither changes EfficientNet weights or
+  # the controlled numerical correction policy. Disable independently to keep
+  # the ordinary V6 prediction path for these scenes.
+  v6_eligibility:
+    no_water_zero_enabled: true
+    no_reference_na_enabled: true
+  # One internal V6 numerical authority. No candidate is approved yet:
+  # the available region estimate worsened development validation, and the
+  # mask-conditioned candidate lacks an independently validated V6 contract.
+  v6_controlled_correction:
+    enabled: true
+    max_abs_delta_cm: 5.0
+    max_relative_delta_fraction: 0.20
+    approved_candidates: []
   llm_judge:
     enabled: True
     provider: "google"

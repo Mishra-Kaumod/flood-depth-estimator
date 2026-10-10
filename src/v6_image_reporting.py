@@ -23,6 +23,11 @@ CSV_FIELDS = (
     "gemini_correction_applied", "gemini_status", "gemini_error_reason",
     "application_final_depth_cm", "decision_source", "diagnostic_evidence",
     "final_v6_depth_cm", "controlled_correction_trace", "gemini_error_code",
+    "water_present", "water_gate", "reference_eligibility", "depth_inference_skipped", "skip_reason",
+    "prediction_status", "comment",
+    "v6_review_required",
+    "model_agreement", "correction_proposed_depth_cm", "correction_accepted",
+    "correction_rejected_reason", "accepted_delta_cm",
 )
 
 
@@ -33,7 +38,7 @@ def build_image_report(image_path: str, payload: dict[str, Any], result: Any, pi
     checkpoint_path = backend if isinstance(backend, str) else ""
     checkpoint_sha256 = ""
     reasons = []
-    if payload["final_shadow_depth_cm"] is None:
+    if payload["final_shadow_depth_cm"] is None and not payload.get("depth_inference_skipped"):
         reasons.append("V6 final depth unavailable")
     if checkpoint_path:
         try:
@@ -46,6 +51,9 @@ def build_image_report(image_path: str, payload: dict[str, Any], result: Any, pi
             reasons.append(f"Checkpoint hash unavailable: {exc}")
     flags = getattr(getattr(result, "uncertainty", None), "flags", ())
     review = payload.get("gemini_review", {})
+    trace = payload.get("correction_trace", [])
+    accepted = next((item for item in trace if item.get("accepted")), None)
+    proposed = next((item for item in trace if item.get("proposed_depth_cm") is not None), None)
     return {
         "image_filename": Path(image_path).name,
         "image_path": image_path,
@@ -62,10 +70,19 @@ def build_image_report(image_path: str, payload: dict[str, Any], result: Any, pi
         "final_v6_depth_cm": payload.get("final_v6_depth_cm", payload["final_shadow_depth_cm"]),
         "controlled_correction_trace": json.dumps(payload.get("correction_trace", []), allow_nan=False),
         "gemini_error_code": review.get("error_code"),
-        "status": "success" if payload["final_shadow_depth_cm"] is not None else "unavailable",
+        **{key: payload.get(key) for key in ("water_present", "water_gate", "reference_eligibility", "depth_inference_skipped", "skip_reason", "prediction_status", "comment")},
+        "v6_review_required": payload.get("v6_review_required"),
+        "model_agreement": json.dumps((payload.get("diagnostic_evidence") or {}).get("model_agreement", {}), allow_nan=False),
+        "correction_proposed_depth_cm": proposed.get("proposed_depth_cm") if proposed else None,
+        "correction_accepted": bool(accepted),
+        "correction_rejected_reason": None if accepted else proposed.get("acceptance_or_rejection_reason") if proposed else "no_validated_metric_candidate",
+        "accepted_delta_cm": accepted.get("correction_amount_cm") if accepted else 0.0,
+        "status": "no_flood_detected" if payload.get("skip_reason") == "no_flood_water_detected" else
+                  "skipped_no_reference" if payload.get("skip_reason") == "no_valid_reference_object_detected" else
+                  "success" if payload["final_shadow_depth_cm"] is not None else "unavailable",
         "checkpoint_path": checkpoint_path,
         "checkpoint_sha256": checkpoint_sha256,
-        "trace_id": str(uuid4()),
+        "trace_id": getattr(result, "trace_id", None) or str(uuid4()),
         "error_reason": "; ".join(reasons),
         "uncertainty_flags": json.dumps(list(flags), ensure_ascii=False),
     }
@@ -114,6 +131,10 @@ def write_image_debug_report(report: dict[str, Any], payload: dict[str, Any], cs
 
 def _friendly_source(report: dict[str, Any]) -> str:
     source = report.get("decision_source")
+    if source == "no_water_gate":
+        return "Confirmed no-water gate"
+    if source == "no_reference_gate":
+        return "Reference eligibility"
     if source == "gemini_review":
         return "Gemini review"
     if source == "v6_pipeline" and report.get("numerical_owner") == "efficientnet_primary_anchor":
@@ -126,7 +147,7 @@ def _actionable_warnings(report: dict[str, Any]) -> list[str]:
     evidence = json.loads(report.get("diagnostic_evidence") or "{}")
     if evidence.get("semantic_disagreement") == "native_predictions_disagree":
         warnings.append("Scene classifiers disagree; review recommended.")
-    if report.get("final_shadow_depth_cm") is None:
+    if report.get("final_shadow_depth_cm") is None and not report.get("depth_inference_skipped"):
         warnings.append("V6 returned no usable depth; check the image and configured checkpoint.")
 
     code = report.get("gemini_error_code")
@@ -136,6 +157,9 @@ def _actionable_warnings(report: dict[str, Any]) -> list[str]:
         "quota": "Gemini review unavailable: API quota or rate limit reached.",
         "timeout": "Gemini review unavailable: request timed out.",
         "http_transport": "Gemini review unavailable: network or service error.",
+        "model_endpoint": "Gemini review unavailable: configured model or endpoint was not found.",
+        "request_payload": "Gemini review unavailable: request payload was rejected or invalid.",
+        "configuration": "Gemini review unavailable: check reviewer configuration.",
         "blocked_response": "Gemini review unavailable: response was blocked; inspect the image or prompt.",
         "malformed_json": "Gemini review unavailable: response was not valid JSON.",
         "schema_failure": "Gemini review unavailable: response did not match the expected format.",
@@ -153,7 +177,8 @@ def print_image_report(report: dict[str, Any], csv_path: Path, payload: dict[str
                        debug_json_path: Path | None = None) -> None:
     """Print a concise application result; verbose/debug never change prediction values."""
     final_depth = report.get("application_final_depth_cm")
-    rendered_depth = f"{final_depth:.2f} cm" if isinstance(final_depth, (int, float)) else "unavailable"
+    rendered_depth = (f"{final_depth:.2f} cm" if isinstance(final_depth, (int, float)) else
+                      "N/A" if report.get("skip_reason") == "no_valid_reference_object_detected" else "unavailable")
     correction_applied = bool(report.get("gemini_correction_applied"))
     if correction_applied:
         reason = report.get("gemini_reason") or "validated Gemini recommendation accepted"
@@ -168,9 +193,17 @@ def print_image_report(report: dict[str, Any], csv_path: Path, payload: dict[str
     print(f"Image: {report['image_filename']}")
     print()
     print(f"Estimated depth: {rendered_depth}")
+    print(f"Status: {report.get('prediction_status') or 'unavailable'}")
+    print(f"Comment: {report.get('comment') or 'unavailable'}")
     print(f"Depth source: {_friendly_source(report)}")
+    print(f"Decision source: {report.get('decision_source') or 'unavailable'}")
     print(f"Correction: {correction}")
-    print("Inference: completed; estimate is not independently accuracy-verified.")
+    print(f"Water gate: {report.get('water_gate') or 'unavailable'}")
+    print(f"Reference eligibility: {report.get('reference_eligibility') or 'unavailable'}")
+    if report.get("depth_inference_skipped"):
+        print(f"Depth inference skipped: {report.get('skip_reason')}")
+    else:
+        print("Inference: completed; estimate is not independently accuracy-verified.")
     warnings = _actionable_warnings(report)
     if warnings:
         print("\nWarnings:")
@@ -180,20 +213,65 @@ def print_image_report(report: dict[str, Any], csv_path: Path, payload: dict[str
 
     if verbose or debug:
         evidence = json.loads(report.get("diagnostic_evidence") or "{}")
-        print("\nDiagnostic summary:")
+        def shown(value):
+            if isinstance(value, dict) and "value" in value:
+                value = value["value"]
+            return "unavailable" if value is None else str(value)
+        print("\nEligibility\n-----------")
+        print(f"Water present: {shown(report.get('water_present'))}")
+        print(f"Water gate: {shown(report.get('water_gate'))}")
+        print(f"Reference eligibility: {shown(report.get('reference_eligibility'))}")
+        print(f"Depth inference skipped: {bool(report.get('depth_inference_skipped'))}")
+        print(f"Skip reason: {shown(report.get('skip_reason'))}")
+        print("\nV6 Primary Prediction\n---------------------")
+        print(f"EfficientNet depth: {shown(report.get('primary_depth_cm'))} cm")
+        print(f"Numerical owner: {shown(report.get('numerical_owner'))}")
+        print("\nDiagnostic Evidence\n-------------------")
         for field, label in (("water_coverage_pct", "Water coverage"),
                              ("near_water_coverage_pct", "Near-field water"),
                              ("mid_water_coverage_pct", "Mid-field water"),
                              ("far_water_coverage_pct", "Far-field water"),
+                             ("wet_road_probability", "Wet-road probability"),
+                             ("water_probability", "Water probability"),
+                             ("no_water_probability", "No-water probability"),
+                             ("reference_object_count", "YOLO objects"),
+                             ("dense_relative_p90", "Depth Anything relative"),
                              ("semantic_disagreement", "Scene classifier agreement")):
             value = evidence.get(field)
-            if isinstance(value, dict):
-                value = value.get("value")
-            if value is not None:
-                print(f"{label}: {value}")
+            print(f"{label}: {shown(value)}")
+        objects = evidence.get("reference_objects") or []
+        print("Reference evidence: " + (", ".join(str(item.get("object_class", "object")) for item in objects[:8]) if objects else "unavailable or none found"))
+        print(f"Road-scene probabilities: {shown(evidence.get('road_scene_probabilities'))}")
+        print(f"Depth-regime probabilities: {shown(evidence.get('depth_regime_probabilities'))}")
+        print(f"Experimental candidates: {shown((evidence.get('collector_status') or {}).get('experimental_candidates'))}")
+        agreement = evidence.get("model_agreement") or {}
+        print("\nModel Agreement\n---------------")
+        print(f"Water evidence: {shown(agreement.get('water_evidence_status'))}")
+        print(f"YOLO reference evidence: {shown(agreement.get('reference_evidence_status'))}")
+        print(f"Semantic agreement/disagreement: {shown(agreement.get('semantic_status'))}")
+        print(f"Validated metric candidate count: {shown(agreement.get('metric_candidate_count'))}")
+        print(f"Review required: {shown(report.get('v6_review_required'))}")
         trace = json.loads(report.get("controlled_correction_trace") or "[]")
-        print(f"Controlled correction proposals: {len(trace)}")
-        print(f"Gemini review status: {report.get('gemini_status') or 'disabled'}")
+        print("\nControlled V6 Decision\n----------------------")
+        print(f"Proposals: {len(trace)}")
+        for proposal in trace:
+            print(f"- {proposal.get('correction_source')}: proposed {shown(proposal.get('proposed_depth_cm'))} cm; {proposal.get('acceptance_or_rejection_reason')}")
+        print(f"Accepted correction: {any(item.get('accepted') for item in trace)}")
+        print(f"Accepted correction amount: {sum(item.get('correction_amount_cm', 0) for item in trace if item.get('accepted'))} cm")
+        print(f"Final V6 depth: {shown(report.get('final_v6_depth_cm'))} cm")
+        print("\nGemini Review\n-------------")
+        for key, label in (("gemini_status", "Status"), ("gemini_prediction_correct", "Prediction correct"),
+                           ("gemini_visual_depth_estimate_cm", "Visual estimate"),
+                           ("gemini_visual_depth_range_cm", "Visual range"),
+                           ("gemini_visual_confidence", "Visual confidence"),
+                           ("gemini_recommended_depth_cm", "Recommended depth"),
+                           ("gemini_review_required", "Review required"),
+                           ("gemini_correction_applied", "Correction applied"), ("gemini_reason", "Reason")):
+            print(f"{label}: {shown(report.get(key))}")
+        print("\nFinal Application Result\n------------------------")
+        print(f"V6 final: {shown(report.get('final_v6_depth_cm'))} cm")
+        print(f"Application final: {shown(report.get('application_final_depth_cm'))} cm")
+        print(f"Decision source: {shown(report.get('decision_source'))}")
     if debug:
         if payload is not None:
             print("\nComplete application result JSON:")

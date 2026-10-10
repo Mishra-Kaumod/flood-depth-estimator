@@ -6,10 +6,11 @@ supplies optional evidence. No default path executes legacy depth decisions.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import isfinite
 from statistics import median, pstdev
 from typing import Any, Mapping, Optional, Protocol, Sequence, Tuple
+from uuid import uuid4
 
 from .v6_shadow_comparison import V5V6ShadowComparison
 from .v6_shadow_contract import (
@@ -24,21 +25,99 @@ from .v6_shadow_contract import (
     V6SignalContract,
     CorrectionTrace,
     EvidenceBundle,
+    MetricCorrectionCandidate,
 )
 
 
-def controlled_correction(primary: Optional[float], contract: V6SignalContract) -> Tuple[CorrectionTrace, ...]:
-    """SOLE internal correction authority. No secondary candidate is promoted.
+APPROVED_ABSOLUTE_CEILING_CM = 5.0
 
-    Every proposal abstains until an independently validated acceptance policy
-    is explicitly implemented and reviewed. No configurable bypass exists.
+
+def controlled_correction(primary: Optional[float], contract: V6SignalContract,
+                          config: Mapping[str, Any] | None = None) -> Tuple[CorrectionTrace, ...]:
+    """Sole V6 numerical writer; reject unvalidated, conflicting or oversized proposals.
+
+    Context signals never create centimeters. No candidate is approved in the
+    current configuration; this policy can accept only a separately validated
+    metric candidate with matching provenance and complete dependencies.
     """
-    proposals = tuple(CorrectionTrace(primary, primary, float(signal.value), name, 0.0, False,
-                                     "shadow_only_no_validated_acceptance_rule", (name,), primary)
-                      for name, signal in contract.advisory.items()
-                      if name in ("region_depth_candidate", "mask_conditioned_candidate") and signal.available)
-    return proposals or (CorrectionTrace(primary, primary, None, "controlled_correction_policy", 0.0, False,
-                                         "abstain_no_validated_metric_candidate", (), primary),)
+    cfg = dict(config) if isinstance(config, Mapping) else {}
+    rejected = [CorrectionTrace(primary, primary, float(signal.value), name, 0.0, False,
+                                "unvalidated_diagnostic_candidate", (name,), primary)
+                for name, signal in contract.advisory.items()
+                if name in ("region_depth_candidate", "mask_conditioned_candidate") and signal.available]
+    candidates = contract.metric_candidates
+    if not candidates:
+        return tuple(rejected) or (CorrectionTrace(primary, primary, None, "controlled_correction_policy", 0.0, False,
+                                                 "abstain_no_validated_metric_candidate", (), primary),)
+
+    def reject(candidate: MetricCorrectionCandidate, reason: str) -> CorrectionTrace:
+        return CorrectionTrace(primary, primary, candidate.proposed_depth_cm, candidate.source, 0.0,
+                               False, reason, candidate.evidence_ids, primary)
+
+    if primary is None or not isfinite(primary) or primary < 0:
+        return (*rejected, *(reject(candidate, "primary_unavailable") for candidate in candidates))
+    if not cfg.get("enabled", False):
+        return (*rejected, *(reject(candidate, "correction_disabled") for candidate in candidates))
+    try:
+        absolute = float(cfg["max_abs_delta_cm"])
+        relative = float(cfg["max_relative_delta_fraction"])
+        if not 0 < absolute <= APPROVED_ABSOLUTE_CEILING_CM or not 0 < relative <= 1 or not isfinite(absolute) or not isfinite(relative):
+            raise ValueError
+    except (KeyError, TypeError, ValueError):
+        return (*rejected, *(reject(candidate, "invalid_correction_budget") for candidate in candidates))
+    approvals = cfg.get("approved_candidates") or []
+    if not isinstance(approvals, list):
+        return (*rejected, *(reject(candidate, "invalid_approval_registry") for candidate in candidates))
+    if len(candidates) != 1:
+        return (*rejected, *(reject(candidate, "conflicting_metric_candidates") for candidate in candidates))
+    candidate = candidates[0]
+    approved = any(isinstance(item, Mapping) and item.get("source") == candidate.source
+                   and item.get("validation_id") == candidate.validation_id
+                   and candidate.regime in item.get("approved_regimes", ()) for item in approvals)
+    if not approved:
+        return (*rejected, reject(candidate, "candidate_not_approved_for_regime"))
+    collector_status = contract.diagnostic_metadata.get("collector_status", {})
+    if any(collector_status.get(name, {}).get("status") != "available" for name in candidate.required_collectors):
+        return (*rejected, reject(candidate, "required_collector_unavailable"))
+    if contract.malformed_signal_names:
+        return (*rejected, reject(candidate, "malformed_supporting_evidence"))
+    delta = candidate.proposed_depth_cm - primary
+    if delta == 0:
+        return (*rejected, reject(candidate, "no_numerical_change"))
+    if abs(delta) > min(absolute, relative * primary) + 1e-9:
+        return (*rejected, reject(candidate, "proposal_exceeds_correction_budget"))
+    return (*rejected, CorrectionTrace(primary, primary, candidate.proposed_depth_cm, candidate.source,
+                                       delta, True, "validated_metric_candidate_within_budget",
+                                       candidate.evidence_ids, primary + delta))
+
+
+def assess_eligibility(evidence: Optional[EvidenceBundle], config: Mapping[str, Any]) -> tuple[Optional[bool], str, str]:
+    """Evaluate the water gate from water evidence alone, before YOLO runs."""
+    if evidence is None:
+        return None, "unavailable", "unavailable"
+    f, status = evidence.features, evidence.status
+    reference = ("none_found" if f.get("reference_count") == 0 else "objects_found") if status.get("yolo", {}).get("status") == "available" else "unavailable"
+    if status.get("water", {}).get("status") != "available":
+        return None, "uncertain_missing_evidence", reference
+    guard = config.get("inference", {}).get("no_water_guard", {})
+    coverage, near = f.get("water_coverage_pct"), f.get("near_water_coverage_pct")
+    if coverage is None or near is None:
+        return None, "uncertain_missing_evidence", reference
+    primary = f.get("no_water_probability") if status.get("no_water", {}).get("status") == "available" else None
+    wet = f.get("wet_road_no_water_probability") if status.get("wet_road_no_water", {}).get("status") == "available" else None
+    # A strong opposite vote is conflict, never a reason to force zero.
+    if primary is not None and wet is not None and (
+        (primary >= float(guard.get("no_water_threshold", 0.99)) and wet < 1 - float(guard.get("wet_road_guard_threshold", 0.995)))
+        or (wet >= float(guard.get("wet_road_guard_threshold", 0.995)) and primary < 1 - float(guard.get("no_water_threshold", 0.99)))
+    ):
+        return None, "uncertain_conflicting_classifiers", reference
+    primary_match = primary is not None and primary >= float(guard.get("no_water_threshold", 0.99)) and coverage <= float(guard.get("max_water_coverage_pct", 5.0)) and near <= float(guard.get("max_near_water_coverage_pct", 5.0))
+    wet_match = bool(guard.get("wet_road_guard_enabled", False)) and wet is not None and wet >= float(guard.get("wet_road_guard_threshold", 0.995)) and coverage <= float(guard.get("wet_road_guard_max_water_coverage_pct", 12.0)) and near <= float(guard.get("wet_road_guard_max_near_water_coverage_pct", 8.0))
+    if primary_match or wet_match:
+        return False, "skipped_corroborated_no_water", reference
+    if primary is None and wet is None:
+        return None, "uncertain_missing_classifier", reference
+    return True, "continue_not_corroborated", reference
 
 
 @dataclass(frozen=True)
@@ -53,6 +132,13 @@ class V6ShadowResult:
     v5_final_depth_cm: Optional[float]
     correction_trace: Tuple[CorrectionTrace, ...] = ()
     evidence: Optional[EvidenceBundle] = None
+    water_present: Optional[bool] = None
+    water_gate: str = "unavailable"
+    reference_eligibility: str = "unavailable"
+    depth_inference_skipped: bool = False
+    skip_reason: Optional[str] = None
+    trace_id: str = field(default_factory=lambda: str(uuid4()))
+    model_agreement: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def final_v6_depth_cm(self) -> Optional[float]:
@@ -202,7 +288,9 @@ class V6ShadowPipeline:
             "reference_available": self._bool_signal("reference_available", SignalAuthority.DIAGNOSTIC_ONLY, "reference_detection", features.get("reference_available"), malformed),
         }
         metadata = {key: features[key] for key in ("collector_status", "mask_quality", "water_mask_sha256", "semantic_native_predictions",
-                    "water_mask_shape", "waterline_image_row_ratio", "object_consistency", "scene_slices") if key in features}
+                    "water_mask_shape", "waterline_image_row_ratio", "object_consistency", "scene_slices",
+                    "depth_regime_probabilities", "water_probability", "wet_road_probability",
+                    "road_scene_probabilities") if key in features}
         return V6SignalContract(metric, semantic, objects, aggregate, relative, advisory,
                                 tuple(sorted(set(malformed))), metadata)
 
@@ -255,36 +343,114 @@ class V6ShadowPipeline:
         )
         return reliability, uncertainty
 
+    @staticmethod
+    def _reference_eligibility(evidence: Optional[EvidenceBundle]) -> str:
+        if evidence is None or evidence.status.get("yolo", {}).get("status") != "available":
+            return "unavailable"
+        count = evidence.features.get("reference_count")
+        return "none_found" if count == 0 else "objects_found" if isinstance(count, (int, float)) and count > 0 else "unavailable"
+
+    def _eligibility_result(self, evidence: EvidenceBundle, water_present: Optional[bool], water_gate: str,
+                            reference: str, reason: str) -> V6ShadowResult:
+        """Return before EfficientNet, agreement, correction, or Gemini can run."""
+        payload = {"structured_features": {**dict(evidence.features), "collector_status": dict(evidence.status)}}
+        contract = self._contract_from_payload(payload)
+        reliability = ReliabilityAssessment(contract.semantic_context, contract.object_aggregate,
+                                            "not_run_eligibility_exit", "not_run_eligibility_exit", {}, (), False, ())
+        uncertainty = UncertaintyAssessment(True, ("eligibility_exit",), (reason,))
+        stages = (StageSnapshot("input", None, None, None, False),
+                  StageSnapshot("eligibility_exit", None, None, None, False, {"reason": reason}))
+        return V6ShadowResult(contract, None, None, self.NUMERICAL_OWNER, reliability, uncertainty,
+                              stages, None, (), evidence, water_present, water_gate, reference,
+                              True, reason)
+
     def predict(self, image_rgb: Any) -> V6ShadowResult:
-        """Produce V6 centimetres from primary signals; diagnostics never change depth."""
-        payload = self._signal_source.predict(image_rgb)
-        payload = {**payload, "structured_features": dict(payload.get("structured_features") or {})}
-        # Read primary before diagnostics. Explicit allowlist prevents a collector
-        # from smuggling primary/final fields or legacy decisions into V6.
+        """Produce V6 centimetres; only approved metric candidates may change depth."""
+        payload = None
+        # Eligibility runs before depth and the remaining diagnostic models.
         evidence = None
+        config = getattr(self._evidence_collector, "config", {}) or {}
+        if not isinstance(config, Mapping):
+            config = {}
+        eligibility_config = config.get("inference", {}).get("v6_eligibility", {})
+        water_present, water_gate, reference_eligibility = None, "unavailable", "unavailable"
         if self._evidence_collector is not None:
             try:
                 import numpy as np
-                evidence = self._evidence_collector.collect(np.array(image_rgb, copy=True))
+                collector = self._evidence_collector
+                phased = callable(getattr(type(collector), "collect_water", None))
+                if phased:
+                    try:
+                        evidence = collector.collect_water(np.array(image_rgb, copy=True))
+                    except Exception as exc:
+                        evidence = EvidenceBundle(status={"water": {"status": "unavailable", "reason": type(exc).__name__}})
+                    water_present, water_gate, _ = assess_eligibility(evidence, config)
+                    if water_present is False and eligibility_config.get("no_water_zero_enabled", False):
+                        return self._eligibility_result(evidence, False, water_gate, "unavailable", "no_flood_water_detected")
+                    try:
+                        evidence = collector.collect_references(np.array(image_rgb, copy=True), evidence)
+                    except Exception as exc:
+                        evidence = EvidenceBundle(evidence.features,
+                            {**dict(evidence.status), "yolo": {"status": "unavailable", "reason": type(exc).__name__}},
+                            evidence.water_mask)
+                    reference_eligibility = self._reference_eligibility(evidence)
+                    if reference_eligibility == "none_found" and eligibility_config.get("no_reference_na_enabled", False):
+                        return self._eligibility_result(evidence, water_present, water_gate, reference_eligibility,
+                                                        "no_valid_reference_object_detected")
+                    try:
+                        evidence = collector.collect_remaining(np.array(image_rgb, copy=True), evidence)
+                    except Exception as exc:
+                        evidence = EvidenceBundle(evidence.features,
+                            {**dict(evidence.status), "remaining": {"status": "unavailable", "reason": type(exc).__name__}},
+                            evidence.water_mask)
+                else:
+                    evidence = collector.collect(np.array(image_rgb, copy=True))
+                    water_present, water_gate, _ = assess_eligibility(evidence, config)
+                    reference_eligibility = self._reference_eligibility(evidence)
+                    if water_present is False and eligibility_config.get("no_water_zero_enabled", False):
+                        return self._eligibility_result(evidence, False, water_gate, reference_eligibility,
+                                                        "no_flood_water_detected")
+                    if reference_eligibility == "none_found" and eligibility_config.get("no_reference_na_enabled", False):
+                        return self._eligibility_result(evidence, water_present, water_gate, reference_eligibility,
+                                                        "no_valid_reference_object_detected")
                 allowed = {"water_coverage_pct", "near_water_coverage_pct", "mid_water_coverage_pct", "far_water_coverage_pct",
                            "road_scene_dry_road_probability", "road_scene_wet_road_probability", "road_scene_shallow_flood_probability",
                            "road_scene_meaningful_flood_probability", "no_water_probability", "wet_road_no_water_probability",
                            "reference_object_diagnostics", "reference_available", "dense_depth_relative_p90", "dense_depth_map_min",
                            "dense_depth_map_max", "dense_relative_water_median", "dense_depth_backend", "reference_detection_backend",
                            "mask_quality", "water_mask_sha256", "water_mask_shape", "waterline_image_row_ratio",
-                           "object_consistency", "scene_slices", "semantic_native_predictions", "region_depth_cm", "mask_conditioned_fusion_depth_cm"}
-                features = dict(payload.get("structured_features") or {})
-                features.update({k: v for k, v in evidence.features.items() if k in allowed})
+                           "object_consistency", "scene_slices", "semantic_native_predictions", "region_depth_cm", "mask_conditioned_fusion_depth_cm",
+                           "reference_count", "no_water_probability", "wet_road_no_water_probability", "water_segmentation_backend",
+                           "depth_regime_probabilities", "water_probability", "wet_road_probability", "road_scene_probabilities"}
+                features = {k: v for k, v in evidence.features.items() if k in allowed}
                 features["collector_status"] = dict(evidence.status)
-                payload = {**payload, "structured_features": features}
+                payload = {"structured_features": features}
             except Exception as exc:
                 evidence = EvidenceBundle(status={"collector": {"status": "unavailable", "reason": type(exc).__name__}})
-                payload = {**payload, "structured_features": {**payload.get("structured_features", {}), "collector_status": dict(evidence.status)}}
+                payload = {"structured_features": {"collector_status": dict(evidence.status)}}
+        if water_present is False:
+            water_gate = "confirmed_no_water_control_disabled"
+        source_payload = self._signal_source.predict(image_rgb)
+        payload = {**source_payload, "structured_features": {**dict(source_payload.get("structured_features") or {}),
+                   **dict((payload or {}).get("structured_features") or {})}}
         contract = self._contract_from_payload(payload)
         primary = contract.primary_depth_cm
-        corrections = controlled_correction(primary, contract)
+        correction_config = config.get("inference", {}).get("v6_controlled_correction", {})
+        corrections = controlled_correction(primary, contract, correction_config)
         final = corrections[-1].final_v6_depth_cm
         reliability, uncertainty = self._reliability(contract, payload)
+        collector_status = contract.diagnostic_metadata.get("collector_status", {})
+        model_agreement = {
+            "semantic_status": reliability.semantic_disagreement_status,
+            "water_evidence_status": collector_status.get("water", {}).get("status", "unavailable"),
+            "reference_evidence_status": reference_eligibility,
+            "relative_depth_status": collector_status.get("relative_depth", {}).get("status", "unavailable"),
+            "metric_candidate_count": len(contract.metric_candidates),
+            "correction_supported": any(item.accepted for item in corrections),
+            "review_required": reliability.semantic_disagreement_status == "native_predictions_disagree"
+                               or water_gate.startswith("uncertain_"),
+            "note": "Context agreement does not establish metric correctness",
+        }
         stages = (
             StageSnapshot("input", None, None, None, False),
             StageSnapshot("efficientnet_primary_depth", None, primary, self.NUMERICAL_OWNER, primary is not None),
@@ -294,11 +460,14 @@ class V6ShadowPipeline:
             StageSnapshot("semantic_outputs", primary, primary, self.NUMERICAL_OWNER, False, {"authority": "CONTEXT_ONLY"}),
             StageSnapshot("reliability_assessment", primary, primary, self.NUMERICAL_OWNER, False, {"reporting_only": True}),
             StageSnapshot("controlled_correction_policy", primary, final, self.NUMERICAL_OWNER, final != primary,
-                          {"mode": "shadow_abstain", "proposal_count": len(corrections)}),
+                          {"mode": "accepted" if any(item.accepted for item in corrections) else "abstained",
+                           "proposal_count": len(corrections)}),
             StageSnapshot("uncertainty", final, final, self.NUMERICAL_OWNER, False, {"reporting_only": True}),
             StageSnapshot("final_shadow_output", final, final, self.NUMERICAL_OWNER, False),
         )
         v5_depth = payload.get("depth_cm")
         if v5_depth is not None:
             v5_depth = float(v5_depth)
-        return V6ShadowResult(contract, primary, final, self.NUMERICAL_OWNER, reliability, uncertainty, stages, v5_depth, corrections, evidence)
+        return V6ShadowResult(contract, primary, final, self.NUMERICAL_OWNER, reliability, uncertainty, stages, v5_depth,
+                              corrections, evidence, water_present, water_gate, reference_eligibility, False,
+                              None, model_agreement=model_agreement)

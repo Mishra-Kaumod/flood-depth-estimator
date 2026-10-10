@@ -37,6 +37,7 @@ def create_app(model_path: str = "severity_model.pth") -> Flask:
             <style>
               body { font-family: Arial, sans-serif; margin: 2rem; line-height: 1.5; }
               .card { max-width: 720px; padding: 1.5rem; border: 1px solid #d0d7de; border-radius: 12px; }
+              #depth-result { white-space: pre-line; }
               button { padding: 0.6rem 1rem; margin-top: 0.75rem; }
               pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow-x: auto; }
             </style>
@@ -61,9 +62,29 @@ def create_app(model_path: str = "severity_model.pth") -> Flask:
                     const response = await fetch("/predict", {method: "POST", body: new FormData(event.target)});
                     const result = await response.json();
                     if (!response.ok) throw new Error(result.error || "Analysis failed");
-                    output.textContent = result.final_shadow_depth_cm === null
-                      ? "Flood depth unavailable"
-                      : "Flood depth: " + result.final_shadow_depth_cm + " cm";
+                    const depth = value => value === null ? "unavailable" : value + " cm";
+                    if (result.depth_inference_skipped) {
+                      output.textContent = result.skip_reason === "no_flood_water_detected"
+                        ? "Estimated depth: 0.00 cm\nStatus: No flood water detected\nComment: No water detected\nDecision source: no_water_gate"
+                        : "Estimated depth: N/A\nStatus: No reference\nComment: No reference object detected\nDecision source: no_reference_gate";
+                      return;
+                    }
+                    const review = result.gemini_review;
+                    output.textContent = "V6 Estimated Depth: " + depth(result.final_shadow_depth_cm)
+                      + "\\nEfficientNet primary: " + depth(result.primary_depth_cm)
+                      + "\\nFinal V6 depth: " + depth(result.final_v6_depth_cm)
+                      + "\\nV6 numerical owner: " + result.numerical_owner
+                      + "\\nDiagnostic evidence: " + JSON.stringify(result.diagnostic_evidence)
+                      + "\\nControlled correction (shadow): " + JSON.stringify(result.correction_trace)
+                      + "\\nGemini Review: " + (review.enabled ? review.status : "Disabled")
+                      + (review.enabled ? "\\nVisual estimate: " + (review.visual_depth_range_cm || depth(review.visual_depth_estimate_cm))
+                        + "\\nRecommended depth: " + depth(review.recommended_depth_cm)
+                        + "\\nVisual confidence: " + (review.visual_confidence || "unavailable")
+                        + "\\nReview required: " + review.review_required
+                        + "\\nCorrection applied: " + review.correction_applied
+                        + "\\nReason: " + (review.reason || review.error_reason || "unavailable") : "")
+                      + "\\nFinal Result: " + depth(result.application_final_depth_cm)
+                      + "\\nSource: " + (result.decision_source === "gemini_review" ? "Gemini Review" : "V6");
                   } catch (error) {
                     output.textContent = error.message;
                   }
@@ -191,7 +212,8 @@ def create_app(model_path: str = "severity_model.pth") -> Flask:
 
         try:
             result = get_v6_pipeline().predict(image_rgb)
-            return jsonify(v6_depth_payload(result))
+            from src.v6_application_review import review_v6_result
+            return jsonify(review_v6_result(result, image_bytes, image_file.filename, get_v6_pipeline()))
         except Exception as exc:
             return jsonify({"error": f"V6 prediction failed: {exc}"}), 500
 

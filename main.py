@@ -177,6 +177,9 @@ def summarize_event_result(result: dict[str, Any], image_name: str | None = None
     print(f"Confidence: {confidence_pct:.2f}%")
     if agreement_status:
         print(f"Model agreement: {agreement_status}")
+    residual_checkpoint = structured.get("residual_fusion_model_path")
+    if residual_checkpoint:
+        print(f"Residual fusion checkpoint: {residual_checkpoint}")
     if road_scene_prediction:
         probability_text = ", ".join(
             f"{name}={float(value):.1%}" for name, value in road_scene_probabilities.items()
