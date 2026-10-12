@@ -31,7 +31,13 @@ def run(features, status, *, no_water_zero=True, no_reference_na=False):
         "wet_road_guard_threshold": .995, "wet_road_guard_max_water_coverage_pct": 12,
         "wet_road_guard_max_near_water_coverage_pct": 8},
         "v6_eligibility": {"no_water_zero_enabled": no_water_zero,
-                           "no_reference_na_enabled": no_reference_na}}}
+                           "no_reference_na_enabled": no_reference_na,
+                           "corroborated_dry_road_enabled": True,
+                           "dry_road_probability_threshold": .90,
+                           "dry_road_min_no_water_probability": .70,
+                           "dry_road_min_wet_guard_probability": .95,
+                           "dry_road_max_water_coverage_pct": 1,
+                           "dry_road_max_near_water_coverage_pct": 1}}}
     collector.collect.return_value = EvidenceBundle(features, status)
     result = V6ShadowPipeline(primary, collector).predict(np.zeros((8, 8, 3), dtype=np.uint8))
     return result, primary.calls
@@ -211,6 +217,41 @@ def test_conflicting_water_classifiers_do_not_force_zero():
     result, calls = run(evidence(wet_road_no_water_probability=0.0), status)
     assert calls == 1 and result.water_present is None
     assert result.water_gate == "uncertain_conflicting_classifiers"
+
+
+def test_three_signal_dry_road_corroboration_skips_bad_depth_prediction():
+    status = statuses()
+    status.update(wet_road_no_water={"status": "available"}, road_scene={"status": "available"})
+    result, calls = run(evidence(
+        water_coverage_pct=.26,
+        near_water_coverage_pct=.47,
+        no_water_probability=.793,
+        wet_road_no_water_probability=.985,
+        road_scene_dry_road_probability=.953,
+    ), status)
+    assert calls == 0
+    assert result.water_present is False
+    assert result.water_gate == "skipped_corroborated_no_water"
+    assert result.skip_reason == "no_flood_water_detected"
+
+
+@pytest.mark.parametrize("change", [
+    {"road_scene_dry_road_probability": .89},
+    {"no_water_probability": .69},
+    {"wet_road_no_water_probability": .94},
+    {"water_coverage_pct": 1.01},
+    {"near_water_coverage_pct": 1.01},
+])
+def test_dry_road_corroboration_requires_every_guard(change):
+    status = statuses()
+    status.update(wet_road_no_water={"status": "available"}, road_scene={"status": "available"})
+    values = dict(water_coverage_pct=.26, near_water_coverage_pct=.47,
+                  no_water_probability=.793, wet_road_no_water_probability=.985,
+                  road_scene_dry_road_probability=.953)
+    values.update(change)
+    result, calls = run(evidence(**values), status)
+    assert calls == 1
+    assert result.water_gate == "continue_not_corroborated"
 
 
 def test_disabled_evidence_preserves_baseline_exactly():

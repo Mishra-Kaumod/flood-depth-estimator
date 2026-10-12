@@ -213,12 +213,14 @@ class V6EvidenceCollector:
             wet = {**guards, "model_path": guards.get("wet_road_guard_model_path", guards.get("secondary_model_path"))}
             run("wet_road_no_water", semantics and guards.get("enabled", False) and bool(wet["model_path"]),
                 lambda: self._semantic(rgb.copy(), features, "wet_road_no_water", wet, ["no_water","water"]))
+            # Eligibility needs the scene vote before expensive depth inference.
+            run("road_scene", semantics and scene.get("enabled", False),
+                lambda: self._semantic(rgb.copy(), features, "road_scene", scene,
+                                       ["dry_road","wet_road","shallow_flood","meaningful_flood"]))
         if stage in ("references", "all"):
             run("yolo", enabled and self.options.get("yolo", True), lambda: self._objects(rgb.copy(), mask, features))
         if stage in ("remaining", "all"):
             run("relative_depth", enabled and self.options.get("relative_depth", True), lambda: self._relative(rgb.copy(), mask, features))
-            run("road_scene", semantics and scene.get("enabled", False),
-                lambda: self._semantic(rgb.copy(), features, "road_scene", scene, ["dry_road","wet_road","shallow_flood","meaningful_flood"]))
             regime = inference.get("dynamic_broad_mask_resolver", {})
             run("depth_regime", semantics and regime.get("load_classifier", False),
                 lambda: self._depth_regime(rgb.copy(), features, regime))

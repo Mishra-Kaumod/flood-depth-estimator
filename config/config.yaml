@@ -279,6 +279,14 @@ inference:
   v6_eligibility:
     no_water_zero_enabled: true
     no_reference_na_enabled: true
+    # Require agreement from all three semantic classifiers plus an almost
+    # empty water mask before treating a dry road as zero-depth.
+    corroborated_dry_road_enabled: true
+    dry_road_probability_threshold: 0.90
+    dry_road_min_no_water_probability: 0.70
+    dry_road_min_wet_guard_probability: 0.95
+    dry_road_max_water_coverage_pct: 1.0
+    dry_road_max_near_water_coverage_pct: 1.0
   # One internal V6 numerical authority. No candidate is approved yet:
   # the available region estimate worsened development validation, and the
   # mask-conditioned candidate lacks an independently validated V6 contract.
