@@ -287,6 +287,15 @@ inference:
     dry_road_min_wet_guard_probability: 0.95
     dry_road_max_water_coverage_pct: 1.0
     dry_road_max_near_water_coverage_pct: 1.0
+    # Handle dry scenes where the classical mask reacts to concrete/shadows and
+    # the older no-water classifier disagrees. Require a stronger scene vote,
+    # negligible flood-class probability, and independent wet-guard support.
+    strong_dry_road_enabled: true
+    strong_dry_road_probability_threshold: 0.97
+    strong_dry_road_max_flood_probability: 0.03
+    strong_dry_road_min_wet_guard_probability: 0.90
+    strong_dry_road_max_water_coverage_pct: 10.0
+    strong_dry_road_max_near_water_coverage_pct: 10.0
   # One internal V6 numerical authority. No candidate is approved yet:
   # the available region estimate worsened development validation, and the
   # mask-conditioned candidate lacks an independently validated V6 contract.

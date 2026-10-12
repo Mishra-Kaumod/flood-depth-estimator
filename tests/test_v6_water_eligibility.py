@@ -37,7 +37,13 @@ def run(features, status, *, no_water_zero=True, no_reference_na=False):
                            "dry_road_min_no_water_probability": .70,
                            "dry_road_min_wet_guard_probability": .95,
                            "dry_road_max_water_coverage_pct": 1,
-                           "dry_road_max_near_water_coverage_pct": 1}}}
+                           "dry_road_max_near_water_coverage_pct": 1,
+                           "strong_dry_road_enabled": True,
+                           "strong_dry_road_probability_threshold": .97,
+                           "strong_dry_road_max_flood_probability": .03,
+                           "strong_dry_road_min_wet_guard_probability": .90,
+                           "strong_dry_road_max_water_coverage_pct": 10,
+                           "strong_dry_road_max_near_water_coverage_pct": 10}}}
     collector.collect.return_value = EvidenceBundle(features, status)
     result = V6ShadowPipeline(primary, collector).predict(np.zeros((8, 8, 3), dtype=np.uint8))
     return result, primary.calls
@@ -248,6 +254,46 @@ def test_dry_road_corroboration_requires_every_guard(change):
     values = dict(water_coverage_pct=.26, near_water_coverage_pct=.47,
                   no_water_probability=.793, wet_road_no_water_probability=.985,
                   road_scene_dry_road_probability=.953)
+    values.update(change)
+    result, calls = run(evidence(**values), status)
+    assert calls == 1
+    assert result.water_gate == "continue_not_corroborated"
+
+
+def test_strong_dry_scene_handles_shadow_mask_and_one_disagreeing_guard():
+    status = statuses()
+    status.update(wet_road_no_water={"status": "available"}, road_scene={"status": "available"})
+    result, calls = run(evidence(
+        water_coverage_pct=6.308,
+        near_water_coverage_pct=7.605,
+        no_water_probability=.129,
+        wet_road_no_water_probability=.921,
+        road_scene_dry_road_probability=.9721,
+        road_scene_shallow_flood_probability=.00386,
+        road_scene_meaningful_flood_probability=.01145,
+    ), status)
+    assert calls == 0
+    assert result.water_present is False
+    assert result.water_gate == "skipped_corroborated_no_water"
+    assert result.skip_reason == "no_flood_water_detected"
+
+
+@pytest.mark.parametrize("change", [
+    {"road_scene_dry_road_probability": .969},
+    {"road_scene_shallow_flood_probability": .02,
+     "road_scene_meaningful_flood_probability": .011},
+    {"wet_road_no_water_probability": .899},
+    {"water_coverage_pct": 10.01},
+    {"near_water_coverage_pct": 10.01},
+])
+def test_strong_dry_scene_requires_every_safeguard(change):
+    status = statuses()
+    status.update(wet_road_no_water={"status": "available"}, road_scene={"status": "available"})
+    values = dict(water_coverage_pct=6.308, near_water_coverage_pct=7.605,
+                  no_water_probability=.129, wet_road_no_water_probability=.921,
+                  road_scene_dry_road_probability=.9721,
+                  road_scene_shallow_flood_probability=.00386,
+                  road_scene_meaningful_flood_probability=.01145)
     values.update(change)
     result, calls = run(evidence(**values), status)
     assert calls == 1

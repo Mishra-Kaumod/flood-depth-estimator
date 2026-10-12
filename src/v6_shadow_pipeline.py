@@ -106,6 +106,8 @@ def assess_eligibility(evidence: Optional[EvidenceBundle], config: Mapping[str, 
     primary = f.get("no_water_probability") if status.get("no_water", {}).get("status") == "available" else None
     wet = f.get("wet_road_no_water_probability") if status.get("wet_road_no_water", {}).get("status") == "available" else None
     road_dry = f.get("road_scene_dry_road_probability") if status.get("road_scene", {}).get("status") == "available" else None
+    road_shallow = f.get("road_scene_shallow_flood_probability") if status.get("road_scene", {}).get("status") == "available" else None
+    road_meaningful = f.get("road_scene_meaningful_flood_probability") if status.get("road_scene", {}).get("status") == "available" else None
     # A strong opposite vote is conflict, never a reason to force zero.
     if primary is not None and wet is not None and (
         (primary >= float(guard.get("no_water_threshold", 0.99)) and wet < 1 - float(guard.get("wet_road_guard_threshold", 0.995)))
@@ -126,7 +128,20 @@ def assess_eligibility(evidence: Optional[EvidenceBundle], config: Mapping[str, 
         and coverage <= float(eligibility.get("dry_road_max_water_coverage_pct", 1.0))
         and near <= float(eligibility.get("dry_road_max_near_water_coverage_pct", 1.0))
     )
-    if primary_match or wet_match or dry_match:
+    strong_dry_match = (
+        bool(eligibility.get("strong_dry_road_enabled", False))
+        and road_dry is not None
+        and road_shallow is not None
+        and road_meaningful is not None
+        and wet is not None
+        and road_dry >= float(eligibility.get("strong_dry_road_probability_threshold", 0.97))
+        and road_shallow + road_meaningful
+            <= float(eligibility.get("strong_dry_road_max_flood_probability", 0.03))
+        and wet >= float(eligibility.get("strong_dry_road_min_wet_guard_probability", 0.90))
+        and coverage <= float(eligibility.get("strong_dry_road_max_water_coverage_pct", 10.0))
+        and near <= float(eligibility.get("strong_dry_road_max_near_water_coverage_pct", 10.0))
+    )
+    if primary_match or wet_match or dry_match or strong_dry_match:
         return False, "skipped_corroborated_no_water", reference
     if primary is None and wet is None:
         return None, "uncertain_missing_classifier", reference
